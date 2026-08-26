@@ -34,4 +34,4 @@ Note: this depends on Supabase's own `auth` schema (`auth.users`, `auth.uid()`) 
 
 ## Not yet built
 
-Per the spec's open questions and the current scope: the Node/Express API, email sending (per-tenant verified domains), the Amazon Incentives integration, and the order-system webhook.
+Per the spec's open questions and the current scope: most of the Node/Express API (see [`../api/README.md`](../api/README.md) for the two dealer-side endpoints that do exist), email sending (per-tenant verified domains), the Amazon Incentives integration, and the order-system webhook.
