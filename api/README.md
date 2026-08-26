@@ -1,6 +1,6 @@
 # Referral platform API
 
-Dealer-facing API, per the [backend spec](../supabase/README.md). Currently implements exactly two endpoints — creating a referral link and listing/searching the dealer's referrals — with no public routes, no email sending, and no gift card integration yet.
+Referral platform API, per the [backend spec](../supabase/README.md): dealer-facing endpoints (creating a referral link, listing/searching referrals) and public endpoints (resolving a link, generating a share link, submitting a referral). No email sending and no gift card integration yet.
 
 ## Endpoints
 
@@ -46,7 +46,42 @@ Query params (all optional): `query` (matches the friend's name/email/phone, or 
 }
 ```
 
-## How auth works — and why it isn't bypassing RLS
+### `GET /api/links/:code`
+
+Public — no auth, rate-limited (30/min per IP). Resolves either an invite or a share code for the customer page or the lead page to render its greeting. Returns the referrer's first name only — never phone/email — and an *effective* status (`active`/`used`/`expired`) that accounts for `expires_at` even though nothing proactively flips the stored column. An unknown code and an expired one both come back as a plain 404: nothing distinguishes "never existed" from "used up."
+
+```json
+{
+  "kind": "share",
+  "status": "active",
+  "referrer_first_name": "Sarah",
+  "tenant": { "name": "Acme", "reward_amount_cents": 5000, "reward_currency": "USD", "branding": {} }
+}
+```
+
+### `POST /api/links/:code/share`
+
+Public — no auth, rate-limited (10/min per IP). The customer taps "Share": mints a new share-kind link off of whatever link got them here (their invite, or — for a referred friend who's since become a customer — their own share link), so a referral chain can extend to any depth without special-casing link kinds.
+
+```json
+{ "code": "MvWNLtZkQh", "url": "/50/refer/MvWNLtZkQh", "status": "active", "created_at": "..." }
+```
+
+### `POST /api/links/:code/referrals`
+
+Public — no auth, rate-limited (5/min per IP, the tightest of the three since this is the actual lead-capture write). `:code` must be a share-kind link. Body: `{ "name", "email", "phone"?, "message"? }` — email is required (no SMS channel, matching the schema). A second submission against an already-used link returns `409`, distinct from the `404` for a code that never existed or isn't a share link.
+
+```json
+{ "id": "...", "submitted_at": "..." }
+```
+
+## How the public routes stay safe without an account
+
+There's no JWT here — a friend filling out a lead form isn't logged in — so these three routes can't lean on RLS the way the dealer routes do. Instead they're the *only* thing Postgres lets the `anon` role touch at all: three narrow, `security definer` functions (`resolve_link`, `create_share_link`, `submit_referral` — `supabase/migrations/20260826030000_public_link_functions.sql`), each doing one specific, vetted thing and returning only the columns it should. `anon` has no grants on any table directly, so a code path that accidentally queried a table instead of calling one of these functions would simply fail with a permission error, not silently succeed. Each request still runs as `anon` (`withPublicTransaction` in `src/db.js`), matching the same impersonation pattern as the dealer routes rather than connecting with some broader "service" role.
+
+Everything else is what actually carries the weight for an endpoint anyone on the internet can hit: strict `zod` validation (including a regex on `:code` itself, rejected before it ever reaches the database), per-route rate limiting tuned to how often a real visitor would legitimately call each one (`src/middleware/rateLimit.js`), and error responses written to never leak more than a real visitor needs — "not found" and "expired" are indistinguishable, and a `POST` that hits a genuine double-submit race gets caught by the database's own unique constraint on `referrals.referral_link_id`, not just an application-level check that a concurrent request could slip past.
+
+## How dealer auth works — and why it isn't bypassing RLS
 
 Every route requires `Authorization: Bearer <token>`, verified against `SUPABASE_JWT_SECRET` (`src/middleware/auth.js`). That only establishes *identity* (the caller's `auth.uid()`) — it does not look up or trust a tenant or role from the token.
 
@@ -82,6 +117,8 @@ Ran end-to-end against a scratch Postgres 16 database — both migrations applie
 - **Cross-tenant isolation, at the live HTTP layer**: a second tenant's dealer never sees the first tenant's referrals, and a search string that names the other tenant's data returns zero rows rather than erroring — enforced by RLS on the join, not application code
 - `POST /api/customers` re-verified unaffected by the `GET /api/referrals` change
 
+The public routes, on the same live setup: the full chain end-to-end — resolved an invite link, generated a share link from it, resolved *that*, submitted a referral against it as the friend, confirmed it flipped to `used`, and confirmed a second submission on the same link is rejected with `409` while the invite-link version of that same request (wrong kind) is `404`. Also: a malformed `:code` (SQL-shaped garbage) rejected before touching the database; missing `email` → `400`; `GET /api/links/:code` hitting `429` on the 31st call in a minute and `POST .../referrals` on the 6th; `Access-Control-Allow-Origin` present on responses; and, directly at the database level, that `anon` still can't `select` from a table even though it can call the functions.
+
 ## Not yet built
 
-Public/unauthenticated routes (`GET /api/links/:code`, `POST /api/links/:code/share`, `POST /api/links/:code/referrals`), admin-only endpoints (`PATCH /api/referrals/:id/status`), email sending, the Amazon Incentives integration, and the order-system webhook. See the [backend spec](../supabase/README.md) and the published spec artifact for the full picture.
+Admin-only endpoints (`PATCH /api/referrals/:id/status`), email sending, the Amazon Incentives integration, and the order-system webhook. See the [backend spec](../supabase/README.md) and the published spec artifact for the full picture.

@@ -41,6 +41,31 @@ async function withUserTransaction(userId, fn) {
   }
 }
 
+// Runs `fn` inside a transaction impersonating the `anon` role — for the
+// public, unauthenticated routes, where there is no user to impersonate.
+// Raw table access is still fully denied to anon (see rls_policies); the
+// only thing anon can do inside `fn` is call the narrow, security-definer
+// functions from the public_link_functions migration. This keeps the same
+// "the database enforces it, not application code" property as
+// withUserTransaction — a code path that accidentally queried a table
+// directly instead of calling one of those functions would simply fail,
+// not silently succeed with unrestricted access.
+async function withPublicTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SET LOCAL ROLE anon');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 // Resolves who the caller is, once per request: their tenant, whether
 // they're an admin, and their tenant's branding/domain (for building
 // invite links). Runs as `authenticated` inside the same transaction, so
@@ -57,4 +82,4 @@ async function getCallerContext(client, userId) {
   return rows[0];
 }
 
-module.exports = { pool, withUserTransaction, getCallerContext };
+module.exports = { pool, withUserTransaction, withPublicTransaction, getCallerContext };
