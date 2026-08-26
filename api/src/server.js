@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const customersRouter = require('./routes/customers');
+const referralsRouter = require('./routes/referrals');
 
 const app = express();
 app.use(express.json());
@@ -8,6 +9,7 @@ app.use(express.json());
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 app.use('/api', customersRouter);
+app.use('/api', referralsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
