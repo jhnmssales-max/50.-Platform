@@ -2,14 +2,27 @@ require('dotenv').config();
 const express = require('express');
 const customersRouter = require('./routes/customers');
 const referralsRouter = require('./routes/referrals');
+const publicRouter = require('./routes/public');
 
 const app = express();
+
+// The public routes are IP-rate-limited, which is only meaningful behind
+// a proxy/load balancer if Express is told to trust its X-Forwarded-For
+// header — and only safe to trust when that's actually true, since a
+// spoofed header otherwise lets a caller pick their own rate-limit
+// bucket. Set TRUST_PROXY to the number of proxy hops in front of this
+// service (Render's own proxy = 1) in production; leave unset locally.
+if (process.env.TRUST_PROXY) {
+  app.set('trust proxy', Number(process.env.TRUST_PROXY));
+}
+
 app.use(express.json());
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 app.use('/api', customersRouter);
 app.use('/api', referralsRouter);
+app.use('/api', publicRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
