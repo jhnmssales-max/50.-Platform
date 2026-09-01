@@ -1,6 +1,6 @@
 # Referral platform API
 
-Referral platform API, per the [backend spec](../supabase/README.md): dealer-facing endpoints (creating a referral link, listing/searching referrals) and public endpoints (resolving a link, generating a share link, submitting a referral). No email sending and no gift card integration yet.
+Referral platform API, per the [backend spec](../supabase/README.md): dealer-facing endpoints (creating a referral link, listing/searching referrals, marking one paid) and public endpoints (resolving a link, generating a share link, submitting a referral). No email sending and no gift card integration yet.
 
 ## Endpoints
 
@@ -27,7 +27,7 @@ Content-Type: application/json
 
 The dealer's searchable pipeline — one row per friend who has submitted the lead form against one of the dealer's customers' share links. This is the "Referrals in progress" list from the dealer page prototype, now backed by a real query instead of browser storage.
 
-Status lives **per referral, not per customer**: a single customer can hold several share links and generate several referrals, and each gets paid out independently — Sarah's referral of Mike can be `paid` while her referral of Priya is still `pending`, on the same customer. "Paid" is computed live from `gift_card_transactions.referral_id`, never stored redundantly, and the raw `referrals.status` lifecycle (`new` → `contacted` → `ordered` → `rewarded`, or `declined`) is included alongside the collapsed `pending`/`paid` view for anything that needs more detail.
+Status lives **per referral, not per customer**: a single customer can hold several share links and generate several referrals, and each gets paid out independently — Sarah's referral of Mike can be `paid` while her referral of Priya is still `pending`, on the same customer. "Paid" is `true` once either signal says so: `referrals.status = 'rewarded'` (set today by `PATCH /api/referrals/:id/status` below, an admin marking it by hand) or a `gift_card_transactions` row shows `issued` (not wired up yet — once the Amazon Incentives integration exists, the payout job will set both together). Never stored redundantly as its own column; computed live from whichever signals actually exist. The raw `referrals.status` lifecycle (`new` → `contacted` → `ordered` → `rewarded`, or `declined`) is included alongside the collapsed `pending`/`paid` view for anything that needs more detail.
 
 Query params (all optional): `query` (matches the friend's name/email/phone, or the referrer's name), `status` (`pending` or `paid`), `limit` (default 20, max 100), `offset` (default 0).
 
@@ -45,6 +45,26 @@ Query params (all optional): `query` (matches the friend's name/email/phone, or 
   "counts": { "pending": 1, "paid": 1 }
 }
 ```
+
+### `PATCH /api/referrals/:id/status`
+
+Admin-only. Backs the dealer page's "mark as paid" toggle. Body: `{ "status": "contacted" | "ordered" | "rewarded" | "declined" }` — a manual override for statuses that don't yet flow in automatically; setting `rewarded` is exactly what the (not-yet-built) Amazon Incentives payout job will eventually do on its own once an order comes in, so today a human triggers the same transition a webhook will later.
+
+No gift card is issued here — that's explicitly out of scope until the Amazon integration exists. What this endpoint *does* guarantee: it's server-authoritative (the client sends only a target status, nothing about amounts or "did it work"), and idempotent under real concurrency, not just sequential double-clicks — a guarded `UPDATE ... WHERE status IS DISTINCT FROM $1` means the transition, and the single `audit_log` row for it, happens exactly once no matter how many identical requests land at once.
+
+```
+PATCH /api/referrals/40000000-0000-0000-0000-000000000001/status
+Authorization: Bearer <admin's access token>
+Content-Type: application/json
+
+{ "status": "rewarded" }
+```
+
+```json
+{ "id": "40000000-0000-0000-0000-000000000001", "status": "rewarded" }
+```
+
+`403` if the caller isn't an admin (a dealer's own token works for every other route but this one). `404` for a referral that doesn't exist *or* belongs to another tenant — the same row is visible to any staff member via `GET /api/referrals`, so this can't be used to probe for IDs across tenants; only the write is admin-gated. A repeat call with the same target status returns `200` with the unchanged current state rather than erroring or re-logging.
 
 ### `GET /api/links/:code`
 
@@ -116,6 +136,7 @@ Ran end-to-end against a scratch Postgres 16 database — both migrations applie
 - Search matches on the friend's own fields *and* on the referrer's name (searching "Sarah" surfaces both of her referrals); `status=paid`/`status=pending` filters both work correctly
 - **Cross-tenant isolation, at the live HTTP layer**: a second tenant's dealer never sees the first tenant's referrals, and a search string that names the other tenant's data returns zero rows rather than erroring — enforced by RLS on the join, not application code
 - `POST /api/customers` re-verified unaffected by the `GET /api/referrals` change
+- `PATCH /api/referrals/:id/status`: a dealer's token → `403`; a bad status value → `400`; a malformed id → `400`; targeting another tenant's referral → `404`, not leaking that it exists; an admin's request → `200` and the row actually changes (including `rewarded_at` being set); the identical request repeated → `200` with no second `audit_log` row; **10 genuinely concurrent identical requests fired at once against the same referral** → all `200`, and exactly one `audit_log` row, not ten — proving the idempotency holds under a real race, not just a sequential double-click; `GET /api/referrals` immediately reflects the new `paid` status on the next call
 
 The public routes, on the same live setup: the full chain end-to-end — resolved an invite link, generated a share link from it, resolved *that*, submitted a referral against it as the friend, confirmed it flipped to `used`, and confirmed a second submission on the same link is rejected with `409` while the invite-link version of that same request (wrong kind) is `404`. Also: a malformed `:code` (SQL-shaped garbage) rejected before touching the database; missing `email` → `400`; `GET /api/links/:code` hitting `429` on the 31st call in a minute and `POST .../referrals` on the 6th; `Access-Control-Allow-Origin` present on responses; and, directly at the database level, that `anon` still can't `select` from a table even though it can call the functions.
 
@@ -123,15 +144,17 @@ The public routes, on the same live setup: the full chain end-to-end — resolve
 
 The three static pages at the repo root (`fifty-template-dealer.html`, `fifty-template-customer.html`, `fifty-template-lead.html`) call this API directly — no build step, no framework, just `fetch()`. Each has an `API_BASE` constant near the top of its `<script>` block (next to the existing `TENANT` config object) — that's the one line to change per deployment.
 
-- **Dealer page**: has no real login yet, so it gets a "Demo settings" panel (matching the pattern the other two pages already used for their own demo affordances) where you paste a Supabase access token by hand — remembered in `localStorage` so it doesn't need re-entry every reload. The "mark as paid" toggle from the original mockup is now a disabled, read-only pill reflecting live status, since there's no write endpoint for it yet (see "Not yet built" below) — a real one would be admin-gated regardless.
+- **Dealer page**: has no real login yet, so it gets a "Demo settings" panel (matching the pattern the other two pages already used for their own demo affordances) where you paste a Supabase access token by hand — remembered in `localStorage` so it doesn't need re-entry every reload. The "mark as paid" toggle calls `PATCH /api/referrals/:id/status` for real now. Its confirm dialog no longer claims this "sends the $50 gift card" (the original mockup's copy) — that would be false until the Amazon integration exists — and says so plainly instead. A `403` (a dealer's own token, not an admin's) reverts the toggle and explains why rather than pretending the click worked.
 - **Customer & lead pages**: their existing demo panels already worked as a manual code-entry fallback (lead page) or got simplified into one (customer page, which previously faked a referrer identity with free-text fields — now that identity always comes from a real backend row, there's nothing to fake).
 - Since the friend-facing forms now hit a real backend that requires a real email, each page's original single "phone number or email" field became two fields — email (required) and phone (optional) — the one visible UI change beyond wiring, and a direct consequence of the schema decision to be email-only (no SMS).
 - The dealer's referral list now shows one row per friend submission rather than per invited customer (see `GET /api/referrals` above) — same row/pill styling, different underlying data, which changes what's shown in each row (the friend's name/contact, plus who referred them) though not the page's look.
 - Invite/share links are constructed client-side as `${window.location.origin}/<sibling-page>.html?code=...`/`?ref=...` rather than trusting the API's own domain-based `url` fields, so a shared link is always genuinely clickable against wherever these particular files are actually being served — useful since there's no URL-rewriting layer (the `/50/...` paths in the API's responses) in front of static files yet.
 - `routes/customers.js` and `routes/referrals.js` now also mount `cors()`, matching `routes/public.js` — safe here for the same reason it was safe there: auth is a bearer token the calling page must already possess and attach itself, never a cookie the browser sends automatically, so an open CORS policy doesn't add a CSRF-style risk. Without it, a static page served from any origin other than the API's own couldn't call these routes at all.
 
-**Verified**: ran the full three-page flow through an actual headless browser (Playwright) against a live API + Postgres, with the pages served from a different origin/port than the API (genuinely exercising CORS, not masked by same-origin) — dealer submits the form → real confirmation with a working invite link → customer page resolves it and shares → lead page resolves the share link and submits → dealer's list picks up the new referral with the correct referrer attribution and searches for it correctly → revisiting the same share link shows "already used" → an invalid code shows "not valid" → marking the referral's gift card issued directly in the ledger flips it to the disabled, checked "paid" pill on next load. Also checked: no-token and invalid-token states on the dealer page, and that empty-email submission is blocked client-side before ever reaching the API. The only browser console error across the whole run was the pre-existing Google Fonts stylesheet request, unrelated to this integration and blocked by this sandbox's own network policy, not something introduced here.
+**Verified**: ran the full three-page flow through an actual headless browser (Playwright) against a live API + Postgres, with the pages served from a different origin/port than the API (genuinely exercising CORS, not masked by same-origin) — dealer submits the form → real confirmation with a working invite link → customer page resolves it and shares → lead page resolves the share link and submits → dealer's list picks up the new referral with the correct referrer attribution and searches for it correctly → revisiting the same share link shows "already used" → an invalid code shows "not valid". Also checked: no-token and invalid-token states on the dealer page, and that empty-email submission is blocked client-side before ever reaching the API. The only browser console error across the whole run was the pre-existing Google Fonts stylesheet request, unrelated to this integration and blocked by this sandbox's own network policy, not something introduced here.
+
+The "mark as paid" toggle, separately, through the same kind of live browser run: an admin clicking it on a pending referral shows the honest confirm copy, calls the real endpoint, and the row flips to a disabled, checked "Marked paid" pill; a dealer's token gets the `403` alert and the toggle visibly reverts to unchecked rather than silently failing.
 
 ## Not yet built
 
-Admin-only endpoints (`PATCH /api/referrals/:id/status`, and so the frontend's "mark as paid" control), email sending, the Amazon Incentives integration, and the order-system webhook. See the [backend spec](../supabase/README.md) and the published spec artifact for the full picture.
+Email sending, the Amazon Incentives integration (so `PATCH /api/referrals/:id/status` changes a status but issues no actual gift card yet), and the order-system webhook that would set `ordered` automatically instead of by hand. See the [backend spec](../supabase/README.md) and the published spec artifact for the full picture.
