@@ -1,4 +1,5 @@
 const express = require('express');
+const cors = require('cors');
 const { z } = require('zod');
 const { nanoid } = require('nanoid');
 const { requireAuth } = require('../middleware/auth');
@@ -6,6 +7,13 @@ const { withUserTransaction, getCallerContext } = require('../db');
 const { slugify } = require('../lib/codes');
 
 const router = express.Router();
+
+// Auth here is a bearer token the calling page must already possess and
+// attach itself — never a cookie the browser sends automatically — so an
+// open CORS policy doesn't add a CSRF-style risk. It's what lets a
+// same-origin-less static admin page (opened as a file, or served from a
+// different host/port than the API) actually call these routes.
+router.use(cors());
 
 const UNIQUE_VIOLATION = '23505';
 

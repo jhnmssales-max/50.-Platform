@@ -110,6 +110,11 @@
   .toggle input:not(:checked):disabled + .slider{opacity:.5;}
 
   .emptylist{font-size:12.5px;color:var(--muted);text-align:center;padding:20px 0;}
+
+  .demoToggle{font-size:11px;color:var(--muted);text-decoration:underline;cursor:pointer;margin-top:22px;display:inline-block;}
+  .demoPanel{display:none;margin-top:12px;}
+  .demoPanel input{width:100%;padding:10px 12px;border:1px solid #ddd6c8;border-radius:8px;font-family:'Inter';font-size:13px;margin-bottom:10px;}
+  .demoPanel .note{font-size:11px;color:var(--muted);margin-top:2px;}
 </style>
 </head>
 <body>
@@ -134,8 +139,11 @@
     <label for="custName">Customer name</label>
     <input type="text" id="custName" placeholder="Sarah Johnson" autocomplete="off" />
 
-    <label for="custContact">Phone number or email</label>
-    <input type="text" id="custContact" placeholder="(717) 555-0134 or sarah@email.com" autocomplete="off" />
+    <label for="custEmail">Customer email</label>
+    <input type="text" id="custEmail" placeholder="sarah@email.com" autocomplete="off" />
+
+    <label for="custPhone">Phone number <span style="text-transform:none;font-weight:400;">(optional)</span></label>
+    <input type="text" id="custPhone" placeholder="(717) 555-0134" autocomplete="off" />
 
     <button type="submit" class="send" id="sendBtn">Send your customer a referral incentive</button>
   </form>
@@ -158,6 +166,13 @@
     </div>
     <div class="reflist" id="refList"></div>
   </div>
+
+  <span class="demoToggle" id="demoToggle">Demo settings</span>
+  <div class="demoPanel" id="demoPanel">
+    <label for="authToken" style="display:block;font-size:11px;font-weight:700;color:var(--primary);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">Access token</label>
+    <input type="text" id="authToken" placeholder="Paste a Supabase access token for a dealer/admin account" autocomplete="off" />
+    <p class="note">In a real deployment this page would sit behind a real login. Until then, paste a token here to talk to the API — it's remembered in this browser only.</p>
+  </div>
 </div>
 
 <script>
@@ -177,6 +192,9 @@ const TENANT = {
   domain: "50platform.com"
 };
 
+// The one line to change per deployment: where the API from /api is served.
+const API_BASE = "http://localhost:3000/api";
+
 function applyTenantBranding(){
   document.title = TENANT.name + ' — Referral Incentive';
   const r = document.documentElement.style;
@@ -195,52 +213,88 @@ function applyTenantBranding(){
 applyTenantBranding();
 
 
-function slugify(s){ return (s||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'').slice(0,24); }
-function randCode(name){ return slugify(name||'friend') + Math.floor(Math.random()*900+100); }
 function showMsg(text){ const el = document.getElementById('formMsg'); el.textContent = text; el.className = 'msg show err'; }
 function clearMsg(){ const el = document.getElementById('formMsg'); el.className = 'msg'; }
 
-async function ensureTenant(){
-  try{
-    const r = await window.storage.get('dealer:'+TENANT.code, true);
-    if(!r){
-      await window.storage.set('dealer:'+TENANT.code, JSON.stringify({name:TENANT.name, code:TENANT.code, createdAt:Date.now()}), true);
+// There's no real login on this page yet — see the demo panel. The token is
+// remembered per-browser so it doesn't need re-entry on every reload.
+function getAuthToken(){ return localStorage.getItem('fifty:authToken') || ''; }
+function setAuthToken(t){ localStorage.setItem('fifty:authToken', t || ''); }
+
+async function apiFetch(path, options={}){
+  const token = getAuthToken();
+  const res = await fetch(API_BASE + path, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': 'Bearer ' + token } : {}),
+      ...(options.headers || {})
     }
-  }catch(e){ /* best effort */ }
+  });
+  let body = null;
+  try{ body = await res.json(); }catch(e){ /* no body */ }
+  if(!res.ok){
+    const err = new Error((body && body.error) || ('Request failed (' + res.status + ')'));
+    err.status = res.status;
+    throw err;
+  }
+  return body;
 }
-ensureTenant();
+
+function debounce(fn, wait){
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
+}
+
+document.getElementById('demoToggle').addEventListener('click', ()=>{
+  const panel = document.getElementById('demoPanel');
+  panel.style.display = panel.style.display === 'none' || !panel.style.display ? 'block' : 'none';
+});
+
+const authTokenInput = document.getElementById('authToken');
+authTokenInput.value = getAuthToken();
+authTokenInput.addEventListener('change', () => {
+  setAuthToken(authTokenInput.value.trim());
+  renderList(document.getElementById('searchBox').value);
+});
 
 document.getElementById('sendForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
   const name = document.getElementById('custName').value.trim();
-  const contact = document.getElementById('custContact').value.trim();
+  const email = document.getElementById('custEmail').value.trim();
+  const phone = document.getElementById('custPhone').value.trim();
   clearMsg();
 
   if(!name){ showMsg('Enter the customer\'s name.'); return; }
-  if(!contact){ showMsg('Enter a phone number or email.'); return; }
+  if(!email){ showMsg('Enter the customer\'s email.'); return; }
+  if(!getAuthToken()){
+    document.getElementById('demoPanel').style.display = 'block';
+    showMsg('Paste an access token in Demo settings below to send referrals.');
+    return;
+  }
 
   const btn = document.getElementById('sendBtn');
   btn.disabled = true; btn.textContent = 'Sending...';
 
   try{
-    let links = [];
-    try{
-      const r = await window.storage.get('links:'+TENANT.code, true);
-      links = r ? JSON.parse(r.value) : [];
-    }catch(err){ links = []; }
+    const result = await apiFetch('/customers', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, phone: phone || undefined })
+    });
 
-    const linkCode = randCode(name);
-    links.push({ linkCode, referrerName:name, referrerContact:contact, createdAt: Date.now(), status: 'pending' });
-    await window.storage.set('links:'+TENANT.code, JSON.stringify(links), true);
-
-    const link = TENANT.domain + '/50/' + linkCode;
-    document.getElementById('confirmHeadline').textContent = 'Sent to ' + name + ' (' + contact + ')';
+    const link = result.invite_link.url || (TENANT.domain + '/50/' + result.invite_link.code);
+    document.getElementById('confirmHeadline').textContent = 'Sent to ' + name + ' (' + email + ')';
     document.getElementById('confirmLink').textContent = link;
     document.getElementById('confirmBox').classList.add('show');
     document.getElementById('sendForm').style.display = 'none';
     renderList(document.getElementById('searchBox').value);
   }catch(err){
-    showMsg('Something went wrong sending that. Try again.');
+    if(err.status === 401){
+      showMsg('Your access token is invalid or expired — check Demo settings.');
+      document.getElementById('demoPanel').style.display = 'block';
+    } else {
+      showMsg('Something went wrong sending that. Try again.');
+    }
   }
   btn.disabled = false; btn.textContent = 'Send your customer a referral incentive';
 });
@@ -257,74 +311,68 @@ document.getElementById('copyBtn').addEventListener('click', ()=>{
 
 document.getElementById('sendAgainBtn').addEventListener('click', ()=>{
   document.getElementById('custName').value = '';
-  document.getElementById('custContact').value = '';
+  document.getElementById('custEmail').value = '';
+  document.getElementById('custPhone').value = '';
   document.getElementById('confirmBox').classList.remove('show');
   document.getElementById('sendForm').style.display = 'block';
   clearMsg();
 });
 
-async function getLinks(){
-  try{
-    const r = await window.storage.get('links:'+TENANT.code, true);
-    return r ? JSON.parse(r.value) : [];
-  }catch(e){ return []; }
-}
-async function saveLinks(list){
-  return await window.storage.set('links:'+TENANT.code, JSON.stringify(list), true);
-}
-function fmtDate(ts){ return new Date(ts).toLocaleDateString(undefined,{month:'short',day:'numeric'}); }
+function fmtDate(iso){ return new Date(iso).toLocaleDateString(undefined,{month:'short',day:'numeric'}); }
 
+// Rows are referrals — friend submissions — not the customers a dealer
+// invited: one customer can send several referral links, and each is paid
+// out on its own, so status lives per row here, matching the API.
 async function renderList(query){
-  const list = await getLinks();
-  const q = (query||'').trim().toLowerCase();
-  const filtered = q ? list.filter(l =>
-    (l.referrerName||'').toLowerCase().includes(q) ||
-    (l.referrerContact||'').toLowerCase().includes(q)
-  ) : list;
-
-  const pendingCount = list.filter(l => l.status !== 'paid').length;
-  const paidCount = list.filter(l => l.status === 'paid').length;
-  document.getElementById('listCounts').textContent = pendingCount + ' in progress · ' + paidCount + ' paid';
-
   const container = document.getElementById('refList');
-  if(filtered.length === 0){
+  const countsEl = document.getElementById('listCounts');
+
+  if(!getAuthToken()){
+    countsEl.textContent = '';
+    container.innerHTML = '<div class="emptylist">Paste an access token in Demo settings to load referrals.</div>';
+    return;
+  }
+
+  countsEl.textContent = 'Loading…';
+  let data;
+  try{
+    const params = new URLSearchParams({ limit: '100' });
+    if(query && query.trim()) params.set('query', query.trim());
+    data = await apiFetch('/referrals?' + params.toString());
+  }catch(err){
+    countsEl.textContent = '';
+    container.innerHTML = err.status === 401
+      ? '<div class="emptylist">Access token invalid or expired — check Demo settings.</div>'
+      : '<div class="emptylist">Couldn\'t load referrals. Try again.</div>';
+    return;
+  }
+
+  countsEl.textContent = data.counts.pending + ' in progress · ' + data.counts.paid + ' paid';
+
+  if(data.referrals.length === 0){
     container.innerHTML = '<div class="emptylist">No referrals found.</div>';
     return;
   }
 
-  container.innerHTML = filtered.slice().reverse().map(l => {
-    const isPaid = l.status === 'paid';
+  container.innerHTML = data.referrals.map(r => {
+    const isPaid = r.status === 'paid';
+    const contact = r.email || r.phone || '';
     return `
       <div class="refrow">
         <div class="who">
-          <div class="rname">${l.referrerName}</div>
-          <div class="rcontact">${l.referrerContact} · sent ${fmtDate(l.createdAt)}</div>
-          <div class="rstate ${isPaid ? 'paid' : 'pending'}">${isPaid ? 'Building ordered — $50 sent' : 'In progress'}</div>
+          <div class="rname">${r.name}</div>
+          <div class="rcontact">${contact} · referred by ${r.referrer.name} · sent ${fmtDate(r.submitted_at)}</div>
+          <div class="rstate ${isPaid ? 'paid' : 'pending'}">${isPaid ? 'Order placed — $50 sent' : 'In progress'}</div>
         </div>
-        <label class="toggle">
-          <input type="checkbox" data-linkcode="${l.linkCode}" ${isPaid ? 'checked disabled' : ''} />
+        <label class="toggle" title="Marking a referral paid isn't available on this page yet — that's an admin action.">
+          <input type="checkbox" disabled ${isPaid ? 'checked' : ''} />
           <span class="slider"></span>
         </label>
       </div>`;
   }).join('');
-
-  container.querySelectorAll('input[type=checkbox][data-linkcode]').forEach(input => {
-    input.addEventListener('change', async (e) => {
-      if(!e.target.checked) return;
-      const linkCode = e.target.dataset.linkcode;
-      const confirmed = confirm('Mark this customer\'s building as ordered? This sends the $50 gift card to both people and cannot be undone.');
-      if(!confirmed){ e.target.checked = false; return; }
-
-      e.target.disabled = true;
-      const current = await getLinks();
-      const updated = current.map(l => l.linkCode === linkCode ? {...l, status:'paid', paidAt: Date.now()} : l);
-      await saveLinks(updated);
-      await renderList(document.getElementById('searchBox').value);
-    });
-  });
 }
 
-document.getElementById('searchBox').addEventListener('input', (e) => renderList(e.target.value));
+document.getElementById('searchBox').addEventListener('input', debounce((e) => renderList(e.target.value), 300));
 renderList();
 </script>
 

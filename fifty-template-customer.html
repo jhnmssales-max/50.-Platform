@@ -100,9 +100,9 @@
 
   <span class="demoToggle" id="demoToggle">Demo settings</span>
   <div class="demoPanel" id="demoPanel">
-    <input type="text" id="demoName" placeholder="Your name (for this demo)" />
-    <input type="text" id="demoContact" placeholder="Your phone or email (for this demo)" />
-    <p class="note">In a real deployment this page already knows who you are from the link the dealer sent you — these fields only exist so the demo works without that link.</p>
+    <input type="text" id="demoCode" placeholder="Your invite code (from the dealer)" />
+    <button type="button" class="copybtn" id="demoLoadBtn" style="width:100%;padding:10px;margin-bottom:10px;">Load</button>
+    <p class="note">In a real deployment this page already knows who you are from the link the dealer sent you (?code=...) — this field only exists so the demo works without that link.</p>
   </div>
 </div>
 
@@ -123,6 +123,9 @@ const TENANT = {
   domain: "50platform.com"
 };
 
+// The one line to change per deployment: where the API from /api is served.
+const API_BASE = "http://localhost:3000/api";
+
 function applyTenantBranding(){
   const r = document.documentElement.style;
   r.setProperty('--primary', TENANT.colors.primary);
@@ -140,40 +143,39 @@ function applyTenantBranding(){
 applyTenantBranding();
 
 
-function slugify(s){ return (s||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'').slice(0,24); }
-function randShareCode(name){ return slugify(name||'friend') + '-' + Math.random().toString(36).slice(2,7); }
-
-async function getShareLinks(){
-  try{
-    const r = await window.storage.get('sharelinks:'+TENANT.code, true);
-    return r ? JSON.parse(r.value) : [];
-  }catch(e){ return []; }
-}
-async function saveShareLinks(list){
-  return await window.storage.set('sharelinks:'+TENANT.code, JSON.stringify(list), true);
-}
-async function getSentLinks(){
-  try{
-    const r = await window.storage.get('links:'+TENANT.code, true);
-    return r ? JSON.parse(r.value) : [];
-  }catch(e){ return []; }
+async function apiFetch(path, options={}){
+  const res = await fetch(API_BASE + path, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+  });
+  let body = null;
+  try{ body = await res.json(); }catch(e){ /* no body */ }
+  if(!res.ok){
+    const err = new Error((body && body.error) || ('Request failed (' + res.status + ')'));
+    err.status = res.status;
+    throw err;
+  }
+  return body;
 }
 
-let referrerName = '';
-let referrerContact = '';
+let currentCode = null;
+
+async function resolveCode(code){
+  if(!code) return;
+  try{
+    const link = await apiFetch('/links/' + encodeURIComponent(code));
+    currentCode = code;
+    const firstName = link.referrer_first_name || 'there';
+    document.getElementById('greetingLine').textContent = 'Hi ' + firstName + ' — thanks for choosing us.';
+  }catch(err){
+    // Leave the default greeting and currentCode unset — the share button
+    // below prompts for a code via the demo panel in that case.
+  }
+}
 
 async function init(){
   const params = new URLSearchParams(window.location.search);
-  const code = params.get('code');
-  if(code){
-    const sent = await getSentLinks();
-    const match = sent.find(l => l.linkCode === code);
-    if(match){
-      referrerName = match.referrerName;
-      referrerContact = match.referrerContact;
-      document.getElementById('greetingLine').textContent = 'Hi ' + referrerName.split(' ')[0] + ' — thanks for choosing us.';
-    }
-  }
+  await resolveCode(params.get('code'));
 }
 init();
 
@@ -182,28 +184,25 @@ document.getElementById('demoToggle').addEventListener('click', ()=>{
   panel.style.display = panel.style.display === 'none' || !panel.style.display ? 'block' : 'none';
 });
 
+document.getElementById('demoLoadBtn').addEventListener('click', async ()=>{
+  const code = document.getElementById('demoCode').value.trim();
+  if(!code) return;
+  await resolveCode(code);
+});
+
 document.getElementById('shareBtn').addEventListener('click', async ()=>{
-  if(!referrerName){
-    referrerName = document.getElementById('demoName').value.trim();
-    referrerContact = document.getElementById('demoContact').value.trim();
-  }
-  if(!referrerName || !referrerContact){
+  if(!currentCode){
     document.getElementById('demoPanel').style.display = 'block';
+    document.getElementById('shareStatusMsg').textContent = 'Enter your invite code in Demo settings below first.';
     return;
   }
 
   const btn = document.getElementById('shareBtn');
   btn.disabled = true;
   try{
-    const shareCode = randShareCode(referrerName);
-    const list = await getShareLinks();
-    list.push({
-      shareCode, referrerName, referrerContact,
-      createdAt: Date.now(), used: false
-    });
-    await saveShareLinks(list);
+    const share = await apiFetch('/links/' + encodeURIComponent(currentCode) + '/share', { method: 'POST' });
+    const fullLink = window.location.origin + '/fifty-template-lead.html?ref=' + encodeURIComponent(share.code);
 
-    const fullLink = 'https://' + TENANT.domain + '/50/refer/' + shareCode;
     document.getElementById('shareLinkOut').textContent = fullLink;
     document.getElementById('shareResult').classList.add('show');
     document.getElementById('shareStatusMsg').textContent = '';

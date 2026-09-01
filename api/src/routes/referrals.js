@@ -1,9 +1,14 @@
 const express = require('express');
+const cors = require('cors');
 const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
 const { withUserTransaction, getCallerContext } = require('../db');
 
 const router = express.Router();
+
+// See the same comment in routes/customers.js — bearer-token auth, not
+// cookies, so an open CORS policy here isn't a CSRF-style risk.
+router.use(cors());
 
 function forbidden(message) {
   const err = new Error(message);
