@@ -362,14 +362,40 @@ async function renderList(query){
         <div class="who">
           <div class="rname">${r.name}</div>
           <div class="rcontact">${contact} · referred by ${r.referrer.name} · sent ${fmtDate(r.submitted_at)}</div>
-          <div class="rstate ${isPaid ? 'paid' : 'pending'}">${isPaid ? 'Order placed — $50 sent' : 'In progress'}</div>
+          <div class="rstate ${isPaid ? 'paid' : 'pending'}">${isPaid ? 'Marked paid' : 'In progress'}</div>
         </div>
-        <label class="toggle" title="Marking a referral paid isn't available on this page yet — that's an admin action.">
-          <input type="checkbox" disabled ${isPaid ? 'checked' : ''} />
+        <label class="toggle" title="${isPaid ? 'Already marked paid' : 'Mark this referral paid'}">
+          <input type="checkbox" data-referral-id="${r.id}" ${isPaid ? 'checked disabled' : ''} />
           <span class="slider"></span>
         </label>
       </div>`;
   }).join('');
+
+  container.querySelectorAll('input[type=checkbox][data-referral-id]').forEach((input) => {
+    input.addEventListener('change', async (e) => {
+      if(!e.target.checked) return; // already-paid rows render disabled+checked, nothing to un-check
+      const referralId = e.target.dataset.referralId;
+      const confirmed = confirm('Mark this referral as paid? This can\'t be undone.\n\nGift card issuance isn\'t automated yet — send the $50 to both people yourself for now.');
+      if(!confirmed){ e.target.checked = false; return; }
+
+      e.target.disabled = true;
+      try{
+        await apiFetch('/referrals/' + encodeURIComponent(referralId) + '/status', {
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'rewarded' })
+        });
+        await renderList(document.getElementById('searchBox').value);
+      }catch(err){
+        e.target.checked = false;
+        e.target.disabled = false;
+        if(err.status === 403){
+          alert('Your account isn\'t an admin — only admins can mark a referral paid.');
+        } else {
+          alert('Something went wrong marking that paid. Try again.');
+        }
+      }
+    });
+  });
 }
 
 document.getElementById('searchBox').addEventListener('input', debounce((e) => renderList(e.target.value), 300));
