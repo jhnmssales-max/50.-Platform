@@ -16,7 +16,7 @@
   body{
     margin:0;font-family:'Inter',sans-serif;color:var(--charcoal);
     background:var(--primary);
-    display:flex;align-items:center;justify-content:center;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
     padding:24px;
   }
   .card{
@@ -115,6 +115,18 @@
   .demoPanel{display:none;margin-top:12px;}
   .demoPanel input{width:100%;padding:10px 12px;border:1px solid #ddd6c8;border-radius:8px;font-family:'Inter';font-size:13px;margin-bottom:10px;}
   .demoPanel .note{font-size:11px;color:var(--muted);margin-top:2px;}
+
+  /* Small, unobtrusive platform credit — sits below the card, on the page
+     background, so it never competes with the tenant's own branding at
+     the top of the card. Uses currentColor throughout so it stays
+     readable against any tenant's (dark) primary color. */
+  .poweredBy{
+    display:flex;align-items:center;gap:6px;
+    color:rgba(255,255,255,.55);
+    font-size:11px;letter-spacing:.01em;
+  }
+  .poweredBy strong{font-weight:700;color:rgba(255,255,255,.78);}
+  .poweredBy svg{flex-shrink:0;display:block;}
 </style>
 </head>
 <body>
@@ -173,6 +185,14 @@
     <input type="text" id="authToken" placeholder="Paste a Supabase access token for a dealer/admin account" autocomplete="off" />
     <p class="note">In a real deployment this page would sit behind a real login. Until then, paste a token here to talk to the API — it's remembered in this browser only.</p>
   </div>
+</div>
+
+<div class="poweredBy">
+  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+    <rect width="16" height="16" rx="4" fill="currentColor" opacity=".16"/>
+    <text x="8" y="11.5" text-anchor="middle" font-family="Inter, sans-serif" font-size="7" font-weight="800" fill="currentColor">50.</text>
+  </svg>
+  <span>Powered by <strong>50.</strong></span>
 </div>
 
 <script>
