@@ -230,6 +230,7 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
           `select
              c.id as recipient_customer_id, c.name as recipient_name, c.email as recipient_email,
              t.tremendous_funding_source_id as funding_source_id,
+             t.tremendous_campaign_id as campaign_id,
              case when t.tremendous_api_key_encrypted is not null
                   then pgp_sym_decrypt(t.tremendous_api_key_encrypted, $1)
              end as api_key
@@ -241,7 +242,7 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
           [encryptionKeySafe(), referralId]
         );
 
-        if (payout && payout.funding_source_id && payout.api_key) {
+        if (payout && payout.funding_source_id && payout.campaign_id && payout.api_key) {
           const idempotencyKey = `${referralId}:referrer`;
           const { rows: [claimed] } = await client.query(
             `insert into gift_card_transactions
@@ -257,6 +258,7 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
               transactionId: claimed.id,
               apiKey: payout.api_key,
               fundingSourceId: payout.funding_source_id,
+              campaignId: payout.campaign_id,
               amountCents: ctx.reward_amount_cents,
               currency: ctx.reward_currency,
               recipientName: payout.recipient_name,
@@ -283,6 +285,7 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
         const order = await createOrder({
           apiKey: rewardClaim.apiKey,
           fundingSourceId: rewardClaim.fundingSourceId,
+          campaignId: rewardClaim.campaignId,
           amountCents: rewardClaim.amountCents,
           currency: rewardClaim.currency,
           recipientName: rewardClaim.recipientName,

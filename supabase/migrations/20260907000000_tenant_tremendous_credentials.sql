@@ -25,10 +25,12 @@ alter table gift_card_transactions
 alter table tenants
   add column tremendous_api_key_encrypted  bytea,
   add column tremendous_funding_source_id  text,
+  add column tremendous_campaign_id        text,
   add column tremendous_connected_at       timestamptz;
 
 comment on column tenants.tremendous_api_key_encrypted is 'This tenant''s own Tremendous API key, encrypted with pgp_sym_encrypt(plaintext, TENANT_CREDENTIALS_ENCRYPTION_KEY). Write-only in practice — the API never selects this back to a client.';
 comment on column tenants.tremendous_funding_source_id is 'Which of this tenant''s own Tremendous funding sources (their connected card) an order should draw from. Not a secret on its own, but meaningless without the key above, so it lives alongside it.';
+comment on column tenants.tremendous_campaign_id is 'Which of this tenant''s own Tremendous campaigns (their branding + choice of reward, e.g. Amazon.com gift cards) an order is placed under. Required by Tremendous''s own API — an order with neither a campaign nor a products list is rejected outright — and lets each dealer eventually run their own distinct campaign rather than sharing one.';
 comment on column tenants.tremendous_connected_at is 'When this tenant''s Tremendous credentials were last set. Null means no credentials on file — PATCH /api/referrals/:id/status marks a referral rewarded either way, it just can''t issue an actual reward until this is set.';
 
 -- ---------------------------------------------------------------------------
