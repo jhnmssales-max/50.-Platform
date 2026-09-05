@@ -154,7 +154,7 @@
       <code id="confirmLink"></code>
       <button class="copybtn" id="copyBtn">Copy</button>
     </div>
-    <p class="note">This prototype doesn't send a real text or email yet — copy the link above and send it yourself for now. Once connected to a messaging service, this happens automatically.</p>
+    <p class="note" id="confirmNote"></p>
     <button class="sendagain" id="sendAgainBtn">Send another</button>
   </div>
 
@@ -283,8 +283,17 @@ document.getElementById('sendForm').addEventListener('submit', async (e)=>{
     });
 
     const link = result.invite_link.url || (TENANT.domain + '/50/' + result.invite_link.code);
-    document.getElementById('confirmHeadline').textContent = 'Sent to ' + name + ' (' + email + ')';
+    const emailSent = result.email && result.email.sent;
+
+    document.getElementById('confirmHeadline').textContent = emailSent
+      ? 'Emailed to ' + name + ' (' + email + ')'
+      : name + ' created — but the email couldn\'t be sent';
     document.getElementById('confirmLink').textContent = link;
+    document.getElementById('confirmNote').textContent = emailSent
+      ? 'We\'ve emailed this link to them. Here it is too, in case you want to share it another way.'
+      : 'Their referral link was created, but sending the email failed' +
+        (result.email && result.email.error ? ' (' + result.email.error + ')' : '') +
+        ' — copy the link above and send it yourself for now.';
     document.getElementById('confirmBox').classList.add('show');
     document.getElementById('sendForm').style.display = 'none';
     renderList(document.getElementById('searchBox').value);

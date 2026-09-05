@@ -67,13 +67,18 @@ async function withPublicTransaction(fn) {
 }
 
 // Resolves who the caller is, once per request: their tenant, whether
-// they're an admin, and their tenant's branding/domain (for building
-// invite links). Runs as `authenticated` inside the same transaction, so
-// it's itself subject to RLS — a userId with no matching `users` row
-// (not a recognized staff member) simply returns undefined.
+// they're an admin, and their tenant's branding/domain/reward/sending
+// details (for building invite links and invite emails). Runs as
+// `authenticated` inside the same transaction, so it's itself subject to
+// RLS — a userId with no matching `users` row (not a recognized staff
+// member) simply returns undefined.
 async function getCallerContext(client, userId) {
   const { rows } = await client.query(
-    `select u.tenant_id, u.role = 'admin' as is_admin, t.domain as tenant_domain, t.name as tenant_name
+    `select
+       u.tenant_id, u.role = 'admin' as is_admin,
+       t.domain as tenant_domain, t.name as tenant_name,
+       t.reward_amount_cents, t.reward_currency,
+       t.send_from_address, t.send_from_name, t.send_domain_verified
      from users u
      join tenants t on t.id = u.tenant_id
      where u.id = $1`,

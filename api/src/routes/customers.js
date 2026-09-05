@@ -5,8 +5,21 @@ const { nanoid } = require('nanoid');
 const { requireAuth } = require('../middleware/auth');
 const { withUserTransaction, getCallerContext } = require('../db');
 const { slugify } = require('../lib/codes');
+const { sendEmail } = require('../lib/postmark');
+const { buildInviteEmail } = require('../lib/inviteEmail');
 
 const router = express.Router();
+
+// Prefers the page that's actually reachable and functional today
+// (fifty-template-customer.html?code=..., wherever the static frontend is
+// deployed) over the tenant's own domain + the aspirational /50/... path
+// scheme, which has no routing layer behind it yet. Falls back to the
+// latter only if FRONTEND_BASE_URL isn't configured.
+function buildInviteUrl(code, tenantDomain) {
+  const base = process.env.FRONTEND_BASE_URL;
+  if (base) return `${base.replace(/\/$/, '')}/fifty-template-customer.html?code=${encodeURIComponent(code)}`;
+  return tenantDomain ? `https://${tenantDomain}/50/${code}` : null;
+}
 
 // Auth here is a bearer token the calling page must already possess and
 // attach itself — never a cookie the browser sends automatically — so an
@@ -24,12 +37,17 @@ function forbidden(message) {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/customers — a dealer enters a customer's name/contact and gets
-// back that customer's referral (invite) link, created atomically. This is
-// "creating a referral link" from the dealer's side of the flow; the
-// customer's own onward "share" link is a public-facing action and out of
-// scope here. No email is sent yet — the caller is responsible for handing
-// the link to the customer themselves for now.
+// POST /api/customers — a dealer enters a customer's name/contact; the
+// customer and their referral (invite) link are created atomically, then
+// the invite is emailed to them through Postmark. This is "creating a
+// referral link" from the dealer's side of the flow; the customer's own
+// onward "share" link is a public-facing action and out of scope here.
+//
+// A tenant with its own verified sending domain (tenants.send_domain_verified)
+// sends as that domain; every other tenant falls back to the platform's
+// single verified sender (EMAIL_FROM_ADDRESS) — today, that's the only
+// verified sender that exists, so every tenant uses it until per-tenant
+// domain verification is actually built.
 // ---------------------------------------------------------------------------
 const createCustomerSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(200),
@@ -74,18 +92,55 @@ router.post('/customers', requireAuth, async (req, res, next) => {
         }
       }
 
-      return { customer, link, tenantDomain: ctx.tenant_domain };
+      return { customer, link, ctx };
     });
 
-    res.status(201).json({
+    const inviteUrl = buildInviteUrl(result.link.code, result.ctx.tenant_domain);
+
+    const responseBody = {
       customer: result.customer,
       invite_link: {
         code: result.link.code,
-        url: result.tenantDomain ? `https://${result.tenantDomain}/50/${result.link.code}` : null,
+        url: inviteUrl,
         status: result.link.status,
         created_at: result.link.created_at,
       },
-    });
+    };
+
+    // Sending is a best-effort side effect, attempted only after the
+    // customer and link are safely committed: a slow or failed send must
+    // never roll back data that already exists, and shouldn't hold the DB
+    // transaction open while waiting on a third-party HTTP call either.
+    try {
+      const fromAddress =
+        (result.ctx.send_domain_verified && result.ctx.send_from_address) || process.env.EMAIL_FROM_ADDRESS;
+      if (!fromAddress) {
+        throw new Error('No verified sending address configured for this tenant, and no platform default is set');
+      }
+      const fromName = (result.ctx.send_domain_verified && result.ctx.send_from_name) || result.ctx.tenant_name;
+
+      const { subject, htmlBody, textBody } = buildInviteEmail({
+        tenantName: result.ctx.tenant_name,
+        rewardAmountCents: result.ctx.reward_amount_cents,
+        rewardCurrency: result.ctx.reward_currency,
+        customerName: result.customer.name,
+        inviteUrl,
+      });
+
+      await sendEmail({
+        from: `${fromName} <${fromAddress}>`,
+        to: result.customer.email,
+        subject,
+        htmlBody,
+        textBody,
+      });
+
+      responseBody.email = { sent: true };
+    } catch (emailErr) {
+      responseBody.email = { sent: false, error: emailErr.message };
+    }
+
+    res.status(201).json(responseBody);
   } catch (err) {
     next(err);
   }
