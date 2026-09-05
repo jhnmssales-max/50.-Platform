@@ -111,10 +111,14 @@
 
   .emptylist{font-size:12.5px;color:var(--muted);text-align:center;padding:20px 0;}
 
-  .demoToggle{font-size:11px;color:var(--muted);text-decoration:underline;cursor:pointer;margin-top:22px;display:inline-block;}
-  .demoPanel{display:none;margin-top:12px;}
-  .demoPanel input{width:100%;padding:10px 12px;border:1px solid #ddd6c8;border-radius:8px;font-family:'Inter';font-size:13px;margin-bottom:10px;}
-  .demoPanel .note{font-size:11px;color:var(--muted);margin-top:2px;}
+  .authBar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #e3ddd0;}
+  .authBar #authWho{font-size:12px;color:var(--muted);}
+  .authBar #authWho strong{color:var(--primary);}
+  .authSignOut{background:none;border:none;color:var(--accent);font-size:12px;font-weight:600;text-decoration:underline;cursor:pointer;font-family:'Inter';padding:0;}
+
+  .loginBox input{width:100%;padding:13px 14px;border:1px solid #ddd6c8;border-radius:9px;font-family:'Inter';font-size:15px;margin-bottom:16px;background:#fff;color:var(--charcoal);}
+  .loginBox .msg.err{display:block;}
+  .loginBox .hint{font-size:11.5px;color:var(--muted);text-align:center;margin-top:14px;line-height:1.5;}
 
   /* Small, unobtrusive platform credit — sits below the card, on the page
      background, so it never competes with the tenant's own branding at
@@ -142,48 +146,64 @@
 
   <hr class="divider" />
 
-  <h1>Send a referral incentive</h1>
-  <p class="lede">Enter your customer's name and how to reach them — we'll send their personal referral link right away.</p>
+  <div class="loginBox" id="loginBox">
+    <h1>Sign in</h1>
+    <p class="lede">Use the email and password for your dealer or admin account.</p>
+    <div id="loginMsg" class="msg"></div>
+    <form id="loginForm">
+      <label for="loginEmail">Email</label>
+      <input type="text" id="loginEmail" placeholder="you@dealer.com" autocomplete="username" />
 
-  <div id="formMsg" class="msg"></div>
+      <label for="loginPassword">Password</label>
+      <input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password" />
 
-  <form id="sendForm">
-    <label for="custName">Customer name</label>
-    <input type="text" id="custName" placeholder="Sarah Johnson" autocomplete="off" />
-
-    <label for="custEmail">Customer email</label>
-    <input type="text" id="custEmail" placeholder="sarah@email.com" autocomplete="off" />
-
-    <label for="custPhone">Phone number <span style="text-transform:none;font-weight:400;">(optional)</span></label>
-    <input type="text" id="custPhone" placeholder="(717) 555-0134" autocomplete="off" />
-
-    <button type="submit" class="send" id="sendBtn">Send your customer a referral incentive</button>
-  </form>
-
-  <div class="confirm" id="confirmBox">
-    <div class="headline" id="confirmHeadline"></div>
-    <div class="linkbox">
-      <code id="confirmLink"></code>
-      <button class="copybtn" id="copyBtn">Copy</button>
-    </div>
-    <p class="note" id="confirmNote"></p>
-    <button class="sendagain" id="sendAgainBtn">Send another</button>
+      <button type="submit" class="send" id="loginBtn">Sign in</button>
+    </form>
+    <p class="hint">Don't have an account yet? Ask your company's admin to set one up.</p>
   </div>
 
-  <div class="listsection">
-    <h2>Referrals in progress</h2>
-    <div class="counts" id="listCounts">Loading...</div>
-    <div class="searchrow">
-      <input type="text" id="searchBox" placeholder="Search by name, phone, or email..." />
+  <div id="appArea" style="display:none;">
+    <div class="authBar">
+      <span id="authWho"></span>
+      <button type="button" class="authSignOut" id="signOutBtn">Sign out</button>
     </div>
-    <div class="reflist" id="refList"></div>
-  </div>
 
-  <span class="demoToggle" id="demoToggle">Demo settings</span>
-  <div class="demoPanel" id="demoPanel">
-    <label for="authToken" style="display:block;font-size:11px;font-weight:700;color:var(--primary);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">Access token</label>
-    <input type="text" id="authToken" placeholder="Paste a Supabase access token for a dealer/admin account" autocomplete="off" />
-    <p class="note">In a real deployment this page would sit behind a real login. Until then, paste a token here to talk to the API — it's remembered in this browser only.</p>
+    <h1>Send a referral incentive</h1>
+    <p class="lede">Enter your customer's name and how to reach them — we'll send their personal referral link right away.</p>
+
+    <div id="formMsg" class="msg"></div>
+
+    <form id="sendForm">
+      <label for="custName">Customer name</label>
+      <input type="text" id="custName" placeholder="Sarah Johnson" autocomplete="off" />
+
+      <label for="custEmail">Customer email</label>
+      <input type="text" id="custEmail" placeholder="sarah@email.com" autocomplete="off" />
+
+      <label for="custPhone">Phone number <span style="text-transform:none;font-weight:400;">(optional)</span></label>
+      <input type="text" id="custPhone" placeholder="(717) 555-0134" autocomplete="off" />
+
+      <button type="submit" class="send" id="sendBtn">Send your customer a referral incentive</button>
+    </form>
+
+    <div class="confirm" id="confirmBox">
+      <div class="headline" id="confirmHeadline"></div>
+      <div class="linkbox">
+        <code id="confirmLink"></code>
+        <button class="copybtn" id="copyBtn">Copy</button>
+      </div>
+      <p class="note" id="confirmNote"></p>
+      <button class="sendagain" id="sendAgainBtn">Send another</button>
+    </div>
+
+    <div class="listsection">
+      <h2>Referrals in progress</h2>
+      <div class="counts" id="listCounts">Loading...</div>
+      <div class="searchrow">
+        <input type="text" id="searchBox" placeholder="Search by name, phone, or email..." />
+      </div>
+      <div class="reflist" id="refList"></div>
+    </div>
   </div>
 </div>
 
@@ -212,8 +232,12 @@ const TENANT = {
   domain: "50platform.com"
 };
 
-// The one line to change per deployment: where the API from /api is served.
+// The lines to change per deployment: where the API is served, and this
+// tenant's own Supabase project. The anon key is meant to be public — it's
+// what any browser-based Supabase client uses — it is not a secret.
 const API_BASE = "http://localhost:3000/api";
+const SUPABASE_URL = "http://localhost:9999";
+const SUPABASE_ANON_KEY = "local-anon-key";
 
 function applyTenantBranding(){
   document.title = TENANT.name + ' — Referral Incentive';
@@ -236,21 +260,73 @@ applyTenantBranding();
 function showMsg(text){ const el = document.getElementById('formMsg'); el.textContent = text; el.className = 'msg show err'; }
 function clearMsg(){ const el = document.getElementById('formMsg'); el.className = 'msg'; }
 
-// There's no real login on this page yet — see the demo panel. The token is
-// remembered per-browser so it doesn't need re-entry on every reload.
-function getAuthToken(){ return localStorage.getItem('fifty:authToken') || ''; }
-function setAuthToken(t){ localStorage.setItem('fifty:authToken', t || ''); }
+// Real login via Supabase Auth (email + password) — no more pasted access
+// tokens. The session (access + refresh token) is remembered per-browser so
+// it survives a reload; an expired access token is refreshed transparently
+// on the next API call (see apiFetch below), and only forces a re-login if
+// the refresh itself fails (e.g. the session was revoked).
+let currentUser = null; // { name, email, role, tenant_name } — set by /api/me
 
-async function apiFetch(path, options={}){
-  const token = getAuthToken();
+function getSession(){
+  try{ return JSON.parse(localStorage.getItem('fifty:session') || 'null'); }catch(e){ return null; }
+}
+function setSession(session){
+  if(session) localStorage.setItem('fifty:session', JSON.stringify(session));
+  else localStorage.removeItem('fifty:session');
+}
+
+async function supabaseAuthRequest(grantType, body){
+  const res = await fetch(SUPABASE_URL + '/auth/v1/token?grant_type=' + grantType, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok){
+    throw new Error(data.error_description || data.msg || 'Sign-in failed.');
+  }
+  return data;
+}
+
+async function signIn(email, password){
+  const data = await supabaseAuthRequest('password', { email, password });
+  setSession({ access_token: data.access_token, refresh_token: data.refresh_token });
+}
+
+async function refreshSession(){
+  const session = getSession();
+  if(!session || !session.refresh_token) return false;
+  try{
+    const data = await supabaseAuthRequest('refresh_token', { refresh_token: session.refresh_token });
+    setSession({ access_token: data.access_token, refresh_token: data.refresh_token });
+    return true;
+  }catch(e){
+    return false;
+  }
+}
+
+function signOut(){
+  setSession(null);
+  currentUser = null;
+  showLoggedOut();
+}
+
+// A 401 gets exactly one retry, after a token refresh — never a silent
+// retry loop. If the refresh itself fails, the error propagates as a 401
+// same as before, and callers already know to treat that as "signed out".
+async function apiFetch(path, options={}, retried){
+  const session = getSession();
   const res = await fetch(API_BASE + path, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': 'Bearer ' + token } : {}),
+      ...(session ? { 'Authorization': 'Bearer ' + session.access_token } : {}),
       ...(options.headers || {})
     }
   });
+  if(res.status === 401 && !retried && await refreshSession()){
+    return apiFetch(path, options, true);
+  }
   let body = null;
   try{ body = await res.json(); }catch(e){ /* no body */ }
   if(!res.ok){
@@ -266,16 +342,67 @@ function debounce(fn, wait){
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
 }
 
-document.getElementById('demoToggle').addEventListener('click', ()=>{
-  const panel = document.getElementById('demoPanel');
-  panel.style.display = panel.style.display === 'none' || !panel.style.display ? 'block' : 'none';
-});
+function escapeHtmlLite(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 
-const authTokenInput = document.getElementById('authToken');
-authTokenInput.value = getAuthToken();
-authTokenInput.addEventListener('change', () => {
-  setAuthToken(authTokenInput.value.trim());
-  renderList(document.getElementById('searchBox').value);
+function showLoggedOut(){
+  document.getElementById('loginBox').style.display = 'block';
+  document.getElementById('appArea').style.display = 'none';
+}
+
+function showLoggedIn(){
+  document.getElementById('loginBox').style.display = 'none';
+  document.getElementById('appArea').style.display = 'block';
+  document.getElementById('authWho').innerHTML =
+    'Signed in as <strong>' + escapeHtmlLite(currentUser.name) + '</strong> · ' + escapeHtmlLite(currentUser.role);
+}
+
+async function loadCurrentUser(){
+  currentUser = await apiFetch('/me');
+}
+
+async function init(){
+  if(!getSession()){ showLoggedOut(); return; }
+  try{
+    await loadCurrentUser();
+    showLoggedIn();
+    renderList();
+  }catch(err){
+    setSession(null);
+    showLoggedOut();
+  }
+}
+
+document.getElementById('signOutBtn').addEventListener('click', signOut);
+
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const msgEl = document.getElementById('loginMsg');
+  msgEl.className = 'msg';
+
+  if(!email || !password){
+    msgEl.textContent = 'Enter your email and password.';
+    msgEl.className = 'msg show err';
+    return;
+  }
+
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true; btn.textContent = 'Signing in...';
+  try{
+    await signIn(email, password);
+    await loadCurrentUser();
+    document.getElementById('loginPassword').value = '';
+    showLoggedIn();
+    renderList();
+  }catch(err){
+    setSession(null);
+    msgEl.textContent = err.message || 'Sign-in failed.';
+    msgEl.className = 'msg show err';
+  }
+  btn.disabled = false; btn.textContent = 'Sign in';
 });
 
 document.getElementById('sendForm').addEventListener('submit', async (e)=>{
@@ -287,11 +414,7 @@ document.getElementById('sendForm').addEventListener('submit', async (e)=>{
 
   if(!name){ showMsg('Enter the customer\'s name.'); return; }
   if(!email){ showMsg('Enter the customer\'s email.'); return; }
-  if(!getAuthToken()){
-    document.getElementById('demoPanel').style.display = 'block';
-    showMsg('Paste an access token in Demo settings below to send referrals.');
-    return;
-  }
+  if(!getSession()){ showMsg('Sign in to send referrals.'); return; }
 
   const btn = document.getElementById('sendBtn');
   btn.disabled = true; btn.textContent = 'Sending...';
@@ -319,8 +442,7 @@ document.getElementById('sendForm').addEventListener('submit', async (e)=>{
     renderList(document.getElementById('searchBox').value);
   }catch(err){
     if(err.status === 401){
-      showMsg('Your access token is invalid or expired — check Demo settings.');
-      document.getElementById('demoPanel').style.display = 'block';
+      signOut();
     } else {
       showMsg('Something went wrong sending that. Try again.');
     }
@@ -356,9 +478,9 @@ async function renderList(query){
   const container = document.getElementById('refList');
   const countsEl = document.getElementById('listCounts');
 
-  if(!getAuthToken()){
+  if(!getSession()){
     countsEl.textContent = '';
-    container.innerHTML = '<div class="emptylist">Paste an access token in Demo settings to load referrals.</div>';
+    container.innerHTML = '<div class="emptylist">Sign in to load referrals.</div>';
     return;
   }
 
@@ -369,10 +491,9 @@ async function renderList(query){
     if(query && query.trim()) params.set('query', query.trim());
     data = await apiFetch('/referrals?' + params.toString());
   }catch(err){
+    if(err.status === 401){ signOut(); return; }
     countsEl.textContent = '';
-    container.innerHTML = err.status === 401
-      ? '<div class="emptylist">Access token invalid or expired — check Demo settings.</div>'
-      : '<div class="emptylist">Couldn\'t load referrals. Try again.</div>';
+    container.innerHTML = '<div class="emptylist">Couldn\'t load referrals. Try again.</div>';
     return;
   }
 
@@ -383,9 +504,13 @@ async function renderList(query){
     return;
   }
 
+  const canMarkPaid = currentUser && currentUser.role === 'admin';
   container.innerHTML = data.referrals.map(r => {
     const isPaid = r.status === 'paid';
     const contact = r.email || r.phone || '';
+    const toggleTitle = isPaid
+      ? 'Already marked paid'
+      : (canMarkPaid ? 'Mark this referral paid' : 'Only admins can mark a referral paid');
     return `
       <div class="refrow">
         <div class="who">
@@ -393,8 +518,8 @@ async function renderList(query){
           <div class="rcontact">${contact} · referred by ${r.referrer.name} · sent ${fmtDate(r.submitted_at)}</div>
           <div class="rstate ${isPaid ? 'paid' : 'pending'}">${isPaid ? 'Marked paid' : 'In progress'}</div>
         </div>
-        <label class="toggle" title="${isPaid ? 'Already marked paid' : 'Mark this referral paid'}">
-          <input type="checkbox" data-referral-id="${r.id}" ${isPaid ? 'checked disabled' : ''} />
+        <label class="toggle" title="${toggleTitle}">
+          <input type="checkbox" data-referral-id="${r.id}" ${isPaid || !canMarkPaid ? 'disabled' : ''} ${isPaid ? 'checked' : ''} />
           <span class="slider"></span>
         </label>
       </div>`;
@@ -415,6 +540,7 @@ async function renderList(query){
         });
         await renderList(document.getElementById('searchBox').value);
       }catch(err){
+        if(err.status === 401){ signOut(); return; }
         e.target.checked = false;
         e.target.disabled = false;
         if(err.status === 403){
@@ -428,7 +554,7 @@ async function renderList(query){
 }
 
 document.getElementById('searchBox').addEventListener('input', debounce((e) => renderList(e.target.value), 300));
-renderList();
+init();
 </script>
 
 </body>
