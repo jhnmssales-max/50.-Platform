@@ -529,16 +529,22 @@ async function renderList(query){
     input.addEventListener('change', async (e) => {
       if(!e.target.checked) return; // already-paid rows render disabled+checked, nothing to un-check
       const referralId = e.target.dataset.referralId;
-      const confirmed = confirm('Mark this referral as paid? This can\'t be undone.\n\nGift card issuance isn\'t automated yet — send the $50 to both people yourself for now.');
+      const confirmed = confirm('Mark this referral as paid? This can\'t be undone.');
       if(!confirmed){ e.target.checked = false; return; }
 
       e.target.disabled = true;
       try{
-        await apiFetch('/referrals/' + encodeURIComponent(referralId) + '/status', {
+        const result = await apiFetch('/referrals/' + encodeURIComponent(referralId) + '/status', {
           method: 'PATCH',
           body: JSON.stringify({ status: 'rewarded' })
         });
         await renderList(document.getElementById('searchBox').value);
+        // result.reward is only present once a reward was actually
+        // attempted (i.e. this company has connected Tremendous) — its
+        // absence means "marked paid, nothing to report" same as before.
+        if(result.reward && !result.reward.issued){
+          alert('Marked as paid, but the reward couldn\'t be issued automatically (' + result.reward.error + '). You\'ll need to send it yourself for now.');
+        }
       }catch(err){
         if(err.status === 401){ signOut(); return; }
         e.target.checked = false;

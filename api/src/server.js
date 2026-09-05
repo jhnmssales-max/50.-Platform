@@ -4,6 +4,7 @@ const customersRouter = require('./routes/customers');
 const referralsRouter = require('./routes/referrals');
 const publicRouter = require('./routes/public');
 const meRouter = require('./routes/me');
+const tenantSettingsRouter = require('./routes/tenantSettings');
 
 const app = express();
 
@@ -25,6 +26,7 @@ app.use('/api', customersRouter);
 app.use('/api', referralsRouter);
 app.use('/api', publicRouter);
 app.use('/api', meRouter);
+app.use('/api', tenantSettingsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
