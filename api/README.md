@@ -142,7 +142,9 @@ Everything else is what actually carries the weight for an endpoint anyone on th
 
 ## How dealer auth works — and why it isn't bypassing RLS
 
-Every route requires `Authorization: Bearer <token>`, verified against `SUPABASE_JWT_SECRET` (`src/middleware/auth.js`). That only establishes *identity* (the caller's `auth.uid()`) — it does not look up or trust a tenant or role from the token.
+Every route requires `Authorization: Bearer <token>`, verified in `src/middleware/auth.js`. That only establishes *identity* (the caller's `auth.uid()`) — it does not look up or trust a tenant or role from the token.
+
+**Verified against Supabase's JWKS, not a static secret**: this project's Supabase tokens are signed with an asymmetric key (ES256) that Supabase rotates on its own, not the legacy shared HS256 secret — so `requireAuth` fetches the project's current public signing key from `<SUPABASE_URL>/auth/v1/.well-known/jwks.json` (via `jwks-rsa`, cached in memory for 10 minutes) and verifies against whichever key matches the token's `kid`, restricted to `ES256` specifically — never left open to whatever algorithm a token happens to claim, which is the classic "alg confusion" hole in JWT verification. `SUPABASE_URL` is the only required config for this; `SUPABASE_JWKS_URL` exists solely to point it at a local stand-in for tests (see "Verified" below).
 
 **Where the token comes from**: real Supabase Auth, not a pasted string. The dealer page signs in against `<SUPABASE_URL>/auth/v1/token?grant_type=password` directly (no `supabase-js` — it's a plain page, so this is one `fetch` with the project's public anon key), gets back an access + refresh token pair, and stores them in `localStorage`. Every `apiFetch` call attaches the access token; a `401` triggers exactly one refresh-token attempt (`grant_type=refresh_token`) before giving up and signing the page out — no silent retry loop, no token ever sent after a refresh fails. [`../supabase/README.md`](../supabase/README.md)'s "Staff accounts" section covers how a person actually gets an account in the first place (there's no self-serve signup).
 
@@ -159,7 +161,7 @@ This is exactly the session state Supabase's own PostgREST layer sets up, so `au
 
 ```bash
 cd api
-cp .env.example .env   # fill in DATABASE_URL, SUPABASE_JWT_SECRET, POSTMARK_SERVER_TOKEN, EMAIL_FROM_ADDRESS, FRONTEND_BASE_URL
+cp .env.example .env   # fill in DATABASE_URL, SUPABASE_URL, POSTMARK_SERVER_TOKEN, EMAIL_FROM_ADDRESS, FRONTEND_BASE_URL
 
 # the dealer page also needs its own two lines filled in (SUPABASE_URL,
 # SUPABASE_ANON_KEY, near API_BASE) — see "How dealer auth works" above
@@ -167,7 +169,7 @@ npm install
 npm run dev
 ```
 
-`scripts/gen_test_jwt.js` mints a throwaway HS256 token for local testing without a real Supabase project — `node scripts/gen_test_jwt.js <jwt-secret> <user-uuid>`. Never use it against a real deployment's secret.
+`scripts/gen_test_jwt.js` mints a throwaway ES256 token for local testing without a real Supabase project — `node scripts/gen_test_jwt.js <keypair-file> <user-uuid>` (generates the keypair file on first use). `scripts/serve_test_jwks.js <keypair-file> [port]` serves that same keypair's public half as a real JWKS response, so `SUPABASE_JWKS_URL` can point at it locally. Neither has any connection to a real Supabase project's actual signing key.
 
 ## Verified
 
