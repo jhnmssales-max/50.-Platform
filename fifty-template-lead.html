@@ -16,7 +16,7 @@
   body{
     margin:0;font-family:'Inter',sans-serif;color:var(--charcoal);
     background:var(--primary);
-    display:flex;align-items:center;justify-content:center;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
     padding:24px;
   }
   .card{
@@ -82,6 +82,17 @@
   .demoToggle{font-size:11px;color:var(--muted);text-decoration:underline;cursor:pointer;margin-top:22px;display:inline-block;}
   .demoPanel{display:none;margin-top:12px;}
   .demoPanel .note{font-size:11px;color:var(--muted);margin-top:2px;}
+
+  /* Small, unobtrusive platform credit — sits below the card, on the page
+     background, so it never competes with the tenant's own branding at
+     the top of the card. */
+  .poweredBy{
+    display:flex;align-items:center;gap:6px;
+    color:rgba(255,255,255,.55);
+    font-size:11px;letter-spacing:.01em;
+  }
+  .poweredBy strong{font-weight:700;color:rgba(255,255,255,.78);}
+  .poweredBy img{flex-shrink:0;display:block;width:20px;height:auto;}
 </style>
 </head>
 <body>
@@ -145,6 +156,11 @@
     <h2>This referral link isn't valid.</h2>
     <p>Double-check the link your friend sent you, or ask them to send a new one.</p>
   </div>
+</div>
+
+<div class="poweredBy">
+  <img src="assets/50-platform-logo.png" width="20" height="20" alt="50." />
+  <span>Powered by <strong>50.</strong></span>
 </div>
 
 <script>

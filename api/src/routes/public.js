@@ -4,6 +4,8 @@ const { z } = require('zod');
 const { nanoid } = require('nanoid');
 const { withPublicTransaction } = require('../db');
 const { resolveLinkLimiter, createShareLimiter, submitReferralLimiter } = require('../middleware/rateLimit');
+const { sendEmail } = require('../lib/postmark');
+const { buildLeadNotificationEmail } = require('../lib/leadNotificationEmail');
 
 const router = express.Router();
 
@@ -120,6 +122,17 @@ router.post('/links/:code/share', createShareLimiter, async (req, res, next) => 
 // be a share-kind link; creates the referral and marks the link used
 // atomically (see the submit_referral function) so a double-submit race
 // can't create two referrals off one link.
+//
+// Also notifies the dealer who actually owns this lead — whoever invited
+// the customer that shared this link, not a fixed address — since
+// they're the one who needs to follow up. Best-effort, same as the
+// invite email in routes/customers.js: attempted only after the referral
+// is safely committed, never blocks or reverts it, and — since the
+// caller here is the anonymous friend submitting the form, not the
+// dealer — never surfaced in the public response either way. A customer
+// with no inviting dealer on record (auto-created from an earlier
+// referral conversion, not entered by a dealer directly) simply has
+// nothing to notify; that's not a failure.
 // ---------------------------------------------------------------------------
 const submitReferralSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(200),
@@ -160,6 +173,53 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
     });
 
     res.status(201).json({ id: referral.id, submitted_at: referral.submitted_at });
+
+    // The dealer gets the "To"; every admin on the tenant gets a "Cc" —
+    // always, not just when something about the dealer path fails, since
+    // an admin copy is a standing visibility thing, not a fallback. If
+    // there's no dealer on record (see the migration), the admins become
+    // the "To" instead of being dropped. Only skip sending entirely if
+    // there's truly no one to notify.
+    const adminEmails = referral.admin_emails || [];
+    if (referral.dealer_email || adminEmails.length) {
+      try {
+        const fromAddress =
+          (referral.tenant_send_domain_verified && referral.tenant_send_from_address) ||
+          process.env.EMAIL_FROM_ADDRESS;
+        if (!fromAddress) {
+          throw new Error('No verified sending address configured for this tenant, and no platform default is set');
+        }
+        const fromName =
+          (referral.tenant_send_domain_verified && referral.tenant_send_from_name) || referral.tenant_name;
+
+        const { subject, htmlBody, textBody } = buildLeadNotificationEmail({
+          tenantName: referral.tenant_name,
+          dealerName: referral.dealer_name,
+          leadName: name,
+          leadEmail: email,
+          leadPhone: phone || null,
+          leadMessage: message || null,
+          referrerName: referral.referrer_name,
+        });
+
+        const to = referral.dealer_email || adminEmails.join(', ');
+        const cc = referral.dealer_email && adminEmails.length ? adminEmails.join(', ') : undefined;
+
+        await sendEmail({
+          from: `${fromName} <${fromAddress}>`,
+          to,
+          cc,
+          subject,
+          htmlBody,
+          textBody,
+        });
+      } catch (emailErr) {
+        // Best-effort: the referral itself already committed and the
+        // response above already went out — there's no one left to
+        // report this failure to except the server's own logs.
+        console.error('Failed to send dealer lead-notification email:', emailErr.message);
+      }
+    }
   } catch (err) {
     next(err);
   }

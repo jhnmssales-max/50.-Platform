@@ -9,7 +9,7 @@ const POSTMARK_API_BASE = process.env.POSTMARK_API_BASE || 'https://api.postmark
 // inactive/bounced recipient) — so callers get one consistent failure
 // path to handle rather than checking two different shapes of "it didn't
 // work."
-async function sendEmail({ from, to, subject, htmlBody, textBody }) {
+async function sendEmail({ from, to, cc, subject, htmlBody, textBody }) {
   const token = process.env.POSTMARK_SERVER_TOKEN;
   if (!token) {
     throw new Error('POSTMARK_SERVER_TOKEN is not set — see .env.example');
@@ -25,6 +25,7 @@ async function sendEmail({ from, to, subject, htmlBody, textBody }) {
     body: JSON.stringify({
       From: from,
       To: to,
+      ...(cc ? { Cc: cc } : {}),
       Subject: subject,
       HtmlBody: htmlBody,
       TextBody: textBody,
