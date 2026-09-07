@@ -1,11 +1,12 @@
 -- Extends submit_referral() to also return what's needed to notify the
 -- dealer who should follow up on a new lead — the dealer who originally
 -- invited the customer that shared this link, not a fixed address, since
--- that's the person who actually owns the relationship. anon has no
--- table access at all (see rls_policies migration), so this data can
--- only come back through the same narrow, security-definer function that
--- already does the insert — not a separate query from the API, which
--- would have nothing to run it as.
+-- that's the person who actually owns the relationship — and every
+-- admin on that same tenant, who should always get a copy regardless of
+-- who the dealer is. anon has no table access at all (see rls_policies
+-- migration), so this data can only come back through the same narrow,
+-- security-definer function that already does the insert — not a
+-- separate query from the API, which would have nothing to run it as.
 --
 -- CREATE OR REPLACE can't change a function's return columns, so this
 -- drops and recreates it (and its grant, which a drop also removes).
@@ -24,6 +25,7 @@ returns table (
   submitted_at timestamptz,
   dealer_email text,
   dealer_name text,
+  admin_emails text[],
   referrer_name text,
   tenant_name text,
   tenant_send_domain_verified boolean,
@@ -39,6 +41,7 @@ declare
   v_referrer customers%rowtype;
   v_dealer_email text;
   v_dealer_name text;
+  v_admin_emails text[];
   v_tenant tenants%rowtype;
 begin
   select * into v_link from referral_links where code = p_code and kind = 'share';
@@ -60,6 +63,12 @@ begin
   select u.email, u.name into v_dealer_email, v_dealer_name
     from users u where u.id = v_referrer.created_by_user_id;
 
+  -- Every admin on this tenant, not a fixed address — array_agg over
+  -- zero rows returns null, which the API route treats as "no admins to
+  -- copy," the same way it already treats a null dealer_email.
+  select array_agg(u.email) into v_admin_emails
+    from users u where u.tenant_id = v_link.tenant_id and u.role = 'admin';
+
   select * into v_tenant from tenants where tenants.id = v_link.tenant_id;
 
   return query
@@ -75,7 +84,7 @@ begin
     )
     select
       inserted.id, inserted.submitted_at,
-      v_dealer_email, v_dealer_name, v_referrer.name, v_tenant.name,
+      v_dealer_email, v_dealer_name, v_admin_emails, v_referrer.name, v_tenant.name,
       v_tenant.send_domain_verified, v_tenant.send_from_address, v_tenant.send_from_name
     from inserted, touched;
 end;

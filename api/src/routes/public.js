@@ -174,7 +174,14 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
 
     res.status(201).json({ id: referral.id, submitted_at: referral.submitted_at });
 
-    if (referral.dealer_email) {
+    // The dealer gets the "To"; every admin on the tenant gets a "Cc" —
+    // always, not just when something about the dealer path fails, since
+    // an admin copy is a standing visibility thing, not a fallback. If
+    // there's no dealer on record (see the migration), the admins become
+    // the "To" instead of being dropped. Only skip sending entirely if
+    // there's truly no one to notify.
+    const adminEmails = referral.admin_emails || [];
+    if (referral.dealer_email || adminEmails.length) {
       try {
         const fromAddress =
           (referral.tenant_send_domain_verified && referral.tenant_send_from_address) ||
@@ -195,9 +202,13 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
           referrerName: referral.referrer_name,
         });
 
+        const to = referral.dealer_email || adminEmails.join(', ');
+        const cc = referral.dealer_email && adminEmails.length ? adminEmails.join(', ') : undefined;
+
         await sendEmail({
           from: `${fromName} <${fromAddress}>`,
-          to: referral.dealer_email,
+          to,
+          cc,
           subject,
           htmlBody,
           textBody,
