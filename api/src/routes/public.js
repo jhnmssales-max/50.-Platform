@@ -203,7 +203,14 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
         });
 
         const to = referral.dealer_email || adminEmails.join(', ');
-        const cc = referral.dealer_email && adminEmails.length ? adminEmails.join(', ') : undefined;
+        // An admin who is also the inviting dealer (a small team, or a
+        // test account wearing both hats) would otherwise land in Cc
+        // with the exact same address already in To — dedupe against
+        // the dealer's own address rather than send it to itself twice.
+        const ccEmails = referral.dealer_email
+          ? adminEmails.filter((e) => e.toLowerCase() !== referral.dealer_email.toLowerCase())
+          : [];
+        const cc = ccEmails.length ? ccEmails.join(', ') : undefined;
 
         await sendEmail({
           from: `${fromName} <${fromAddress}>`,
