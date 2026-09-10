@@ -181,7 +181,15 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
     // the "To" instead of being dropped. Only skip sending entirely if
     // there's truly no one to notify.
     const adminEmails = referral.admin_emails || [];
-    if (referral.dealer_email || adminEmails.length) {
+    if (!referral.dealer_email && !adminEmails.length) {
+      // submit_referral()'s return values (who to notify) are never
+      // persisted anywhere — only id/submitted_at land in the referrals
+      // table — so without this line, "nothing was sent" and "nothing
+      // was ever attempted" are indistinguishable after the fact.
+      console.log(
+        `No dealer or admin to notify for referral ${referral.id} — submit_referral() returned no dealer_email and no admin_emails, skipping lead notification email.`
+      );
+    } else {
       try {
         const fromAddress =
           (referral.tenant_send_domain_verified && referral.tenant_send_from_address) ||
@@ -203,7 +211,14 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
         });
 
         const to = referral.dealer_email || adminEmails.join(', ');
-        const cc = referral.dealer_email && adminEmails.length ? adminEmails.join(', ') : undefined;
+        // An admin who is also the inviting dealer (a small team, or a
+        // test account wearing both hats) would otherwise land in Cc
+        // with the exact same address already in To — dedupe against
+        // the dealer's own address rather than send it to itself twice.
+        const ccEmails = referral.dealer_email
+          ? adminEmails.filter((e) => e.toLowerCase() !== referral.dealer_email.toLowerCase())
+          : [];
+        const cc = ccEmails.length ? ccEmails.join(', ') : undefined;
 
         await sendEmail({
           from: `${fromName} <${fromAddress}>`,
@@ -213,6 +228,10 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
           htmlBody,
           textBody,
         });
+
+        console.log(
+          `Sent lead notification email for referral ${referral.id} — to=${to}${cc ? ` cc=${cc}` : ''}`
+        );
       } catch (emailErr) {
         // Best-effort: the referral itself already committed and the
         // response above already went out — there's no one left to
