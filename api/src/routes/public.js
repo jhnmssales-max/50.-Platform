@@ -18,7 +18,7 @@ router.use(cors());
 
 const UNIQUE_VIOLATION = '23505';
 const LINK_NOT_FOUND = 'P0002';
-const LINK_ALREADY_USED = 'P0003';
+const SELF_REFERRAL = 'P0003';
 
 const codeSchema = z
   .string()
@@ -33,10 +33,10 @@ function notFound(message = 'Link not found') {
   return err;
 }
 
-function mapFunctionError(err, notFoundMessage, alreadyUsedMessage) {
+function mapFunctionError(err, notFoundMessage, selfReferralMessage) {
   if (err.code === LINK_NOT_FOUND) return notFound(notFoundMessage);
-  if (err.code === LINK_ALREADY_USED) {
-    const e = new Error(alreadyUsedMessage);
+  if (err.code === SELF_REFERRAL) {
+    const e = new Error(selfReferralMessage);
     e.status = 409;
     return e;
   }
@@ -79,10 +79,15 @@ router.get('/links/:code', resolveLinkLimiter, async (req, res, next) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/links/:code/share — the customer taps "share": mint a new
-// share-kind link off of whatever link got them here (their original
+// POST /api/links/:code/share — the customer taps "Get my referral code":
+// idempotent per customer (see create_share_link) — the first call mints
+// a share-kind link off of whatever link got them here (their original
 // invite, or — for a referred friend who's since become a customer
-// themselves — their own share link), and hand back the full URL.
+// themselves — their own share link); every call after that just hands
+// back that same persistent link instead of minting another. The nanoid
+// retry loop below only ever matters on that first, link-creating call —
+// a repeat call resolves inside create_share_link before it would touch
+// a new code at all.
 // ---------------------------------------------------------------------------
 router.post('/links/:code/share', createShareLimiter, async (req, res, next) => {
   const parsedCode = codeSchema.safeParse(req.params.code);
@@ -119,9 +124,13 @@ router.post('/links/:code/share', createShareLimiter, async (req, res, next) => 
 
 // ---------------------------------------------------------------------------
 // POST /api/links/:code/referrals — the friend's lead form. `:code` must
-// be a share-kind link; creates the referral and marks the link used
-// atomically (see the submit_referral function) so a double-submit race
-// can't create two referrals off one link.
+// be a share-kind link, and — since the link is now persistent (see
+// create_share_link) rather than single-use — this route creates its own
+// independent referrals row every time, same link or not; there's no
+// "already used" lock left to race against. The one thing still checked
+// against the link itself is self-referral: submit_referral rejects a
+// submission whose email or phone matches the link's own customer, so a
+// permanent code can't be used to send its owner their own reward.
 //
 // Also notifies the dealer who actually owns this lead — whoever invited
 // the customer that shared this link, not a fixed address — since
@@ -163,12 +172,15 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
         ]);
         return rows[0];
       } catch (err) {
-        if (err.code === UNIQUE_VIOLATION) {
-          const e = new Error('This link has already been used');
-          e.status = 409;
-          throw e;
-        }
-        throw mapFunctionError(err, 'Link not found', 'This link has already been used');
+        // No UNIQUE_VIOLATION case here anymore — referrals.referral_link_id
+        // isn't unique now that one link can back many referrals, so the
+        // only failures submit_referral can raise are link_not_found and
+        // self_referral (see mapFunctionError).
+        throw mapFunctionError(
+          err,
+          'Link not found',
+          "This looks like your own contact info — you can't refer yourself. Ask your friend to use their own link."
+        );
       }
     });
 
