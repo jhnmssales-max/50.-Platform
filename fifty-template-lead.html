@@ -73,11 +73,6 @@
   .confirm h2{font-family:'Fraunces',serif;font-weight:500;font-size:19px;color:var(--primary);margin:0 0 10px;}
   .confirm p{font-size:13.5px;color:var(--muted);line-height:1.6;}
 
-  .usedstate{display:none;text-align:center;}
-  .usedstate.show{display:block;}
-  .usedstate h2{font-family:'Fraunces',serif;font-weight:500;font-size:19px;color:var(--primary);margin:0 0 10px;}
-  .usedstate p{font-size:13.5px;color:var(--muted);line-height:1.6;}
-
   .invalidstate{display:none;text-align:center;}
   .invalidstate.show{display:block;}
   .invalidstate h2{font-family:'Fraunces',serif;font-weight:500;font-size:19px;color:var(--primary);margin:0 0 10px;}
@@ -153,11 +148,6 @@
     <p>Thanks, <span id="confirmName"></span> — we've got your info and someone will reach out soon. Once your order is complete, you and <span id="confirmReferrer"></span> will each get a $50 eGift card.</p>
   </div>
 
-  <div class="usedstate" id="usedState">
-    <h2>This link has already been used.</h2>
-    <p>Each referral link works one time. If you're interested, ask your friend for a new link — every share creates a fresh one.</p>
-  </div>
-
   <div class="invalidstate" id="invalidState">
     <h2>This referral link isn't valid.</h2>
     <p>Double-check the link your friend sent you, or ask them to send a new one.</p>
@@ -231,7 +221,6 @@ function clearMsg(){ document.getElementById('formMsg').className = 'msg'; }
 
 function showState(id){
   document.getElementById('activeState').style.display = 'none';
-  document.getElementById('usedState').classList.remove('show');
   document.getElementById('invalidState').classList.remove('show');
   if(id) document.getElementById(id).classList.add('show');
 }
@@ -250,10 +239,6 @@ async function checkAndRender(){
     referrerName = link.referrer_first_name || 'A friend';
     document.getElementById('referrerNameOut').textContent = referrerName;
     document.getElementById('referrerNameOut2').textContent = referrerName;
-    if(link.status === 'used'){
-      showState('usedState');
-      return false;
-    }
     if(link.kind !== 'share' || link.status !== 'active'){
       showState('invalidState');
       return false;
@@ -308,10 +293,12 @@ document.getElementById('leadForm').addEventListener('submit', async (e)=>{
     document.getElementById('confirmReferrer').textContent = referrerName;
     showState('confirmState');
   }catch(err){
-    if(err.status === 409){
-      showState('usedState');
-    } else if(err.status === 404){
+    if(err.status === 404){
       showState('invalidState');
+    } else if(err.status === 409){
+      // Self-referral — not a broken link, just these details. Leave the
+      // form up so they can fix it and resubmit, same as a 400.
+      showMsg(err.message);
     } else if(err.status === 400){
       showMsg('Check your details and try again.');
     } else {
