@@ -48,13 +48,21 @@ function toFormBody(obj) {
   return params.toString();
 }
 
-async function stripeRequest(path, body) {
+// `idempotencyKey`, when passed, is sent as Stripe's own Idempotency-Key
+// header — a retried request with the same key returns the original
+// result rather than creating a second object, per Stripe's documented
+// guarantee (including for two genuinely concurrent requests with the
+// same key). createCheckoutSession/retrievePaymentIntent never need
+// this (the checkout flow has its own natural one-shot shape); Stage 4's
+// off-session per-referral charge does — see chargeOffSession below.
+async function stripeRequest(path, body, idempotencyKey) {
   const res = await fetch(`${STRIPE_API_BASE}${path}`, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/x-www-form-urlencoded',
       Authorization: `Bearer ${secretKey()}`,
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
     },
     body: toFormBody(body),
   });
@@ -112,6 +120,46 @@ async function createCheckoutSession({
     success_url: successUrl,
     cancel_url: cancelUrl,
   });
+}
+
+// Stage 4's per-referral reward charge: creates and confirms a
+// PaymentIntent against a tenant's already-saved payment method, with
+// nobody present to authorize it (off_session: true — this is what tells
+// Stripe not to attempt any interactive authentication and instead fail
+// outright, synchronously, if the payment method needs it). confirm:
+// true does the "create and confirm" in one call rather than two.
+//
+// idempotencyKey is required, not optional — every caller of this
+// function is charging real money with nobody watching, so it must
+// always be safe to retry (a crashed process, a network timeout after
+// Stripe already received the request) without risking a double charge.
+// Derived by the caller from the referral id, so the exact same
+// PaymentIntent is returned no matter how many times (or how many
+// concurrent processes) attempt this same referral's charge — this is
+// the authoritative guard against a double charge, not any locking on
+// our own side (see workers/rewardIssuance.js for why).
+//
+// On a synchronous decline, Stripe responds with a non-2xx status and an
+// error body — stripeRequest's existing !res.ok handling already throws
+// for that, with err.stripeCode set (e.g. 'card_declined'), so callers
+// use the same try/catch shape as every other Stripe call in this file.
+async function chargeOffSession({ customerId, paymentMethodId, amountCents, currency, metadata, idempotencyKey }) {
+  if (!idempotencyKey) {
+    throw new Error('chargeOffSession requires an idempotencyKey — refusing to charge without one');
+  }
+  return stripeRequest(
+    '/payment_intents',
+    {
+      amount: amountCents,
+      currency: (currency || 'usd').toLowerCase(),
+      customer: customerId,
+      payment_method: paymentMethodId,
+      off_session: true,
+      confirm: true,
+      metadata,
+    },
+    idempotencyKey
+  );
 }
 
 // checkout.session.completed's payload only gives payment_intent as a
@@ -180,4 +228,4 @@ function verifyWebhookSignature(rawBody, signatureHeader, webhookSecret, toleran
   return JSON.parse(rawBodyBuffer.toString('utf8'));
 }
 
-module.exports = { createCheckoutSession, retrievePaymentIntent, verifyWebhookSignature };
+module.exports = { createCheckoutSession, chargeOffSession, retrievePaymentIntent, verifyWebhookSignature };

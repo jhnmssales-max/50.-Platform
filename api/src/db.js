@@ -137,6 +137,38 @@ async function withServiceRole(fn) {
   }
 }
 
+// A misconfigured DATABASE_URL role breaks withServiceRole callers in two
+// different shapes, and only one of them is loud. A *write* that RLS
+// silently filters to 0 rows is caught by assertRowsAffected below,
+// because the caller already knows exactly which row it targeted and can
+// tell "0 rows" apart from "success." A *read* has no such anchor: the
+// reward-issuance worker's own candidate query, run as a role RLS
+// silently scopes to nothing, simply returns an empty result — and an
+// empty result looks identical to "nothing is due right now," which is
+// the normal, expected state on most cycles. Confirmed live: pointed at
+// a non-superuser role, the worker completed a clean-looking "0
+// candidates, 0 errors" cycle, forever, with no reward ever issued and
+// nothing to alert on — precisely the silent-200 shape this whole
+// billing build has tried to rule out everywhere else.
+//
+// Call this once at the start of any withServiceRole caller whose first
+// meaningful step is a broad read rather than a targeted write (the
+// worker; nothing else needs it, since every webhook handler's first
+// write already targets a specific, known-to-exist row and so is already
+// covered by assertRowsAffected).
+async function assertServiceRoleConnection(client) {
+  const { rows: [row] } = await client.query(
+    `select current_setting('is_superuser') = 'on' as is_superuser, current_user, session_user`
+  );
+  if (!row.is_superuser) {
+    throw new Error(
+      `withServiceRole is connected as a non-superuser role — current_user="${row.current_user}" ` +
+        `session_user="${row.session_user}". This means every RLS-scoped read/write in this call will be ` +
+        `silently and incorrectly restricted rather than erroring: check DATABASE_URL.`
+    );
+  }
+}
+
 // Every withServiceRole write that isn't a deliberately pre-checked
 // idempotent no-op must be passed through this. rowCount 0 here means
 // something is wrong — the connecting role silently couldn't write the
@@ -170,5 +202,6 @@ module.exports = {
   withPublicTransaction,
   withServiceRole,
   assertRowsAffected,
+  assertServiceRoleConnection,
   getCallerContext,
 };
