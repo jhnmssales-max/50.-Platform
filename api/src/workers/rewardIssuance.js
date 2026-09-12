@@ -83,7 +83,7 @@
 //     without attaching a debugger.
 const { pool, withServiceRole, assertRowsAffected, assertServiceRoleConnection } = require('../db');
 const { chargeOffSession } = require('../lib/stripe');
-const { issueGiftCard } = require('../lib/giftCardProvider');
+const { issueGiftCard, assertRealGiftCardProviderConfigured } = require('../lib/giftCardProvider');
 
 const PG_UNIQUE_VIOLATION = '23505';
 
@@ -137,6 +137,17 @@ async function releaseCycleLock(client) {
 }
 
 async function runRewardIssuanceCycle({ now = new Date(), batchSize = 25, dryRun = false } = {}) {
+  // Hard, unconditional gate — checked before anything else in this
+  // function, including --dry-run, before acquiring the advisory lock,
+  // before REWARD_CYCLE_MAX_CENTS, before any database query at all.
+  // Applying it to --dry-run too, even though a dry run never spends
+  // anything, is deliberate: this function has exactly one entry point
+  // and this is meant to be the one place that can never be bypassed by
+  // a future caller or a future flag, not a check with a documented
+  // exception to remember. See giftCardProvider.js's own comment for why
+  // this exists at all.
+  assertRealGiftCardProviderConfigured();
+
   const cycleMaxCentsRaw = process.env.REWARD_CYCLE_MAX_CENTS;
   if (!dryRun && !cycleMaxCentsRaw) {
     throw new Error(
@@ -331,6 +342,13 @@ async function previewCycle(candidateIds, now) {
 }
 
 async function processReferral(referralId, now) {
+  // Defense-in-depth, not the primary guard (runRewardIssuanceCycle
+  // above already refuses to reach this function at all): asserted again
+  // here so a future caller of processReferral() that bypasses the cycle
+  // function entirely can never charge a referral while no real gift
+  // card provider is configured either.
+  assertRealGiftCardProviderConfigured();
+
   const claim = await claimReferralCharge(referralId, now);
   if (claim.reason) {
     logReferralOutcome({ referralId, tenantId: claim.tenantId, amountCents: claim.amountCents, outcome: 'skipped', detail: claim.reason });

@@ -11,6 +11,21 @@
 // Stripe account) before trusting the cron job to run it for real.
 require('dotenv').config();
 const { runRewardIssuanceCycle } = require('./rewardIssuance');
+const { assertRealGiftCardProviderConfigured } = require('../lib/giftCardProvider');
+
+// Startup assertion — refuses to even boot this process if it isn't safe
+// to, before touching the database or Stripe at all. runRewardIssuanceCycle
+// (and processReferral, defense-in-depth) assert the same thing again
+// internally; this is deliberately redundant with those, not a
+// replacement for them — belt and suspenders for the one piece of this
+// codebase that moves real money with nobody watching. See
+// giftCardProvider.js's own comment for what this actually prevents.
+try {
+  assertRealGiftCardProviderConfigured();
+} catch (err) {
+  console.error('Reward issuance worker refusing to start:', err.message);
+  process.exit(1);
+}
 
 const dryRun = process.argv.includes('--dry-run');
 

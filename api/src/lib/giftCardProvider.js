@@ -36,6 +36,40 @@ function getProvider() {
   return provider;
 }
 
+// Hard safety gate. As of this writing 'stub' is the ONLY registered
+// provider (see this file's top-of-file comment — Tremendous declined to
+// support this platform-funded model, Tango/Amazon Incentives are both
+// pending an LLC and EIN), and the stub fakes a successful issuance
+// without ever sending anyone a real gift card. Before this function
+// existed, nothing stopped the reward-issuance worker from charging a
+// tenant's real card via Stripe and only THEN discovering — silently, on
+// the stub's own fake success — that no reward was ever actually going
+// to be delivered. Every caller of this function calls it before
+// attempting any Stripe charge, not after, and treats a thrown error as
+// fatal to the whole run, not something to catch and downgrade to a
+// per-referral skip.
+//
+// Throws rather than returning a boolean: nothing that calls this may
+// ever check the result and decide to proceed anyway — the entire point
+// is that misconfiguration is fatal, not advisory.
+function assertRealGiftCardProviderConfigured() {
+  if (!PROVIDER || PROVIDER === 'stub') {
+    throw new Error(
+      'GIFT_CARD_PROVIDER is not set (or is "stub") — refusing to run. The stub provider fakes a successful ' +
+        'gift card issuance without ever delivering one, so running the reward-issuance worker with it configured ' +
+        'would charge a tenant real money via Stripe and then silently fail to reward anyone. Set GIFT_CARD_PROVIDER ' +
+        'to a real, integrated provider (see this file\'s top-of-file comment for current status — none exists yet) ' +
+        'before running this worker outside of manual local testing.'
+    );
+  }
+  // Also validates the configured name actually resolves to a real,
+  // registered provider module — catches a typo (e.g. GIFT_CARD_PROVIDER
+  // set to a provider that isn't wired up yet) before it becomes the
+  // exact same "charged, but no reward delivered" failure this check
+  // exists to prevent, just via a different cause.
+  getProvider();
+}
+
 // idempotencyKey must be unique per (referral, recipient role) forever —
 // see workers/rewardIssuance.js's leg keys, "<referral-id>:referrer" and
 // "<referral-id>:new_customer", matching the format
@@ -55,4 +89,4 @@ async function issueGiftCard({ amountCents, currency, recipientName, recipientEm
   });
 }
 
-module.exports = { issueGiftCard };
+module.exports = { issueGiftCard, assertRealGiftCardProviderConfigured };
