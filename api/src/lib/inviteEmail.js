@@ -7,8 +7,8 @@ function formatReward(amountCents, currency) {
   });
 }
 
-// Builds the email a customer gets when a dealer creates their referral
-// link — the invite that gets them to their own share page. Plain,
+// Builds the email a customer gets when a staff member creates their
+// referral link — the invite that gets them to their own share page. Plain,
 // inline-styled HTML (email clients don't reliably support much more)
 // plus a text fallback.
 function buildInviteEmail({ tenantName, rewardAmountCents, rewardCurrency, customerName, inviteUrl }) {

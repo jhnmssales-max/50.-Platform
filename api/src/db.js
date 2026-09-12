@@ -178,7 +178,7 @@ async function assertServiceRoleConnection(client) {
 // the thrown error names exactly which role actually ran the query — the
 // single most useful fact for diagnosing this class of failure, and
 // exactly what was missing when this bit for real (see api/README.md's
-// "How dealer auth works" section).
+// "How staff auth works" section).
 //
 // Callers are responsible for ruling out a *legitimate* 0-row result
 // first (e.g. re-checking that a redelivered webhook's target row is

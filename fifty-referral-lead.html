@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>You've Been Referred</title>
+<title>You've Been Referred to 50.</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --primary:#1F4D36; --primary-dark:#2D6A4F; --secondary:#40916C;
-    --accent:#8B5E3C; --accent-dark:#6B4A2E; --bg:#F8F5F0; --charcoal:#1B1B1B; --muted:#6B6A63;
+    --primary:#1C2B33; --primary-dark:#33475A; --secondary:#7C9FBB;
+    --accent:#C9974B; --accent-dark:#8B6B2E; --bg:#F7F4EE; --charcoal:#1B1B1B; --muted:#6B6A63;
   }
   *{box-sizing:border-box;}
   html,body{height:100%;}
@@ -101,8 +101,8 @@
     <img data-tenant-logo alt="logo" />
   </div>
   <div class="wordmark">
-    <div class="name" data-tenant-name>Good Steward Structures</div>
-    <div class="tag" data-tenant-tagline>Referral Program</div>
+    <div class="name" data-tenant-name>50.</div>
+    <div class="tag" data-tenant-tagline>Dealer Referral Program</div>
   </div>
 
   <hr class="divider" />
@@ -110,27 +110,27 @@
   <div id="activeState">
     <div class="referral-msg">
       <h1>You and <span id="referrerNameOut2">your friend</span> will each get a <span class="reward">$50 eGift card</span></h1>
-      <p><span class="who" id="referrerNameOut">A friend</span> referred you to <span data-tenant-name-inline>50.</span> — just become a customer to unlock it.</p>
+      <p><span class="who" id="referrerNameOut">A friend</span> referred your business to <span data-tenant-name-inline>50.</span> — just sign up to unlock it.</p>
     </div>
 
     <div id="formMsg" class="msg"></div>
 
     <form id="leadForm">
-      <label for="leadMessage">Tell us what you're looking for</label>
-      <textarea id="leadMessage" placeholder="A quick description of what you need — even a rough idea helps."></textarea>
+      <label for="leadMessage">Tell us about the business</label>
+      <textarea id="leadMessage" placeholder="What they build, roughly how big, anything that helps us reach out well."></textarea>
 
-      <label for="leadName">Your name</label>
-      <input type="text" id="leadName" placeholder="Mike Torres" autocomplete="off" />
+      <label for="leadName">Business name</label>
+      <input type="text" id="leadName" placeholder="Torres Outdoor Structures" autocomplete="off" />
 
-      <label for="leadEmail">Your email</label>
+      <label for="leadEmail">Contact email</label>
       <input type="text" id="leadEmail" placeholder="mike@email.com" autocomplete="off" />
 
-      <label for="leadPhone">Phone number <span style="text-transform:none;font-weight:400;">(optional)</span></label>
+      <label for="leadPhone">Contact phone <span style="text-transform:none;font-weight:400;">(optional)</span></label>
       <input type="text" id="leadPhone" placeholder="(717) 555-0134" autocomplete="off" />
 
-      <button type="submit" class="submitbtn" id="submitBtn">Get my $50 offer</button>
+      <button type="submit" class="submitbtn" id="submitBtn">Get my $50 signup bonus</button>
 
-      <p class="finePrint">By submitting, you agree to be contacted about your inquiry and to our <a href="privacy-policy.html" target="_blank" rel="noopener">Privacy Policy</a> and <a href="referral-terms.html" target="_blank" rel="noopener">Referral Program Terms</a>.</p>
+      <p class="finePrint">By submitting, you agree to be contacted about this business and about joining 50.</p>
     </form>
 
     <span class="websitelink">Visit our website — coming soon</span>
@@ -145,7 +145,7 @@
 
   <div class="confirm" id="confirmState">
     <h2>You're all set.</h2>
-    <p>Thanks, <span id="confirmName"></span> — we've got your info and someone will reach out soon. Once you're a customer, you and <span id="confirmReferrer"></span> will each get a $50 eGift card.</p>
+    <p>Thanks, <span id="confirmName"></span> — we've got your info and someone will reach out soon. Once you're signed up with 50., you and <span id="confirmReferrer"></span> will each get a $50 eGift card.</p>
   </div>
 
   <div class="invalidstate" id="invalidState">
@@ -161,22 +161,26 @@
 
 <script>
 const TENANT = {
-  name: "Good Steward Structures",
-  tagline: "Referral Program",
-  code: "good-steward-structures",
+  name: "50.",
+  tagline: "Dealer Referral Program",
+  code: "fifty-platform",
   colors: {
-    primary: "#1F4D36",
-    primaryDark: "#2D6A4F",
-    secondary: "#40916C",
-    accent: "#8B5E3C",
-    accentDark: "#6B4A2E",
-    bg: "#F8F5F0"
+    primary: "#1C2B33",
+    primaryDark: "#33475A",
+    secondary: "#7C9FBB",
+    accent: "#C9974B",
+    accentDark: "#8B6B2E",
+    bg: "#F7F4EE"
   },
-  domain: "goodstewardstructures.com",
-  logoUrl: "assets/gss-logo-badge.png"
+  // See the identical field's comment in fifty-referral-customer.html —
+  // not read anywhere in this file's own script either.
+  domain: "50platform.com",
+  logoUrl: "assets/50-platform-logo.png"
 };
 
 // The one line to change per deployment: where the API from /api is served.
+// Same production API as every other tenant — this is the same system,
+// not a separate one, per the whole point of this page's existence.
 const API_BASE = "https://five0-platform.onrender.com/api";
 
 function applyTenantBranding(){
@@ -277,8 +281,8 @@ document.getElementById('leadForm').addEventListener('submit', async (e)=>{
   const email = document.getElementById('leadEmail').value.trim();
   const phone = document.getElementById('leadPhone').value.trim();
 
-  if(!name){ showMsg('Enter your name.'); return; }
-  if(!email){ showMsg('Enter your email.'); return; }
+  if(!name){ showMsg('Enter the business name.'); return; }
+  if(!email){ showMsg('Enter a contact email.'); return; }
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true; btn.textContent = 'Submitting...';
@@ -300,11 +304,11 @@ document.getElementById('leadForm').addEventListener('submit', async (e)=>{
       // form up so they can fix it and resubmit, same as a 400.
       showMsg(err.message);
     } else if(err.status === 400){
-      showMsg('Check your details and try again.');
+      showMsg('Check the details and try again.');
     } else {
       showMsg('Something went wrong submitting that. Try again.');
     }
-    btn.disabled = false; btn.textContent = 'Get my $50 offer';
+    btn.disabled = false; btn.textContent = 'Get my $50 signup bonus';
   }
 });
 </script>

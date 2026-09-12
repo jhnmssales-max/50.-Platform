@@ -132,16 +132,16 @@ router.post('/links/:code/share', createShareLimiter, async (req, res, next) => 
 // submission whose email or phone matches the link's own customer, so a
 // permanent code can't be used to send its owner their own reward.
 //
-// Also notifies the dealer who actually owns this lead — whoever invited
-// the customer that shared this link, not a fixed address — since
-// they're the one who needs to follow up. Best-effort, same as the
+// Also notifies the staff member who actually owns this lead — whoever
+// invited the customer that shared this link, not a fixed address —
+// since they're the one who needs to follow up. Best-effort, same as the
 // invite email in routes/customers.js: attempted only after the referral
 // is safely committed, never blocks or reverts it, and — since the
-// caller here is the anonymous friend submitting the form, not the
-// dealer — never surfaced in the public response either way. A customer
-// with no inviting dealer on record (auto-created from an earlier
-// referral conversion, not entered by a dealer directly) simply has
-// nothing to notify; that's not a failure.
+// caller here is the anonymous friend submitting the form, not staff —
+// never surfaced in the public response either way. A customer with no
+// inviting staff member on record (auto-created from an earlier referral
+// conversion, not entered by staff directly) simply has nothing to
+// notify; that's not a failure.
 // ---------------------------------------------------------------------------
 const submitReferralSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(200),
@@ -186,20 +186,20 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
 
     res.status(201).json({ id: referral.id, submitted_at: referral.submitted_at });
 
-    // The dealer gets the "To"; every admin on the tenant gets a "Cc" —
-    // always, not just when something about the dealer path fails, since
-    // an admin copy is a standing visibility thing, not a fallback. If
-    // there's no dealer on record (see the migration), the admins become
-    // the "To" instead of being dropped. Only skip sending entirely if
-    // there's truly no one to notify.
+    // The inviting staff member gets the "To"; every admin on the tenant
+    // gets a "Cc" — always, not just when something about the staff path
+    // fails, since an admin copy is a standing visibility thing, not a
+    // fallback. If there's no inviting staff member on record (see the
+    // migration), the admins become the "To" instead of being dropped.
+    // Only skip sending entirely if there's truly no one to notify.
     const adminEmails = referral.admin_emails || [];
-    if (!referral.dealer_email && !adminEmails.length) {
+    if (!referral.staff_email && !adminEmails.length) {
       // submit_referral()'s return values (who to notify) are never
       // persisted anywhere — only id/submitted_at land in the referrals
       // table — so without this line, "nothing was sent" and "nothing
       // was ever attempted" are indistinguishable after the fact.
       console.log(
-        `No dealer or admin to notify for referral ${referral.id} — submit_referral() returned no dealer_email and no admin_emails, skipping lead notification email.`
+        `No staff member or admin to notify for referral ${referral.id} — submit_referral() returned no staff_email and no admin_emails, skipping lead notification email.`
       );
     } else {
       try {
@@ -214,7 +214,7 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
 
         const { subject, htmlBody, textBody } = buildLeadNotificationEmail({
           tenantName: referral.tenant_name,
-          dealerName: referral.dealer_name,
+          staffName: referral.staff_name,
           leadName: name,
           leadEmail: email,
           leadPhone: phone || null,
@@ -222,13 +222,13 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
           referrerName: referral.referrer_name,
         });
 
-        const to = referral.dealer_email || adminEmails.join(', ');
-        // An admin who is also the inviting dealer (a small team, or a
-        // test account wearing both hats) would otherwise land in Cc
-        // with the exact same address already in To — dedupe against
-        // the dealer's own address rather than send it to itself twice.
-        const ccEmails = referral.dealer_email
-          ? adminEmails.filter((e) => e.toLowerCase() !== referral.dealer_email.toLowerCase())
+        const to = referral.staff_email || adminEmails.join(', ');
+        // An admin who is also the inviting staff member (a small team,
+        // or a test account wearing both hats) would otherwise land in
+        // Cc with the exact same address already in To — dedupe against
+        // their own address rather than send it to itself twice.
+        const ccEmails = referral.staff_email
+          ? adminEmails.filter((e) => e.toLowerCase() !== referral.staff_email.toLowerCase())
           : [];
         const cc = ccEmails.length ? ccEmails.join(', ') : undefined;
 
@@ -248,7 +248,7 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
         // Best-effort: the referral itself already committed and the
         // response above already went out — there's no one left to
         // report this failure to except the server's own logs.
-        console.error('Failed to send dealer lead-notification email:', emailErr.message);
+        console.error('Failed to send staff lead-notification email:', emailErr.message);
       }
     }
   } catch (err) {

@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Refer a Friend</title>
+<title>Refer a Shed Business</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --primary:#1F4D36; --primary-dark:#2D6A4F; --secondary:#40916C;
-    --accent:#8B5E3C; --accent-dark:#6B4A2E; --bg:#F8F5F0; --charcoal:#1B1B1B; --muted:#6B6A63;
+    --primary:#1C2B33; --primary-dark:#33475A; --secondary:#7C9FBB;
+    --accent:#C9974B; --accent-dark:#8B6B2E; --bg:#F7F4EE; --charcoal:#1B1B1B; --muted:#6B6A63;
   }
   *{box-sizing:border-box;}
   html,body{height:100%;}
@@ -88,20 +88,20 @@
     <img data-tenant-logo alt="logo" />
   </div>
   <div class="wordmark">
-    <div class="name" data-tenant-name>Good Steward Structures</div>
-    <div class="tag" data-tenant-tagline>Referral Program</div>
+    <div class="name" data-tenant-name>50.</div>
+    <div class="tag" data-tenant-tagline>Dealer Referral Program</div>
   </div>
 
-  <div class="greeting" id="greetingLine">Thanks for choosing us.</div>
+  <div class="greeting" id="greetingLine">Know a shed business that should hear about us?</div>
 
   <hr class="divider" />
 
-  <button class="sharebtn" id="shareBtn">Get my referral code and earn a <span class="dollar">$50 eGift card</span> for every friend who becomes a customer</button>
+  <button class="sharebtn" id="shareBtn">Get my referral link and earn a <span class="dollar">$50 eGift card</span> for every business that signs up</button>
 
-  <p class="finePrint">This is your one referral code — share it with as many friends as you like. You'll get $50 for every friend who becomes a customer, and so will they.</p>
+  <p class="finePrint">This is your one referral link — share it with as many shed businesses as you like. You'll get $50 for every business that signs up with 50., and so will they.</p>
 
   <div class="shareResult" id="shareResult">
-    <div class="label">Your referral code</div>
+    <div class="label">Your referral link</div>
     <div class="linkbox">
       <code id="shareLinkOut"></code>
       <button class="copybtn" id="copyBtn">Copy</button>
@@ -111,9 +111,9 @@
 
   <span class="demoToggle" id="demoToggle">Demo settings</span>
   <div class="demoPanel" id="demoPanel">
-    <input type="text" id="demoCode" placeholder="Your invite code (from the staff member)" />
+    <input type="text" id="demoCode" placeholder="Your invite code (from 50.)" />
     <button type="button" class="copybtn" id="demoLoadBtn" style="width:100%;padding:10px;margin-bottom:10px;">Load</button>
-    <p class="note">In a real deployment this page already knows who you are from the link the staff member sent you (?code=...) — this field only exists so the demo works without that link.</p>
+    <p class="note">In a real deployment this page already knows who you are from the link 50. sent you (?code=...) — this field only exists so the demo works without that link.</p>
   </div>
 </div>
 
@@ -124,22 +124,29 @@
 
 <script>
 const TENANT = {
-  name: "Good Steward Structures",
-  tagline: "Referral Program",
-  code: "good-steward-structures",
+  name: "50.",
+  tagline: "Dealer Referral Program",
+  code: "fifty-platform",
   colors: {
-    primary: "#1F4D36",
-    primaryDark: "#2D6A4F",
-    secondary: "#40916C",
-    accent: "#8B5E3C",
-    accentDark: "#6B4A2E",
-    bg: "#F8F5F0"
+    primary: "#1C2B33",
+    primaryDark: "#33475A",
+    secondary: "#7C9FBB",
+    accent: "#C9974B",
+    accentDark: "#8B6B2E",
+    bg: "#F7F4EE"
   },
-  domain: "goodstewardstructures.com",
-  logoUrl: "assets/gss-logo-badge.png"
+  // Not currently read anywhere in this file's own script (see
+  // fifty-template-customer.html's identical field) — kept for parity
+  // and in case a future change starts using it. Fill in with 50.'s
+  // real marketing domain if that's ever needed; leaving it as-is
+  // changes nothing about how this page behaves today.
+  domain: "50platform.com",
+  logoUrl: "assets/50-platform-logo.png"
 };
 
 // The one line to change per deployment: where the API from /api is served.
+// Same production API as every other tenant — this is the same system,
+// not a separate one, per the whole point of this page's existence.
 const API_BASE = "https://five0-platform.onrender.com/api";
 
 function applyTenantBranding(){
@@ -182,7 +189,7 @@ async function resolveCode(code){
     const link = await apiFetch('/links/' + encodeURIComponent(code));
     currentCode = code;
     const firstName = link.referrer_first_name || 'there';
-    document.getElementById('greetingLine').textContent = 'Hi ' + firstName + ' — thanks for choosing us.';
+    document.getElementById('greetingLine').textContent = 'Hi ' + firstName + ' — know a shed business that should hear about us?';
   }catch(err){
     // Leave the default greeting and currentCode unset — the share button
     // below prompts for a code via the demo panel in that case.
@@ -217,7 +224,7 @@ document.getElementById('shareBtn').addEventListener('click', async ()=>{
   btn.disabled = true;
   try{
     const share = await apiFetch('/links/' + encodeURIComponent(currentCode) + '/share', { method: 'POST' });
-    const fullLink = window.location.origin + '/fifty-template-lead.html?ref=' + encodeURIComponent(share.code);
+    const fullLink = window.location.origin + '/fifty-referral-lead.html?ref=' + encodeURIComponent(share.code);
 
     document.getElementById('shareLinkOut').textContent = fullLink;
     document.getElementById('shareResult').classList.add('show');
@@ -226,8 +233,8 @@ document.getElementById('shareBtn').addEventListener('click', async ()=>{
     if(navigator.share){
       try{
         await navigator.share({
-          title: 'Get $50 when you become a customer of ' + TENANT.name,
-          text: 'I referred you — use my link and we both get $50 once you\'re a customer.',
+          title: 'Get $50 for referring a shed business to 50.',
+          text: 'I referred your business to 50. — use my link, and we both get $50 once you sign up.',
           url: fullLink
         });
         document.getElementById('shareStatusMsg').textContent = 'Shared!';

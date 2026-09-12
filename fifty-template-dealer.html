@@ -148,11 +148,11 @@
 
   <div class="loginBox" id="loginBox">
     <h1>Sign in</h1>
-    <p class="lede">Use the email and password for your dealer or admin account.</p>
+    <p class="lede">Use the email and password for your staff or admin account.</p>
     <div id="loginMsg" class="msg"></div>
     <form id="loginForm">
       <label for="loginEmail">Email</label>
-      <input type="text" id="loginEmail" placeholder="you@dealer.com" autocomplete="username" />
+      <input type="text" id="loginEmail" placeholder="you@yourcompany.com" autocomplete="username" />
 
       <label for="loginPassword">Password</label>
       <input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password" />
@@ -468,7 +468,7 @@ document.getElementById('sendAgainBtn').addEventListener('click', ()=>{
 
 function fmtDate(iso){ return new Date(iso).toLocaleDateString(undefined,{month:'short',day:'numeric'}); }
 
-// Rows are referrals — friend submissions — not the customers a dealer
+// Rows are referrals — friend submissions — not the customers staff
 // invited: one customer can send several referral links, and each is paid
 // out on its own, so status lives per row here, matching the API.
 async function renderList(query){
