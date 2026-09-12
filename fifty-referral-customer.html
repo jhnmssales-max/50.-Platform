@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Refer a Shed Business</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1C2B33; --primary-dark:#33475A; --secondary:#7C9FBB;
+    --accent:#C9974B; --accent-dark:#8B6B2E; --bg:#F7F4EE; --charcoal:#1B1B1B; --muted:#6B6A63;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;font-family:'Inter',sans-serif;color:var(--charcoal);
+    background:var(--primary);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    padding:24px;
+  }
+  .card{
+    background:var(--bg);
+    border-radius:18px;
+    max-width:440px;width:100%;
+    padding:38px 30px 32px;
+    box-shadow:0 20px 60px rgba(0,0,0,.35);
+    text-align:center;
+  }
+  .shield-wrap{display:flex;justify-content:center;margin-bottom:14px;}
+  .shield-wrap img{width:52px;height:auto;display:block;}
+  .wordmark .name{font-family:'Fraunces',serif;font-weight:600;font-size:21px;color:var(--primary);line-height:1.2;}
+  .wordmark .tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:700;margin-top:2px;}
+
+  .greeting{font-size:13px;color:var(--muted);margin:20px 0 6px;}
+
+  .divider{border:none;border-top:1px solid #e3ddd0;margin:18px 0 26px;}
+
+  button.sharebtn{
+    width:100%;background:var(--primary);color:var(--bg);border:none;border-radius:14px;
+    padding:22px 20px;font-size:17px;font-weight:700;cursor:pointer;font-family:'Inter';
+    line-height:1.35;letter-spacing:.01em;
+  }
+  button.sharebtn:hover{background:var(--primary-dark);}
+  button.sharebtn:disabled{opacity:.6;cursor:not-allowed;}
+  button.sharebtn .dollar{color:var(--accent);}
+
+  p.finePrint{font-size:12px;color:var(--muted);line-height:1.6;margin:16px 4px 0;}
+
+  .shareResult{display:none;margin-top:22px;padding-top:20px;border-top:1px solid #e3ddd0;text-align:left;}
+  .shareResult.show{display:block;}
+  .shareResult .label{font-size:11px;font-weight:700;color:var(--primary);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;}
+  .linkbox{
+    background:#fff;border:1px dashed var(--accent);border-radius:8px;
+    padding:12px 13px;font-size:12px;color:var(--primary-dark);word-break:break-all;
+    display:flex;justify-content:space-between;align-items:center;gap:10px;
+  }
+  .linkbox code{flex:1;}
+  .copybtn{
+    background:none;border:1px solid var(--primary);color:var(--primary);border-radius:6px;
+    padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Inter';flex-shrink:0;
+  }
+  .copybtn:hover{background:var(--primary);color:var(--bg);}
+
+  .msg{font-size:12px;color:var(--muted);margin-top:10px;}
+
+  .demoToggle{font-size:11px;color:var(--muted);text-decoration:underline;cursor:pointer;margin-top:26px;display:inline-block;}
+  .demoPanel{display:none;margin-top:12px;text-align:left;}
+  .demoPanel input{width:100%;padding:10px 12px;border:1px solid #ddd6c8;border-radius:8px;font-family:'Inter';font-size:13px;margin-bottom:10px;}
+  .demoPanel .note{font-size:11px;color:var(--muted);}
+
+  /* Small, unobtrusive platform credit — sits below the card, on the page
+     background, so it never competes with the tenant's own branding at
+     the top of the card. */
+  .poweredBy{
+    display:flex;align-items:center;gap:6px;
+    color:rgba(255,255,255,.55);
+    font-size:11px;letter-spacing:.01em;
+  }
+  .poweredBy strong{font-weight:700;color:rgba(255,255,255,.78);}
+  .poweredBy img{flex-shrink:0;display:block;width:20px;height:auto;}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="shield-wrap">
+    <img data-tenant-logo alt="logo" />
+  </div>
+  <div class="wordmark">
+    <div class="name" data-tenant-name>50.</div>
+    <div class="tag" data-tenant-tagline>Dealer Referral Program</div>
+  </div>
+
+  <div class="greeting" id="greetingLine">Know a shed business that should hear about us?</div>
+
+  <hr class="divider" />
+
+  <button class="sharebtn" id="shareBtn">Get my referral link and earn a <span class="dollar">$50 eGift card</span> for every business that signs up</button>
+
+  <p class="finePrint">This is your one referral link — share it with as many shed businesses as you like. You'll get $50 for every business that signs up with 50., and so will they.</p>
+
+  <div class="shareResult" id="shareResult">
+    <div class="label">Your referral link</div>
+    <div class="linkbox">
+      <code id="shareLinkOut"></code>
+      <button class="copybtn" id="copyBtn">Copy</button>
+    </div>
+    <p class="msg" id="shareStatusMsg"></p>
+  </div>
+
+  <span class="demoToggle" id="demoToggle">Demo settings</span>
+  <div class="demoPanel" id="demoPanel">
+    <input type="text" id="demoCode" placeholder="Your invite code (from 50.)" />
+    <button type="button" class="copybtn" id="demoLoadBtn" style="width:100%;padding:10px;margin-bottom:10px;">Load</button>
+    <p class="note">In a real deployment this page already knows who you are from the link 50. sent you (?code=...) — this field only exists so the demo works without that link.</p>
+  </div>
+</div>
+
+<div class="poweredBy">
+  <img src="assets/50-platform-logo.png" width="20" height="20" alt="50." />
+  <span>Powered by <strong>50.</strong></span>
+</div>
+
+<script>
+const TENANT = {
+  name: "50.",
+  tagline: "Dealer Referral Program",
+  code: "fifty-platform",
+  colors: {
+    primary: "#1C2B33",
+    primaryDark: "#33475A",
+    secondary: "#7C9FBB",
+    accent: "#C9974B",
+    accentDark: "#8B6B2E",
+    bg: "#F7F4EE"
+  },
+  // Not currently read anywhere in this file's own script (see
+  // fifty-template-customer.html's identical field) — kept for parity
+  // and in case a future change starts using it. Fill in with 50.'s
+  // real marketing domain if that's ever needed; leaving it as-is
+  // changes nothing about how this page behaves today.
+  domain: "50platform.com",
+  logoUrl: "assets/50-platform-logo.png"
+};
+
+// The one line to change per deployment: where the API from /api is served.
+// Same production API as every other tenant — this is the same system,
+// not a separate one, per the whole point of this page's existence.
+const API_BASE = "https://five0-platform.onrender.com/api";
+
+function applyTenantBranding(){
+  const r = document.documentElement.style;
+  r.setProperty('--primary', TENANT.colors.primary);
+  r.setProperty('--primary-dark', TENANT.colors.primaryDark);
+  r.setProperty('--secondary', TENANT.colors.secondary);
+  r.setProperty('--accent', TENANT.colors.accent);
+  r.setProperty('--accent-dark', TENANT.colors.accentDark);
+  r.setProperty('--bg', TENANT.colors.bg);
+  document.querySelectorAll('[data-tenant-logo]').forEach(el => {
+    el.src = TENANT.logoUrl;
+  });
+  document.querySelectorAll('[data-tenant-name]').forEach(el => { el.textContent = TENANT.name; });
+  document.querySelectorAll('[data-tenant-tagline]').forEach(el => { el.textContent = TENANT.tagline; });
+}
+applyTenantBranding();
+
+
+async function apiFetch(path, options={}){
+  const res = await fetch(API_BASE + path, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+  });
+  let body = null;
+  try{ body = await res.json(); }catch(e){ /* no body */ }
+  if(!res.ok){
+    const err = new Error((body && body.error) || ('Request failed (' + res.status + ')'));
+    err.status = res.status;
+    throw err;
+  }
+  return body;
+}
+
+let currentCode = null;
+
+async function resolveCode(code){
+  if(!code) return;
+  try{
+    const link = await apiFetch('/links/' + encodeURIComponent(code));
+    currentCode = code;
+    const firstName = link.referrer_first_name || 'there';
+    document.getElementById('greetingLine').textContent = 'Hi ' + firstName + ' — know a shed business that should hear about us?';
+  }catch(err){
+    // Leave the default greeting and currentCode unset — the share button
+    // below prompts for a code via the demo panel in that case.
+  }
+}
+
+async function init(){
+  const params = new URLSearchParams(window.location.search);
+  await resolveCode(params.get('code'));
+}
+init();
+
+document.getElementById('demoToggle').addEventListener('click', ()=>{
+  const panel = document.getElementById('demoPanel');
+  panel.style.display = panel.style.display === 'none' || !panel.style.display ? 'block' : 'none';
+});
+
+document.getElementById('demoLoadBtn').addEventListener('click', async ()=>{
+  const code = document.getElementById('demoCode').value.trim();
+  if(!code) return;
+  await resolveCode(code);
+});
+
+document.getElementById('shareBtn').addEventListener('click', async ()=>{
+  if(!currentCode){
+    document.getElementById('demoPanel').style.display = 'block';
+    document.getElementById('shareStatusMsg').textContent = 'Enter your invite code in Demo settings below first.';
+    return;
+  }
+
+  const btn = document.getElementById('shareBtn');
+  btn.disabled = true;
+  try{
+    const share = await apiFetch('/links/' + encodeURIComponent(currentCode) + '/share', { method: 'POST' });
+    const fullLink = window.location.origin + '/fifty-referral-lead.html?ref=' + encodeURIComponent(share.code);
+
+    document.getElementById('shareLinkOut').textContent = fullLink;
+    document.getElementById('shareResult').classList.add('show');
+    document.getElementById('shareStatusMsg').textContent = '';
+
+    if(navigator.share){
+      try{
+        await navigator.share({
+          title: 'Get $50 for referring a shed business to 50.',
+          text: 'I referred your business to 50. — use my link, and we both get $50 once you sign up.',
+          url: fullLink
+        });
+        document.getElementById('shareStatusMsg').textContent = 'Shared!';
+      }catch(shareErr){ /* cancelled or unsupported mid-call */ }
+    }
+  }catch(e){
+    document.getElementById('shareStatusMsg').textContent = 'Something went wrong generating your link — try again.';
+  }
+  btn.disabled = false;
+});
+
+document.getElementById('copyBtn').addEventListener('click', ()=>{
+  const text = document.getElementById('shareLinkOut').textContent;
+  navigator.clipboard.writeText(text).then(()=>{
+    const btn = document.getElementById('copyBtn');
+    const original = btn.textContent;
+    btn.textContent = 'Copied';
+    setTimeout(()=>{ btn.textContent = original; }, 1200);
+  });
+});
+</script>
+
+</body>
+</html>

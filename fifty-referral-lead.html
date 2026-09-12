@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>You've Been Referred to 50.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1C2B33; --primary-dark:#33475A; --secondary:#7C9FBB;
+    --accent:#C9974B; --accent-dark:#8B6B2E; --bg:#F7F4EE; --charcoal:#1B1B1B; --muted:#6B6A63;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;font-family:'Inter',sans-serif;color:var(--charcoal);
+    background:var(--primary);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    padding:24px;
+  }
+  .card{
+    background:var(--bg);
+    border-radius:18px;
+    max-width:460px;width:100%;
+    padding:36px 30px 32px;
+    box-shadow:0 20px 60px rgba(0,0,0,.35);
+  }
+  .shield-wrap{display:flex;justify-content:center;margin-bottom:14px;}
+  .shield-wrap img{width:52px;height:auto;display:block;}
+  .wordmark{text-align:center;}
+  .wordmark .name{font-family:'Fraunces',serif;font-weight:600;font-size:21px;color:var(--primary);line-height:1.2;}
+  .wordmark .tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:700;margin-top:2px;}
+
+  .divider{border:none;border-top:1px solid #e3ddd0;margin:20px 0 22px;}
+
+  .referral-msg{text-align:center;margin-bottom:26px;}
+  .referral-msg h1{font-family:'Fraunces',serif;font-weight:600;font-size:26px;color:var(--primary);line-height:1.3;margin:0 0 12px;}
+  .referral-msg h1 .reward{color:var(--accent);}
+  .referral-msg p{font-size:13px;color:var(--muted);line-height:1.6;margin:0;}
+  .referral-msg p .who{color:var(--primary-dark);font-weight:700;}
+
+  label{display:block;font-size:11px;font-weight:700;color:var(--primary);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;}
+  input[type=text],textarea{
+    width:100%;padding:12px 13px;border:1px solid #ddd6c8;border-radius:9px;
+    font-family:'Inter';font-size:14px;margin-bottom:16px;background:#fff;color:var(--charcoal);
+  }
+  textarea{resize:vertical;min-height:80px;line-height:1.5;}
+  input:focus,textarea:focus{outline:2px solid var(--secondary);outline-offset:1px;}
+
+  button.submitbtn{
+    width:100%;background:var(--primary);color:var(--bg);border:none;border-radius:10px;
+    padding:16px;font-size:15px;font-weight:700;cursor:pointer;font-family:'Inter';
+  }
+  button.submitbtn:hover{background:var(--primary-dark);}
+  button.submitbtn:disabled{opacity:.55;cursor:not-allowed;}
+
+  .msg{font-size:13px;padding:11px 14px;border-radius:8px;margin-bottom:16px;display:none;}
+  .msg.show{display:block;}
+  .msg.err{background:#FCEBEB;color:#791F1F;}
+
+  p.finePrint{font-size:11.5px;color:var(--muted);line-height:1.6;margin:14px 2px 0;}
+  p.finePrint a{color:var(--accent);text-decoration:underline;}
+  p.finePrint a:hover{color:var(--accent-dark);}
+
+  .websitelink{
+    display:block;text-align:center;margin-top:20px;font-size:13px;
+    color:#b9b3a5;cursor:default;user-select:none;
+  }
+
+  .confirm{display:none;text-align:center;}
+  .confirm.show{display:block;}
+  .confirm h2{font-family:'Fraunces',serif;font-weight:500;font-size:19px;color:var(--primary);margin:0 0 10px;}
+  .confirm p{font-size:13.5px;color:var(--muted);line-height:1.6;}
+
+  .invalidstate{display:none;text-align:center;}
+  .invalidstate.show{display:block;}
+  .invalidstate h2{font-family:'Fraunces',serif;font-weight:500;font-size:19px;color:var(--primary);margin:0 0 10px;}
+  .invalidstate p{font-size:13.5px;color:var(--muted);line-height:1.6;}
+
+  .demoToggle{font-size:11px;color:var(--muted);text-decoration:underline;cursor:pointer;margin-top:22px;display:inline-block;}
+  .demoPanel{display:none;margin-top:12px;}
+  .demoPanel .note{font-size:11px;color:var(--muted);margin-top:2px;}
+
+  /* Small, unobtrusive platform credit — sits below the card, on the page
+     background, so it never competes with the tenant's own branding at
+     the top of the card. */
+  .poweredBy{
+    display:flex;align-items:center;gap:6px;
+    color:rgba(255,255,255,.55);
+    font-size:11px;letter-spacing:.01em;
+  }
+  .poweredBy strong{font-weight:700;color:rgba(255,255,255,.78);}
+  .poweredBy img{flex-shrink:0;display:block;width:20px;height:auto;}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="shield-wrap">
+    <img data-tenant-logo alt="logo" />
+  </div>
+  <div class="wordmark">
+    <div class="name" data-tenant-name>50.</div>
+    <div class="tag" data-tenant-tagline>Dealer Referral Program</div>
+  </div>
+
+  <hr class="divider" />
+
+  <div id="activeState">
+    <div class="referral-msg">
+      <h1>You and <span id="referrerNameOut2">your friend</span> will each get a <span class="reward">$50 eGift card</span></h1>
+      <p><span class="who" id="referrerNameOut">A friend</span> referred your business to <span data-tenant-name-inline>50.</span> — just sign up to unlock it.</p>
+    </div>
+
+    <div id="formMsg" class="msg"></div>
+
+    <form id="leadForm">
+      <label for="leadMessage">Tell us about the business</label>
+      <textarea id="leadMessage" placeholder="What they build, roughly how big, anything that helps us reach out well."></textarea>
+
+      <label for="leadName">Business name</label>
+      <input type="text" id="leadName" placeholder="Torres Outdoor Structures" autocomplete="off" />
+
+      <label for="leadEmail">Contact email</label>
+      <input type="text" id="leadEmail" placeholder="mike@email.com" autocomplete="off" />
+
+      <label for="leadPhone">Contact phone <span style="text-transform:none;font-weight:400;">(optional)</span></label>
+      <input type="text" id="leadPhone" placeholder="(717) 555-0134" autocomplete="off" />
+
+      <button type="submit" class="submitbtn" id="submitBtn">Get my $50 signup bonus</button>
+
+      <p class="finePrint">By submitting, you agree to be contacted about this business and about joining 50.</p>
+    </form>
+
+    <span class="websitelink">Visit our website — coming soon</span>
+
+    <span class="demoToggle" id="demoToggle">Demo settings</span>
+    <div class="demoPanel" id="demoPanel">
+      <label for="demoCode">Referral link code (from page 2)</label>
+      <input type="text" id="demoCode" placeholder="sarah-a1b2c" />
+      <p class="note">In a real build this comes from the link itself (?ref=code) — shown here only so the demo works standalone.</p>
+    </div>
+  </div>
+
+  <div class="confirm" id="confirmState">
+    <h2>You're all set.</h2>
+    <p>Thanks, <span id="confirmName"></span> — we've got your info and someone will reach out soon. Once you're signed up with 50., you and <span id="confirmReferrer"></span> will each get a $50 eGift card.</p>
+  </div>
+
+  <div class="invalidstate" id="invalidState">
+    <h2>This referral link isn't valid.</h2>
+    <p>Double-check the link your friend sent you, or ask them to send a new one.</p>
+  </div>
+</div>
+
+<div class="poweredBy">
+  <img src="assets/50-platform-logo.png" width="20" height="20" alt="50." />
+  <span>Powered by <strong>50.</strong></span>
+</div>
+
+<script>
+const TENANT = {
+  name: "50.",
+  tagline: "Dealer Referral Program",
+  code: "fifty-platform",
+  colors: {
+    primary: "#1C2B33",
+    primaryDark: "#33475A",
+    secondary: "#7C9FBB",
+    accent: "#C9974B",
+    accentDark: "#8B6B2E",
+    bg: "#F7F4EE"
+  },
+  // See the identical field's comment in fifty-referral-customer.html —
+  // not read anywhere in this file's own script either.
+  domain: "50platform.com",
+  logoUrl: "assets/50-platform-logo.png"
+};
+
+// The one line to change per deployment: where the API from /api is served.
+// Same production API as every other tenant — this is the same system,
+// not a separate one, per the whole point of this page's existence.
+const API_BASE = "https://five0-platform.onrender.com/api";
+
+function applyTenantBranding(){
+  const r = document.documentElement.style;
+  r.setProperty('--primary', TENANT.colors.primary);
+  r.setProperty('--primary-dark', TENANT.colors.primaryDark);
+  r.setProperty('--secondary', TENANT.colors.secondary);
+  r.setProperty('--accent', TENANT.colors.accent);
+  r.setProperty('--accent-dark', TENANT.colors.accentDark);
+  r.setProperty('--bg', TENANT.colors.bg);
+  document.querySelectorAll('[data-tenant-logo]').forEach(el => {
+    el.src = TENANT.logoUrl;
+  });
+  document.querySelectorAll('[data-tenant-name]').forEach(el => { el.textContent = TENANT.name; });
+  document.querySelectorAll('[data-tenant-tagline]').forEach(el => { el.textContent = TENANT.tagline; });
+}
+applyTenantBranding();
+
+
+document.querySelectorAll('[data-tenant-name-inline]').forEach(el => { el.textContent = TENANT.name; });
+
+async function apiFetch(path, options={}){
+  const res = await fetch(API_BASE + path, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+  });
+  let body = null;
+  try{ body = await res.json(); }catch(e){ /* no body */ }
+  if(!res.ok){
+    const err = new Error((body && body.error) || ('Request failed (' + res.status + ')'));
+    err.status = res.status;
+    throw err;
+  }
+  return body;
+}
+
+let shareCode = null;
+let referrerName = 'A friend';
+
+function showMsg(text){ const el = document.getElementById('formMsg'); el.textContent = text; el.className = 'msg show err'; }
+function clearMsg(){ document.getElementById('formMsg').className = 'msg'; }
+
+function showState(id){
+  document.getElementById('activeState').style.display = 'none';
+  document.getElementById('invalidState').classList.remove('show');
+  if(id) document.getElementById(id).classList.add('show');
+}
+
+async function init(){
+  const params = new URLSearchParams(window.location.search);
+  shareCode = params.get('ref');
+  if(shareCode) await checkAndRender();
+}
+
+// Returns true if the code resolved to a usable (active, share-kind) link —
+// the caller uses this to decide whether it's safe to go on and submit.
+async function checkAndRender(){
+  try{
+    const link = await apiFetch('/links/' + encodeURIComponent(shareCode));
+    referrerName = link.referrer_first_name || 'A friend';
+    document.getElementById('referrerNameOut').textContent = referrerName;
+    document.getElementById('referrerNameOut2').textContent = referrerName;
+    if(link.kind !== 'share' || link.status !== 'active'){
+      showState('invalidState');
+      return false;
+    }
+    return true;
+  }catch(err){
+    showState('invalidState');
+    return false;
+  }
+}
+init();
+
+document.getElementById('demoToggle').addEventListener('click', ()=>{
+  const panel = document.getElementById('demoPanel');
+  panel.style.display = panel.style.display === 'none' || !panel.style.display ? 'block' : 'none';
+});
+
+document.getElementById('leadForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  clearMsg();
+
+  if(!shareCode){
+    const demoCode = document.getElementById('demoCode').value.trim();
+    if(!demoCode){
+      document.getElementById('demoPanel').style.display = 'block';
+      showMsg('Enter a referral link code in demo settings below to test this page.');
+      return;
+    }
+    shareCode = demoCode;
+    const ok = await checkAndRender();
+    if(!ok) return;
+  }
+
+  const message = document.getElementById('leadMessage').value.trim();
+  const name = document.getElementById('leadName').value.trim();
+  const email = document.getElementById('leadEmail').value.trim();
+  const phone = document.getElementById('leadPhone').value.trim();
+
+  if(!name){ showMsg('Enter the business name.'); return; }
+  if(!email){ showMsg('Enter a contact email.'); return; }
+
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true; btn.textContent = 'Submitting...';
+
+  try{
+    await apiFetch('/links/' + encodeURIComponent(shareCode) + '/referrals', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, phone: phone || undefined, message: message || undefined })
+    });
+
+    document.getElementById('confirmName').textContent = name.split(' ')[0];
+    document.getElementById('confirmReferrer').textContent = referrerName;
+    showState('confirmState');
+  }catch(err){
+    if(err.status === 404){
+      showState('invalidState');
+    } else if(err.status === 409){
+      // Self-referral — not a broken link, just these details. Leave the
+      // form up so they can fix it and resubmit, same as a 400.
+      showMsg(err.message);
+    } else if(err.status === 400){
+      showMsg('Check the details and try again.');
+    } else {
+      showMsg('Something went wrong submitting that. Try again.');
+    }
+    btn.disabled = false; btn.textContent = 'Get my $50 signup bonus';
+  }
+});
+</script>
+
+</body>
+</html>

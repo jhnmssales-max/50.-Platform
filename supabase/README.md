@@ -16,6 +16,31 @@ Postgres schema for the referral platform, following the [backend spec](../) (sc
 - `migrations/20260913000000_reward_issuance_worker.sql` — Stage 4 of Stripe billing: the reward-issuance worker itself (see [`../api/README.md`](../api/README.md)). The one schema gap this stage needed to close: `customers.comment` already said a referred friend gets "auto-created at that point so they can refer their own friends," but nothing ever wired that up. Adds `customers.source_referral_id` (nullable FK to `referrals`, null for a customer a dealer entered directly) so the worker can find-or-create the friend's own `customers` row via `INSERT ... ON CONFLICT (source_referral_id) DO NOTHING` — a true one-time claim, not a heuristic email match that could merge an unrelated customer a dealer happened to enter with the same address. The unique index backing it is deliberately *not* partial (`WHERE source_referral_id IS NOT NULL`) despite that reading naturally at first — confirmed live, `ON CONFLICT`'s arbiter inference requires an index whose predicate the `ON CONFLICT` clause matches exactly, and a bare `ON CONFLICT (source_referral_id)` carries none; a plain unique index needs no predicate anyway, since NULL is never considered equal to another NULL for uniqueness purposes, so every dealer-entered customer coexists freely regardless.
 - `migrations/20260914000000_per_card_pricing.sql` — a billing model refinement: express pricing per *card*, not per referral, for the dealer-facing number, without changing what's actually charged or issued. Adds `tenants.per_card_rate_cents`, generated as `reward_amount_cents + platform_fee_cents / 2` — algebraically identical to `per_referral_charge_cents / 2` (two cards per referral), so `per_referral_charge_cents` itself needs no `ALTER` at all; its existing generation expression already equals `per_card_rate_cents * 2`, just expressed via the same two base columns rather than referencing the new one directly. That indirection is deliberate, not accidental: Postgres does not allow a generated column's expression to reference *another* generated column, so `per_card_rate_cents` and `per_referral_charge_cents` are two independent generated columns sharing the same inputs rather than one chained to the other — confirmed against Postgres's own documented restriction before attempting it. Also adds a `CHECK` requiring `platform_fee_cents` to be even, which is what keeps the halving exact (integer division truncates on an odd value) — no existing tenant is affected, since the default (9900) and the $39 floor (3900) are both already even.
 
+## New tenants
+
+Creating a `tenants` row isn't wrapped in a migration or a script — like staff accounts below, it's a one-time, per-tenant operation run by whoever administers the Supabase project, as the `postgres` (superuser) role. `slug` and `domain` must both be unique; every billing column defaults to the platform's standard pricing (`reward_amount_cents` 5000, `platform_fee_cents` 9900, `activation_fee_cents` 50000, `billing_status` `'pending'`) unless overridden — a tenant stays `'pending'` (never charged, never eligible for the automated reward-issuance worker) until `POST /api/billing/checkout-session` is actually run for it.
+
+**Worked example: the "50." tenant itself** — referring a shed business to become a 50. client, using the exact same tables, pages, and payout mechanism as any shed-dealer tenant (see `../api/README.md`'s "How the reward-issuance worker actually works" and "How a reward actually gets issued manually" — nothing about either changes for this tenant). Deliberately left at every pricing default: this tenant is never invoiced by the person running it (there's no separate client to bill), so nothing here needs its own `activation_fee_cents`/`platform_fee_cents` — that's a business decision (simply never running the checkout-session step for this tenant) made outside the database, not a schema difference.
+
+```sql
+insert into tenants (slug, name, domain)
+values ('fifty-platform', '50.', '<50.''s real domain, if any — optional, unused by application logic today beyond display>');
+
+-- Then attach an admin (yourself) per "Staff accounts" below, and create
+-- at least one customer + invite link — the same POST /api/customers
+-- flow any dealer uses — for whoever will actually be doing the
+-- referring. The invite email's link will point at
+-- fifty-template-customer.html regardless of tenant (see
+-- api/src/routes/customers.js's buildInviteUrl — it hardcodes that
+-- filename, a real pre-existing limitation this tenant's own page,
+-- fifty-referral-customer.html, ran into rather than one it created);
+-- until that's fixed, use the invite code from that endpoint's own
+-- response (invite_link.code) to build the right link by hand:
+-- https://<wherever the static pages are served>/fifty-referral-customer.html?code=<code>
+```
+
+`fifty-referral-customer.html` and `fifty-referral-lead.html` (repo root) are this tenant's own copies of the customer-share-link and lead-landing pages, rebranded for "refer a shed business, get $50 when they sign up" instead of "refer a friend, get $50 toward a shed" — same API calls, same `name`/`email`/`phone`/`message` fields, same lead-notification email, nothing about the backend treats them differently from `fifty-template-*.html`. Their finePrint text does *not* link to `privacy-policy.html`/`referral-terms.html` — those two pages are themselves hardcoded to Good Steward Structures and describe a shed order specifically, so linking to them from a different tenant's page would misattribute the program to the wrong company; a `50.`-specific version of either is a separate, deliberate piece of content to write, not something adapted silently here.
+
 ## Staff accounts (Supabase Auth)
 
 `users.id` is a foreign key into `auth.users(id)` — a staff member's login *is* a Supabase Auth user; `public.users` just adds the tenant/role/name on top. Provisioning one is two steps, both one-time and done by whoever administers the Supabase project (there's no self-serve signup):
