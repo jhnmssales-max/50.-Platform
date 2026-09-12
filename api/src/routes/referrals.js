@@ -357,10 +357,22 @@ function encryptionKeySafe() {
 // Admin-only, same gate as PATCH .../status, since this also sets money
 // in motion. Idempotent: closing an already-closed referral is a no-op,
 // not an error — a double-click or a client retry must not fail.
-// Rejects a 'declined' or already-'rewarded' referral (closing either
-// doesn't mean anything) and rejects outright if the tenant's own
-// billing_status isn't 'active' — no point starting a hold toward a
-// reward this tenant currently can't be charged for.
+//
+// The reward trigger is "order placed, then a rep marks the referral
+// successful" — this endpoint IS the "rep marks successful" half, so it
+// requires the *other* half to have already happened: only a referral
+// currently 'ordered' can be closed. This is earlier in the lifecycle
+// than a status like "completed"/"delivered" would be (this schema has
+// no such status — 'ordered' is as far as it goes), which is exactly the
+// point: the hold exists precisely because closing happens this early,
+// before the job itself is necessarily finished — see reopen below for
+// the undo path while that's still being sorted out. Rejecting anything
+// other than 'ordered' (not just 'declined'/'rewarded' specifically)
+// also means a referral can't skip straight from 'new'/'contacted' to
+// 'closed' without ever having been marked ordered first.
+// Also rejects outright if the tenant's own billing_status isn't
+// 'active' — no point starting a hold toward a reward this tenant
+// currently can't be charged for.
 // ---------------------------------------------------------------------------
 router.post('/referrals/:id/close', requireAuth, async (req, res, next) => {
   const parsedId = referralIdSchema.safeParse(req.params.id);
@@ -385,8 +397,11 @@ router.post('/referrals/:id/close', requireAuth, async (req, res, next) => {
         return { ...current, changed: false };
       }
 
-      if (current.status === 'declined' || current.status === 'rewarded') {
-        throw conflict(`Cannot close a referral with status '${current.status}'`);
+      if (current.status !== 'ordered') {
+        throw conflict(
+          `Cannot close a referral until the order has been placed (current status: '${current.status}') — ` +
+            "mark it 'ordered' via PATCH /api/referrals/:id/status first."
+        );
       }
 
       if (ctx.billing_status !== 'active') {
