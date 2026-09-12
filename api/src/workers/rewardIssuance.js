@@ -44,22 +44,126 @@
 // tenant-timezone-aware month boundary would both be defensible
 // alternatives; this is the cheapest correct one and the cap itself is
 // described as "a calendar month" nowhere more precisely than that.
-const { withServiceRole, assertRowsAffected, assertServiceRoleConnection } = require('../db');
+//
+// --- Operational safety rails (added before this worker ran unattended) ---
+//
+// This is real money moving with nobody watching, so four separate rails
+// exist on top of the per-referral logic above, each protecting against a
+// different failure mode:
+//
+//   - `dryRun`: previews the whole cycle — every candidate's intended
+//     charge and whether it would actually be attempted — without ever
+//     calling Stripe or the gift card provider, and without writing
+//     anything to the database at all (not even a 'pending' claim row).
+//     How to sanity-check a cycle before trusting it to run for real.
+//   - REWARD_CYCLE_MAX_CENTS: a global ceiling on this cycle's total
+//     intended charges, independent of any single tenant's own
+//     monthly_spend_cap_cents — that per-tenant cap can't catch a bug
+//     that makes *every* tenant eligible at once (a bad migration, a
+//     mis-set reward_eligible_at backfill). Computed by previewCycle
+//     below *before* any real work happens; exceeding it aborts the
+//     entire cycle (nothing is charged) rather than partially processing
+//     up to the limit. Required for a real (non-dry-run) invocation —
+//     refusing to guess a safe default here is deliberate, the same
+//     "fail loudly rather than silently do the risky thing" stance as
+//     assertRowsAffected/assertServiceRoleConnection elsewhere in this
+//     codebase.
+//   - The advisory lock (see acquireCycleLock below): the actual guard
+//     against two overlapping runs both claiming the same referral. The
+//     `for update ... skip locked` in claimReferralCharge is real but
+//     partial (see its own comment) — this makes the whole cycle
+//     single-flight instead, closing that gap outright rather than
+//     relying on the three idempotency layers above to catch what a lock
+//     could have prevented in the first place.
+//   - Structured one-line-per-referral logs (logReferralOutcome below):
+//     every finalized outcome — issued, needs_refund, charge_failed,
+//     skipped, or a dry-run preview line — is one grep-able JSON line
+//     prefixed `REWARD_WORKER`, naming the referral id, tenant id,
+//     amount, and outcome, so a cron run is auditable from a log tab
+//     without attaching a debugger.
+const { pool, withServiceRole, assertRowsAffected, assertServiceRoleConnection } = require('../db');
 const { chargeOffSession } = require('../lib/stripe');
 const { issueGiftCard } = require('../lib/giftCardProvider');
 
 const PG_UNIQUE_VIOLATION = '23505';
 
-async function runRewardIssuanceCycle({ now = new Date(), batchSize = 25 } = {}) {
-  const candidateIds = await withServiceRole(async (client) => {
+// An arbitrary, fixed key dedicated to this worker within this database's
+// single global advisory-lock namespace (pg_advisory_lock's keyspace is
+// per-database, not per-table or per-purpose) — nothing else in this
+// codebase uses pg_advisory_lock, so this must never collide with a
+// future use elsewhere. Session-scoped, not transaction-scoped
+// (pg_advisory_lock, not pg_advisory_xact_lock): the cycle this protects
+// spans many separate withServiceRole transactions/connections, not one,
+// so the lock has to be held on its own dedicated connection for the
+// whole cycle instead of auto-releasing at the first commit.
+const ADVISORY_LOCK_KEY = 5031982004;
+
+function logReferralOutcome({ referralId, tenantId, amountCents, outcome, detail, dryRun }) {
+  console.log(
+    `REWARD_WORKER referral_outcome ${JSON.stringify({
+      referralId,
+      tenantId: tenantId || null,
+      amountCents: amountCents == null ? null : amountCents,
+      outcome,
+      detail: detail || undefined,
+      dryRun: dryRun || undefined,
+    })}`
+  );
+}
+
+// Acquires the whole-cycle advisory lock on a dedicated connection (never
+// through withServiceRole, which hands back a *different* pooled
+// connection on every call — the lock has to live on one connection for
+// the caller to release it later). Returns null if another process
+// already holds it, rather than blocking: an overlapping cron run should
+// stand down immediately, not queue up behind the one already in
+// progress.
+async function acquireCycleLock() {
+  const client = await pool.connect();
+  const { rows: [row] } = await client.query('select pg_try_advisory_lock($1) as locked', [ADVISORY_LOCK_KEY]);
+  if (!row.locked) {
+    client.release();
+    return null;
+  }
+  return client;
+}
+
+async function releaseCycleLock(client) {
+  try {
+    await client.query('select pg_advisory_unlock($1)', [ADVISORY_LOCK_KEY]);
+  } finally {
+    client.release();
+  }
+}
+
+async function runRewardIssuanceCycle({ now = new Date(), batchSize = 25, dryRun = false } = {}) {
+  const cycleMaxCentsRaw = process.env.REWARD_CYCLE_MAX_CENTS;
+  if (!dryRun && !cycleMaxCentsRaw) {
+    throw new Error(
+      'REWARD_CYCLE_MAX_CENTS is not set — refusing to run for real without a global per-cycle spend ceiling. ' +
+        'Set it (a per-tenant cap alone cannot catch a bug that makes every tenant eligible at once), or pass ' +
+        '--dry-run to preview a cycle without spending anything.'
+    );
+  }
+  const cycleMaxCents = cycleMaxCentsRaw != null ? Number(cycleMaxCentsRaw) : null;
+
+  const lockClient = await acquireCycleLock();
+  if (!lockClient) {
+    console.error(
+      'REWARD_WORKER lock_not_acquired — another cycle already holds the advisory lock; exiting without processing anything.'
+    );
+    return { locked: false, dryRun, aborted: false, candidates: 0, issued: 0, needsRefund: 0, chargeFailed: 0, skipped: 0, errored: 0 };
+  }
+
+  try {
     // This is a broad read, not a targeted write — assertRowsAffected
     // can't help here (there's no specific row to have expected back).
     // See db.js's assertServiceRoleConnection for the exact silent
     // failure this rules out instead: a misconfigured role turning every
     // cycle into a clean-looking, permanent no-op.
-    await assertServiceRoleConnection(client);
+    await assertServiceRoleConnection(lockClient);
 
-    const { rows } = await client.query(
+    const { rows: candidateRows } = await lockClient.query(
       `select r.id
        from referrals r
        where r.closed_at is not null
@@ -75,35 +179,161 @@ async function runRewardIssuanceCycle({ now = new Date(), batchSize = 25 } = {})
        limit $2`,
       [now, batchSize]
     );
-    return rows.map((r) => r.id);
-  });
+    const candidateIds = candidateRows.map((r) => r.id);
 
-  const summary = { candidates: candidateIds.length, issued: 0, needsRefund: 0, chargeFailed: 0, skipped: 0, errored: 0 };
+    // Read-only simulation of the whole batch, in candidate order,
+    // tracking each tenant's running intended spend across the batch so
+    // a tenant with several eligible referrals in one cycle is capped
+    // correctly against its own monthly_spend_cap_cents even though none
+    // of these charges have actually happened yet. This is what both
+    // dry-run reporting and the global ceiling check below are computed
+    // from — neither writes anything or calls Stripe/the gift card
+    // provider.
+    const preview = await previewCycle(candidateIds, now);
+    const totalIntendedCents = preview.reduce((sum, p) => sum + (p.wouldCharge ? p.amountCents : 0), 0);
+    const wouldExceedCeiling = cycleMaxCents != null && totalIntendedCents > cycleMaxCents;
+
+    if (dryRun) {
+      for (const p of preview) {
+        logReferralOutcome({
+          referralId: p.referralId,
+          tenantId: p.tenantId,
+          amountCents: p.amountCents,
+          outcome: p.wouldCharge ? 'would_charge' : 'would_skip',
+          detail: p.reason,
+          dryRun: true,
+        });
+      }
+      console.log(
+        `REWARD_WORKER dry_run_summary ${JSON.stringify({
+          candidates: preview.length,
+          totalIntendedCents,
+          cycleMaxCents,
+          wouldExceedCeiling,
+        })}`
+      );
+      return {
+        locked: true,
+        dryRun: true,
+        aborted: false,
+        candidates: preview.length,
+        totalIntendedCents,
+        wouldExceedCeiling,
+        issued: 0,
+        needsRefund: 0,
+        chargeFailed: 0,
+        skipped: 0,
+        errored: 0,
+      };
+    }
+
+    if (wouldExceedCeiling) {
+      console.error(
+        `REWARD_WORKER cycle_aborted ${JSON.stringify({
+          reason: 'cycle_max_cents_exceeded',
+          totalIntendedCents,
+          cycleMaxCents,
+          candidates: preview.length,
+        })} — processing nothing this cycle. This almost always means either REWARD_CYCLE_MAX_CENTS needs raising for genuine growth, or something upstream (a bad migration, a bulk reward_eligible_at backfill) made far more referrals eligible than expected — check before raising it.`
+      );
+      return {
+        locked: true,
+        dryRun: false,
+        aborted: true,
+        reason: 'cycle_max_cents_exceeded',
+        totalIntendedCents,
+        cycleMaxCents,
+        candidates: preview.length,
+        issued: 0,
+        needsRefund: 0,
+        chargeFailed: 0,
+        skipped: 0,
+        errored: 0,
+      };
+    }
+
+    const summary = {
+      locked: true,
+      dryRun: false,
+      aborted: false,
+      candidates: candidateIds.length,
+      issued: 0,
+      needsRefund: 0,
+      chargeFailed: 0,
+      skipped: 0,
+      errored: 0,
+    };
+
+    for (const referralId of candidateIds) {
+      let outcome;
+      try {
+        outcome = await processReferral(referralId, now);
+      } catch (err) {
+        // A referral-level failure (most likely assertRowsAffected firing
+        // on a genuine bug) must never take down the whole cycle — every
+        // other candidate still deserves its own attempt. Logged loudly;
+        // this referral is simply retried on the next cycle.
+        console.error(`Reward issuance worker: unexpected error processing referral ${referralId}:`, err);
+        logReferralOutcome({ referralId, outcome: 'errored', detail: err.message });
+        summary.errored += 1;
+        continue;
+      }
+      summary[outcome] = (summary[outcome] || 0) + 1;
+    }
+
+    console.log(`REWARD_WORKER cycle_complete ${JSON.stringify(summary)}`);
+    return summary;
+  } finally {
+    await releaseCycleLock(lockClient);
+  }
+}
+
+// Read-only simulation for both dry-run reporting and the global ceiling
+// check: for each candidate, in order, re-derives exactly the same
+// eligibility/billing_status/payment-method/spend-cap checks
+// claimReferralCharge below would make — but never locks a row, never
+// inserts a 'pending' billing_events row, and never calls Stripe or the
+// gift card provider. `simulatedSpendByTenant` starts from each tenant's
+// real current-month spend (from the database) the first time it's seen,
+// then accumulates this preview's own intended charges after that — so a
+// tenant with three eligible referrals correctly shows the third one
+// capped if the first two would already exhaust its monthly_spend_cap_cents,
+// exactly matching what sequential real processing would do.
+async function previewCycle(candidateIds, now) {
+  const simulatedSpendByTenant = new Map();
+  const results = [];
 
   for (const referralId of candidateIds) {
-    let outcome;
-    try {
-      outcome = await processReferral(referralId, now);
-    } catch (err) {
-      // A referral-level failure (most likely assertRowsAffected firing
-      // on a genuine bug) must never take down the whole cycle — every
-      // other candidate still deserves its own attempt. Logged loudly;
-      // this referral is simply retried on the next cycle.
-      console.error(`Reward issuance worker: unexpected error processing referral ${referralId}:`, err);
-      summary.errored += 1;
+    const info = await withServiceRole((client) => fetchReferralBillingInfo(client, referralId, now, { lockForUpdate: false }));
+
+    if (!info.eligible) {
+      results.push({ referralId, tenantId: info.tenantId || null, amountCents: info.amountCents || null, wouldCharge: false, reason: info.reason });
       continue;
     }
-    summary[outcome] = (summary[outcome] || 0) + 1;
+
+    const priorSpend = simulatedSpendByTenant.has(info.tenantId) ? simulatedSpendByTenant.get(info.tenantId) : info.actualSpentCents;
+    if (priorSpend + info.amountCents > info.monthlySpendCapCents) {
+      results.push({
+        referralId,
+        tenantId: info.tenantId,
+        amountCents: info.amountCents,
+        wouldCharge: false,
+        reason: `monthly spend cap would be reached (simulated spend ${priorSpend}, cap ${info.monthlySpendCapCents})`,
+      });
+      continue;
+    }
+
+    simulatedSpendByTenant.set(info.tenantId, priorSpend + info.amountCents);
+    results.push({ referralId, tenantId: info.tenantId, amountCents: info.amountCents, wouldCharge: true });
   }
 
-  console.log(`Reward issuance cycle complete: ${JSON.stringify(summary)}`);
-  return summary;
+  return results;
 }
 
 async function processReferral(referralId, now) {
   const claim = await claimReferralCharge(referralId, now);
   if (claim.reason) {
-    console.log(`Reward issuance: skipping referral ${referralId} — ${claim.reason}`);
+    logReferralOutcome({ referralId, tenantId: claim.tenantId, amountCents: claim.amountCents, outcome: 'skipped', detail: claim.reason });
     return 'skipped';
   }
 
@@ -121,6 +351,7 @@ async function processReferral(referralId, now) {
     });
   } catch (err) {
     await recordChargeFailure(billingEventId, referralId, err);
+    logReferralOutcome({ referralId, tenantId, amountCents, outcome: 'charge_failed', detail: err.message });
     return 'chargeFailed';
   }
 
@@ -129,6 +360,7 @@ async function processReferral(referralId, now) {
     // Lost a bookkeeping race to a concurrent attempt on this same
     // referral — see markChargeSucceeded. The winning attempt is the one
     // that issues the reward; this one stands down.
+    logReferralOutcome({ referralId, tenantId, amountCents, outcome: 'skipped', detail: 'lost a concurrent-attempt race after the charge succeeded' });
     return 'skipped';
   }
 
@@ -182,11 +414,13 @@ async function processReferral(referralId, now) {
         markErr
       )
     );
+    logReferralOutcome({ referralId, tenantId, amountCents, outcome: 'needs_refund', detail });
     return 'needsRefund';
   }
 
   if (referrerResult.ok && friendResult.ok) {
     await markRewardIssued(referralId, billingEventId);
+    logReferralOutcome({ referralId, tenantId, amountCents, outcome: 'issued' });
     return 'issued';
   }
 
@@ -196,83 +430,126 @@ async function processReferral(referralId, now) {
   const detail = `Charge succeeded (payment_intent ${paymentIntent.id}) but gift card issuance failed: ${failedLegs.join('; ')}`;
   console.error(`NEEDS REFUND — referral ${referralId}, tenant ${tenantId}: ${detail}`);
   await markNeedsRefund(billingEventId, detail);
+  logReferralOutcome({ referralId, tenantId, amountCents, outcome: 'needs_refund', detail });
   return 'needsRefund';
 }
 
-// Re-verifies eligibility from scratch (never trusts the batch select
-// that got us here — that read is already stale by the time this runs),
-// checks billing_status and the spend cap, and — only if every check
-// passes — claims the attempt by inserting the 'pending' referral_charge
-// row with pricing snapshotted right now. `for update of r skip locked`
-// means a referral already being worked by a concurrent invocation is
-// silently skipped this cycle rather than waited on or double-claimed;
-// it is not what makes double-charging impossible (billing_events'
-// 'pending' status is deliberately outside the partial unique index, so
-// two processes racing past this lock in different transactions can both
-// still get this far) — see this file's top-of-file comment for what
-// does.
+// The shared eligibility/billing read, used by both previewCycle
+// (lockForUpdate: false, read-only, no side effects at all) and
+// claimReferralCharge below (lockForUpdate: true, followed by the actual
+// 'pending' insert). Deliberately does *not* itself decide the spend-cap
+// outcome — previewCycle simulates cumulative same-cycle spend per
+// tenant, while claimReferralCharge checks live, so that decision stays
+// with each caller; this only returns the raw numbers both need
+// (actualSpentCents, monthlySpendCapCents, amountCents).
+async function fetchReferralBillingInfo(client, referralId, now, { lockForUpdate }) {
+  const { rows: [row] } = await client.query(
+    `select
+       r.id as referral_id, r.tenant_id,
+       r.name as friend_name, r.email as friend_email, r.phone as friend_phone,
+       c.id as referrer_customer_id, c.name as referrer_name, c.email as referrer_email,
+       t.billing_status, t.stripe_customer_id, t.stripe_payment_method_id,
+       t.per_referral_charge_cents, t.reward_amount_cents, t.platform_fee_cents,
+       t.reward_currency, t.monthly_spend_cap_cents
+     from referrals r
+     join referral_links rl on rl.id = r.referral_link_id
+     join customers c on c.id = rl.customer_id
+     join tenants t on t.id = r.tenant_id
+     where r.id = $1
+       and r.closed_at is not null
+       and r.reward_eligible_at <= $2
+       and r.reward_issued_at is null
+       and not exists (
+         select 1 from billing_events be
+         where be.referral_id = r.id
+           and be.event_type = 'referral_charge'
+           and be.status in ('succeeded', 'needs_refund')
+       )
+     ${lockForUpdate ? 'for update of r skip locked' : ''}`,
+    [referralId, now]
+  );
+
+  if (!row) {
+    return {
+      eligible: false,
+      reason: lockForUpdate
+        ? 'not currently eligible — already handled, reopened, reward_eligible_at moved, or locked by a concurrent run'
+        : 'not currently eligible — already handled, reopened, or reward_eligible_at moved',
+    };
+  }
+
+  if (row.billing_status !== 'active') {
+    return { eligible: false, tenantId: row.tenant_id, amountCents: row.per_referral_charge_cents, reason: `tenant billing_status is '${row.billing_status}', not 'active'` };
+  }
+
+  if (!row.stripe_customer_id || !row.stripe_payment_method_id) {
+    // A data-integrity problem, not a normal skip: billing_status only
+    // ever becomes 'active' once webhooks.js's activateTenant has stored
+    // both of these. Surfaced loudly rather than silently skipped, since
+    // a tenant that's billable by every other check but has nothing on
+    // file to actually charge means something upstream is broken.
+    console.error(
+      `Reward issuance: tenant ${row.tenant_id} is billing_status='active' but missing stripe_customer_id/stripe_payment_method_id — cannot charge referral ${referralId}`
+    );
+    return {
+      eligible: false,
+      tenantId: row.tenant_id,
+      amountCents: row.per_referral_charge_cents,
+      reason: 'tenant missing saved payment method despite active billing_status — see error log',
+    };
+  }
+
+  const { rows: [spend] } = await client.query(
+    `select coalesce(sum(amount_cents), 0) as spent
+     from billing_events
+     where tenant_id = $1
+       and event_type = 'referral_charge'
+       and status = 'succeeded'
+       and created_at >= date_trunc('month', $2::timestamptz)`,
+    [row.tenant_id, now]
+  );
+
+  return {
+    eligible: true,
+    tenantId: row.tenant_id,
+    amountCents: row.per_referral_charge_cents,
+    rewardAmountCents: row.reward_amount_cents,
+    platformFeeCents: row.platform_fee_cents,
+    currency: row.reward_currency,
+    stripeCustomerId: row.stripe_customer_id,
+    stripePaymentMethodId: row.stripe_payment_method_id,
+    monthlySpendCapCents: row.monthly_spend_cap_cents,
+    actualSpentCents: Number(spend.spent),
+    referrer: { customerId: row.referrer_customer_id, name: row.referrer_name, email: row.referrer_email },
+    friend: { name: row.friend_name, email: row.friend_email, phone: row.friend_phone },
+  };
+}
+
+// Re-verifies eligibility from scratch (never trusts the batch select or
+// previewCycle's own read — both are already stale by the time this
+// runs), checks billing_status and the live spend cap, and — only if
+// every check passes — claims the attempt by inserting the 'pending'
+// referral_charge row with pricing snapshotted right now. `for update of
+// r skip locked` means a referral already being worked by a concurrent
+// invocation is silently skipped this cycle rather than waited on or
+// double-claimed; it is not what makes double-charging impossible
+// (billing_events' 'pending' status is deliberately outside the partial
+// unique index, so two processes racing past this lock in different
+// transactions can both still get this far) — see this file's top-of-file
+// comment for what does, including the advisory lock that makes this
+// mostly a defense-in-depth measure rather than the primary guarantee.
 async function claimReferralCharge(referralId, now) {
   return withServiceRole(async (client) => {
-    const { rows: [row] } = await client.query(
-      `select
-         r.id as referral_id, r.tenant_id,
-         r.name as friend_name, r.email as friend_email, r.phone as friend_phone,
-         c.id as referrer_customer_id, c.name as referrer_name, c.email as referrer_email,
-         t.billing_status, t.stripe_customer_id, t.stripe_payment_method_id,
-         t.per_referral_charge_cents, t.reward_amount_cents, t.platform_fee_cents,
-         t.reward_currency, t.monthly_spend_cap_cents
-       from referrals r
-       join referral_links rl on rl.id = r.referral_link_id
-       join customers c on c.id = rl.customer_id
-       join tenants t on t.id = r.tenant_id
-       where r.id = $1
-         and r.closed_at is not null
-         and r.reward_eligible_at <= $2
-         and r.reward_issued_at is null
-         and not exists (
-           select 1 from billing_events be
-           where be.referral_id = r.id
-             and be.event_type = 'referral_charge'
-             and be.status in ('succeeded', 'needs_refund')
-         )
-       for update of r skip locked`,
-      [referralId, now]
-    );
-
-    if (!row) {
-      return { reason: 'not currently eligible — already handled, reopened, reward_eligible_at moved, or locked by a concurrent run' };
+    const info = await fetchReferralBillingInfo(client, referralId, now, { lockForUpdate: true });
+    if (!info.eligible) {
+      return { reason: info.reason, tenantId: info.tenantId, amountCents: info.amountCents };
     }
 
-    if (row.billing_status !== 'active') {
-      return { reason: `tenant billing_status is '${row.billing_status}', not 'active'` };
-    }
-
-    if (!row.stripe_customer_id || !row.stripe_payment_method_id) {
-      // A data-integrity problem, not a normal skip: billing_status only
-      // ever becomes 'active' once webhooks.js's activateTenant has
-      // stored both of these. Surfaced loudly rather than silently
-      // skipped, since a tenant that's billable by every other check but
-      // has nothing on file to actually charge means something upstream
-      // is broken.
-      console.error(
-        `Reward issuance: tenant ${row.tenant_id} is billing_status='active' but missing stripe_customer_id/stripe_payment_method_id — cannot charge referral ${referralId}`
-      );
-      return { reason: 'tenant missing saved payment method despite active billing_status — see error log' };
-    }
-
-    const { rows: [spend] } = await client.query(
-      `select coalesce(sum(amount_cents), 0) as spent
-       from billing_events
-       where tenant_id = $1
-         and event_type = 'referral_charge'
-         and status = 'succeeded'
-         and created_at >= date_trunc('month', $2::timestamptz)`,
-      [row.tenant_id, now]
-    );
-    const spentCents = Number(spend.spent);
-    if (spentCents + row.per_referral_charge_cents > row.monthly_spend_cap_cents) {
+    if (info.actualSpentCents + info.amountCents > info.monthlySpendCapCents) {
       return {
-        reason: `monthly spend cap reached (spent ${spentCents}, cap ${row.monthly_spend_cap_cents}, this referral needs ${row.per_referral_charge_cents}) — retried automatically once the calendar month rolls over`,
+        reason: `monthly spend cap reached (spent ${info.actualSpentCents}, cap ${info.monthlySpendCapCents}, this referral needs ${info.amountCents}) — retried automatically once the calendar month rolls over`,
+        tenantId: info.tenantId,
+        amountCents: info.amountCents,
       };
     }
 
@@ -281,19 +558,19 @@ async function claimReferralCharge(referralId, now) {
          (tenant_id, referral_id, event_type, amount_cents, reward_amount_cents, platform_fee_cents, status)
        values ($1, $2, 'referral_charge', $3, $4, $5, 'pending')
        returning id`,
-      [row.tenant_id, referralId, row.per_referral_charge_cents, row.reward_amount_cents, row.platform_fee_cents]
+      [info.tenantId, referralId, info.amountCents, info.rewardAmountCents, info.platformFeeCents]
     );
 
     return {
       billingEventId: inserted.id,
-      tenantId: row.tenant_id,
-      amountCents: row.per_referral_charge_cents,
-      rewardAmountCents: row.reward_amount_cents,
-      currency: row.reward_currency,
-      stripeCustomerId: row.stripe_customer_id,
-      stripePaymentMethodId: row.stripe_payment_method_id,
-      referrer: { customerId: row.referrer_customer_id, name: row.referrer_name, email: row.referrer_email },
-      friend: { name: row.friend_name, email: row.friend_email, phone: row.friend_phone },
+      tenantId: info.tenantId,
+      amountCents: info.amountCents,
+      rewardAmountCents: info.rewardAmountCents,
+      currency: info.currency,
+      stripeCustomerId: info.stripeCustomerId,
+      stripePaymentMethodId: info.stripePaymentMethodId,
+      referrer: info.referrer,
+      friend: info.friend,
     };
   });
 }

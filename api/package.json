@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "reward-issuance": "node src/workers/runRewardIssuance.js"
+    "reward-issuance": "node src/workers/runRewardIssuance.js",
+    "reward-issuance:dry-run": "node src/workers/runRewardIssuance.js --dry-run"
   },
   "dependencies": {
     "cors": "^2.8.5",

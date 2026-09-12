@@ -1,0 +1,98 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# Brings this repo's Render deploy config under version control. Two
+# services, both running the api/ codebase:
+#
+#   - referral-platform-api (web): the Express app (api/src/server.js) —
+#     every /api/... route plus the two Stripe redirect pages under
+#     /billing.
+#   - reward-issuance-worker (cron): Stage 4's reward-issuance worker
+#     (api/src/workers/runRewardIssuance.js), run on a schedule instead of
+#     on request. See api/README.md's "How the reward-issuance worker
+#     actually works" for what it does, and the operational safety rails
+#     built in before this cron job existed — --dry-run, the required
+#     REWARD_CYCLE_MAX_CENTS ceiling, the advisory-lock concurrency guard,
+#     and structured per-referral logging (grep Render's log tab for
+#     `REWARD_WORKER`).
+#
+# IMPORTANT — first sync: `name:` below must exactly match the *existing*
+# web service's name in the Render dashboard for Render to adopt it
+# rather than create a duplicate. This file was authored without
+# dashboard access to confirm that name — check it before applying this
+# Blueprint, and review whatever diff Render's sync screen shows rather
+# than trusting this file blindly on the first run.
+#
+# Every envVars entry below is `sync: false`: Render prompts for each
+# one's real value in the dashboard instead of reading it from this file.
+# Nothing here is a secret, only names and which service needs which are
+# — see api/.env.example for what each one actually does.
+envVarGroups:
+  - name: stripe-billing
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_API_BASE
+        sync: false
+      - key: GIFT_CARD_PROVIDER
+        sync: false
+
+services:
+  - type: web
+    name: referral-platform-api
+    env: node
+    plan: starter
+    region: oregon
+    branch: main
+    rootDir: api
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVarGroups:
+      - stripe-billing
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_JWKS_URL
+        sync: false
+      - key: TRUST_PROXY
+        sync: false
+      - key: POSTMARK_SERVER_TOKEN
+        sync: false
+      - key: EMAIL_FROM_ADDRESS
+        sync: false
+      - key: FRONTEND_BASE_URL
+        sync: false
+      - key: TENANT_CREDENTIALS_ENCRYPTION_KEY
+        sync: false
+      - key: TREMENDOUS_API_BASE
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+
+  - type: cron
+    name: reward-issuance-worker
+    env: node
+    plan: starter
+    region: oregon
+    branch: main
+    rootDir: api
+    buildCommand: npm ci
+    startCommand: npm run reward-issuance
+    # Hourly, on the hour — a starting point, not a fixed requirement.
+    # The 7-day reward hold means nothing here is time-critical to the
+    # minute; adjust once real spend volume makes a different cadence
+    # matter (see api/README.md's "Not yet built" note on this exact
+    # trade-off). Standard 5-field cron syntax, evaluated in UTC.
+    schedule: "0 * * * *"
+    envVarGroups:
+      - stripe-billing
+    envVars:
+      # No default here, deliberately: the worker itself refuses to run
+      # for real without this set (see rewardIssuance.js) rather than
+      # silently picking an arbitrary ceiling for you. Decide the number,
+      # then set it in the dashboard before this cron job's first real
+      # (non-dry-run) execution.
+      - key: REWARD_CYCLE_MAX_CENTS
+        sync: false
