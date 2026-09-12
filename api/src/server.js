@@ -1,4 +1,5 @@
 require('dotenv').config();
+const path = require('path');
 const express = require('express');
 const customersRouter = require('./routes/customers');
 const referralsRouter = require('./routes/referrals');
@@ -32,6 +33,13 @@ app.use('/api', webhooksRouter);
 app.use(express.json());
 
 app.get('/health', (req, res) => res.json({ ok: true }));
+
+// Plain, minimal, static — the two pages Stripe Checkout redirects back
+// to after the activation charge (see routes/billing.js). Served by
+// this same app rather than wherever the tenant-branded frontend pages
+// happen to be hosted, so they need no extra deployment config or
+// coordination with FRONTEND_BASE_URL.
+app.use('/billing', express.static(path.join(__dirname, '..', 'public', 'billing')));
 
 app.use('/api', customersRouter);
 app.use('/api', referralsRouter);

@@ -137,4 +137,38 @@ async function withServiceRole(fn) {
   }
 }
 
-module.exports = { pool, withUserTransaction, withPublicTransaction, withServiceRole, getCallerContext };
+// Every withServiceRole write that isn't a deliberately pre-checked
+// idempotent no-op must be passed through this. rowCount 0 here means
+// something is wrong — the connecting role silently couldn't write the
+// row it just tried to (RLS-filtered, see withServiceRole above), or the
+// row it targeted doesn't exist. Either way, this is billing code: it
+// must never be a quiet 200. Queries current_user/session_user itself so
+// the thrown error names exactly which role actually ran the query — the
+// single most useful fact for diagnosing this class of failure, and
+// exactly what was missing when this bit for real (see api/README.md's
+// "How dealer auth works" section).
+//
+// Callers are responsible for ruling out a *legitimate* 0-row result
+// first (e.g. re-checking that a redelivered webhook's target row is
+// already in the state this write was trying to reach) — this function
+// has no way to tell "benign no-op" apart from "actually broken" on its
+// own, and will throw for both.
+async function assertRowsAffected(client, result, { table, id }) {
+  if (result.rowCount > 0) return;
+  const { rows: [role] } = await client.query('select current_user, session_user');
+  throw new Error(
+    `withServiceRole write affected 0 rows (expected >= 1) — table="${table}" id="${id}" ` +
+      `current_user="${role.current_user}" session_user="${role.session_user}". This almost ` +
+      `always means the connecting role can't actually write this row (RLS silently filtered ` +
+      `it) or the row doesn't exist — check DATABASE_URL's role and the id.`
+  );
+}
+
+module.exports = {
+  pool,
+  withUserTransaction,
+  withPublicTransaction,
+  withServiceRole,
+  assertRowsAffected,
+  getCallerContext,
+};

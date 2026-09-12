@@ -49,10 +49,6 @@ async function requireAdminCtx(client, userId) {
 // ---------------------------------------------------------------------------
 router.post('/billing/checkout-session', requireAuth, async (req, res, next) => {
   try {
-    if (!process.env.FRONTEND_BASE_URL) {
-      throw new Error('FRONTEND_BASE_URL is not set — required to build Stripe Checkout redirect URLs');
-    }
-
     const ctx = await withUserTransaction(req.userId, async (client) => {
       const ctx = await requireAdminCtx(client, req.userId);
 
@@ -69,7 +65,13 @@ router.post('/billing/checkout-session', requireAuth, async (req, res, next) => 
       return ctx;
     });
 
-    const baseUrl = process.env.FRONTEND_BASE_URL.replace(/\/$/, '');
+    // The API's own origin, not FRONTEND_BASE_URL — these two redirect
+    // pages are served statically by this same Express app (see
+    // server.js), not by wherever the tenant-branded frontend pages
+    // happen to live, so they need no config of their own to stay in
+    // sync with wherever this API is actually deployed. Respects
+    // TRUST_PROXY the same way the rate limiter does (server.js).
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
     const session = await createCheckoutSession({
       tenantId: ctx.tenant_id,
       tenantName: ctx.tenant_name,

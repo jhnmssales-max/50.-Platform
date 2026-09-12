@@ -61,6 +61,25 @@ alter table tenants
 
 create index tenants_billing_status_idx on tenants (billing_status);
 
+-- Added for Stage 3: set the first time a checkout.session.completed
+-- webhook fires for this tenant, regardless of payment_status — i.e.
+-- regardless of whether the charge cleared immediately (card) or is
+-- still processing (a us_bank_account/ACH debit, which can take days).
+-- Distinct from activation_paid_at, which is set only on confirmed
+-- success. The gap between the two is exactly the "completed but not
+-- yet paid" state a stalled ACH activation sits in — bounded and
+-- queryable via the partial index below, rather than invisible.
+alter table tenants add column activation_checkout_completed_at timestamptz;
+comment on column tenants.activation_checkout_completed_at is 'Set once, the first time checkout.session.completed fires for this tenant, whatever payment_status says. A tenant with this set but activation_paid_at still null has an ACH debit that has not cleared yet (or failed) — see tenants_stalled_activation_idx for finding one that has been stuck too long.';
+
+-- Finds a stalled ACH activation: checkout completed, still pending,
+-- never actually paid, however long ago. The ">7 days" judgment call
+-- itself belongs to whatever queries this (an admin script, a future
+-- monitoring job) — this index just makes that query cheap, it doesn't
+-- bake in the 7 days as a stored rule.
+create index tenants_stalled_activation_idx on tenants (activation_checkout_completed_at)
+  where billing_status = 'pending' and activation_paid_at is null;
+
 comment on column tenants.stripe_customer_id is 'This tenant''s Stripe Customer id. Null until the activation checkout session completes (Stage 2).';
 comment on column tenants.stripe_payment_method_id is 'The payment method saved off the activation charge (setup_future_usage: off_session), reused for every off-session per-referral charge in Stage 4. Not a secret — Stripe''s own id for a saved card/bank account, never the underlying card/account number.';
 comment on column tenants.billing_status is '''pending'' until the activation charge clears (Stage 2''s webhook flips it to ''active''); ''suspended'' on a failed payment or a dispute (Stage 3). Stage 4''s worker only issues rewards for an ''active'' tenant.';
@@ -107,6 +126,19 @@ create index billing_events_tenant_id_idx on billing_events (tenant_id);
 create index billing_events_referral_id_idx on billing_events (referral_id);
 create index billing_events_stripe_payment_intent_id_idx on billing_events (stripe_payment_intent_id);
 
+-- Added for Stage 3 (webhook idempotency): Stripe's own event id
+-- (event.id — distinct from stripe_payment_intent_id, which can recur
+-- across genuinely different events on the same PaymentIntent, e.g. a
+-- retried charge). Every webhook-driven insert into this table goes
+-- through INSERT ... ON CONFLICT (stripe_event_id) DO NOTHING — the
+-- same idempotency-via-unique-constraint pattern
+-- gift_card_transactions.idempotency_key already uses — so a Stripe
+-- redelivery of an already-processed event can never double-insert or
+-- double-act. Nullable: a future non-webhook-sourced row (a manual
+-- correction, say) has no Stripe event to key off.
+alter table billing_events add column stripe_event_id text unique;
+comment on column billing_events.stripe_event_id is 'Stripe''s own webhook event id (event.id). Unique, nullable — every webhook-driven write is INSERT ... ON CONFLICT (stripe_event_id) DO NOTHING, so a redelivered event can never be processed twice.';
+
 -- At most one non-failed referral_charge per referral, enforced by the
 -- database itself rather than trusted to the worker's own row-selection
 -- logic (see referrals.reward_issued_at and the partial index below it) —
@@ -129,12 +161,16 @@ comment on column billing_events.platform_fee_cents is 'Snapshot of tenants.plat
 -- there is no admin-authenticated write path here to grant, because
 -- there's no staff session to require one of: every write comes from a
 -- Stripe webhook or the reward-issuance background worker (Stages 2-4),
--- neither of which has a logged-in user to impersonate. Both are expected
--- to run under Supabase's actual service_role connection, which bypasses
--- RLS entirely — "service role full access" is a literal statement about
--- which Postgres role does the writing, not aspirational language the
--- way it was for gift_card_transactions/audit_log before those got
--- retrofitted to admin-authenticated writes instead.
+-- neither of which has a logged-in user to impersonate. Both run as
+-- DATABASE_URL's own connection with no SET LOCAL ROLE downgrade at all
+-- (src/db.js's withServiceRole) — that connection is a superuser and
+-- bypasses RLS by default, confirmed live building Stage 2; there's no
+-- separate Supabase `service_role` credential involved, since this
+-- project talks to Postgres directly rather than through PostgREST.
+-- "service role full access" is a literal statement about which
+-- Postgres role does the writing, not aspirational language the way it
+-- was for gift_card_transactions/audit_log before those got retrofitted
+-- to admin-authenticated writes instead.
 -- ---------------------------------------------------------------------------
 alter table billing_events enable row level security;
 
