@@ -16,6 +16,7 @@ Postgres schema for the referral platform, following the [backend spec](../) (sc
 - `migrations/20260913000000_reward_issuance_worker.sql` — Stage 4 of Stripe billing: the reward-issuance worker itself (see [`../api/README.md`](../api/README.md)). The one schema gap this stage needed to close: `customers.comment` already said a referred friend gets "auto-created at that point so they can refer their own friends," but nothing ever wired that up. Adds `customers.source_referral_id` (nullable FK to `referrals`, null for a customer staff entered directly) so the worker can find-or-create the friend's own `customers` row via `INSERT ... ON CONFLICT (source_referral_id) DO NOTHING` — a true one-time claim, not a heuristic email match that could merge an unrelated customer staff happened to enter with the same address. The unique index backing it is deliberately *not* partial (`WHERE source_referral_id IS NOT NULL`) despite that reading naturally at first — confirmed live, `ON CONFLICT`'s arbiter inference requires an index whose predicate the `ON CONFLICT` clause matches exactly, and a bare `ON CONFLICT (source_referral_id)` carries none; a plain unique index needs no predicate anyway, since NULL is never considered equal to another NULL for uniqueness purposes, so every staff-entered customer coexists freely regardless.
 - `migrations/20260914000000_per_card_pricing.sql` — a billing model refinement: express pricing per *card*, not per referral, for the staff-facing number, without changing what's actually charged or issued. Adds `tenants.per_card_rate_cents`, generated as `reward_amount_cents + platform_fee_cents / 2` — algebraically identical to `per_referral_charge_cents / 2` (two cards per referral), so `per_referral_charge_cents` itself needs no `ALTER` at all; its existing generation expression already equals `per_card_rate_cents * 2`, just expressed via the same two base columns rather than referencing the new one directly. That indirection is deliberate, not accidental: Postgres does not allow a generated column's expression to reference *another* generated column, so `per_card_rate_cents` and `per_referral_charge_cents` are two independent generated columns sharing the same inputs rather than one chained to the other — confirmed against Postgres's own documented restriction before attempting it. Also adds a `CHECK` requiring `platform_fee_cents` to be even, which is what keeps the halving exact (integer division truncates on an odd value) — no existing tenant is affected, since the default (9900) and the $39 floor (3900) are both already even.
 - `migrations/20260915000000_rename_dealer_role_to_staff.sql` — renames the non-admin staff role from `'dealer'` to `'staff'`, since this platform now serves any kind of business, not just shed dealers. Drops and recreates `users_role_check` (`admin`/`dealer` → `admin`/`staff`), backfilling every existing `'dealer'` row to `'staff'` first — the constraint would otherwise reject those rows the moment it's re-added. `submit_referral()` is dropped and recreated (`CREATE OR REPLACE` can't change return columns, same restriction the original dealer-notification migration hit) with its `dealer_email`/`dealer_name` return columns renamed to `staff_email`/`staff_name`; every other behavior — self-referral check, persistent share links — is unchanged. Also refreshes two `COMMENT ON` statements from older, already-merged migrations that described the old role name directly (the `referrals_select_own_or_admin` policy, `customers.created_by_user_id`) — comments are live schema metadata, not a historical narration, so updating them in place (rather than leaving them to describe a name nothing uses anymore) is the one exception to "old migrations stay as written." Confirmed live, before writing this migration, that `'dealer'` as a literal role *value* was compared against in exactly one place in the entire schema (this `CHECK` itself) — every RLS policy and API route already only ever checked `role = 'admin'` or called `is_admin()`, treating the other role generically — which is what made this rename mechanically simple despite touching a live enum value.
+- `migrations/20260916000000_tenant_branding_shape.sql` — gives `tenants.branding` (existed since `init_schema.sql`, but never given a defined shape or a reader) an actual documented shape: `{primaryColor, primaryDark, secondary, accentColor, accentDark, bg, logoUrl}`, every key optional. No new column — the column already existed, just unused; this only adds a `COMMENT ON` describing the shape and a `CHECK (jsonb_typeof(branding) = 'object')` guard (satisfied by every existing row, including the untouched `'{}'` default — a guard against a future bad write, not a data change). Read by `GET /api/me` as `tenant_branding` (see [`../api/README.md`](../api/README.md)) — this is what lets `fifty-template-dealer.html` be one file shared by every tenant, showing 50.'s own neutral branding before sign-in and re-skinning itself as the signed-in tenant's own colors/logo/name afterward, instead of one hardcoded copy per tenant the way the customer/lead pages still work. Already returned to the public link-resolve endpoint too (`GET /api/links/:code`'s `tenant.branding`, `routes/public.js`) — that route needed no change, since it already selected the whole column; this migration only documents/constrains what's inside it.
 
 ## New tenants
 
@@ -24,8 +25,20 @@ Creating a `tenants` row isn't wrapped in a migration or a script — like staff
 **Worked example: the "50." tenant itself** — referring a shed business to become a 50. client, using the exact same tables, pages, and payout mechanism as any shed-dealer tenant (see `../api/README.md`'s "How the reward-issuance worker actually works" and "How a reward actually gets issued manually" — nothing about either changes for this tenant). Deliberately left at every pricing default: this tenant is never invoiced by the person running it (there's no separate client to bill), so nothing here needs its own `activation_fee_cents`/`platform_fee_cents` — that's a business decision (simply never running the checkout-session step for this tenant) made outside the database, not a schema difference.
 
 ```sql
-insert into tenants (slug, name, domain)
-values ('fifty-platform', '50.', '<50.''s real domain, if any — optional, unused by application logic today beyond display>');
+insert into tenants (slug, name, domain, branding)
+values (
+  'fifty-platform', '50.',
+  '<50.''s real domain, if any — optional, unused by application logic today beyond display>',
+  '{
+    "primaryColor": "#1C2B33",
+    "primaryDark": "#33475A",
+    "secondary": "#7C9FBB",
+    "accentColor": "#C9974B",
+    "accentDark": "#8B6B2E",
+    "bg": "#F7F4EE",
+    "logoUrl": "assets/50-platform-logo.png"
+  }'::jsonb
+);
 
 -- Then attach an admin (yourself) per "Staff accounts" below, and create
 -- at least one customer + invite link — the same POST /api/customers
@@ -41,6 +54,25 @@ values ('fifty-platform', '50.', '<50.''s real domain, if any — optional, unus
 ```
 
 `fifty-referral-customer.html` and `fifty-referral-lead.html` (repo root) are this tenant's own copies of the customer-share-link and lead-landing pages, rebranded for "refer a shed business, get $50 when they sign up" instead of "refer a friend, get $50 toward a shed" — same API calls, same `name`/`email`/`phone`/`message` fields, same lead-notification email, nothing about the backend treats them differently from `fifty-template-*.html`. Their finePrint text does *not* link to `privacy-policy.html`/`referral-terms.html` — those two pages are themselves hardcoded to Good Steward Structures and describe a shed order specifically, so linking to them from a different tenant's page would misattribute the program to the wrong company; a `50.`-specific version of either is a separate, deliberate piece of content to write, not something adapted silently here.
+
+### Setting a tenant's branding
+
+`tenants.branding` (see the `tenant_branding_shape` migration above) is what `fifty-template-dealer.html` reads, through `GET /api/me`, to show that tenant's own colors and logo once someone signs in — every key is optional, and anything left unset falls back to 50.'s own neutral default client-side. Set or update it the same way any other tenant-provisioning step here runs — directly, as the `postgres` role:
+
+```sql
+update tenants set branding = '{
+  "primaryColor": "#1F4D36",
+  "primaryDark": "#2D6A4F",
+  "secondary": "#40916C",
+  "accentColor": "#8B5E3C",
+  "accentDark": "#6B4A2E",
+  "bg": "#F8F5F0",
+  "logoUrl": "assets/gss-logo-badge.png"
+}'::jsonb
+where slug = 'good-steward-structures';
+```
+
+For `50.`'s own tenant, set `branding` at creation time as shown in the `insert` above rather than as a follow-up `update` — either works identically, since this column has no default beyond `'{}'` for `insert` to skip.
 
 ## Staff accounts (Supabase Auth)
 
@@ -98,6 +130,7 @@ Note: this depends on Supabase's own `auth` schema (`auth.users`, `auth.uid()`) 
 - The Stage 4 migration (`customers.source_referral_id`): the `ON CONFLICT (source_referral_id)` bug above was caught applying this migration to the real seeded test tenants (not an empty table) and re-running the worker against them — the partial-index version failed with "there is no unique or exclusion constraint matching the ON CONFLICT specification" on the very first attempt to auto-create a friend's `customers` row; switching to a plain unique index (this migration's final form) fixed it immediately, re-confirmed by a full worker cycle correctly finding-or-creating that row across repeated runs. Full worker-level verification (five tenants covering the active/suspended/spend-cap/decline/partial-failure branches) is in [`../api/README.md`](../api/README.md)'s "Verified" section.
 - The per-card pricing migration: applied on top of the full existing migration chain against real seeded tenants — `per_card_rate_cents * 2 = per_referral_charge_cents` confirmed exactly for every one of them (`9950 * 2 = 19900`), and the new even-`platform_fee_cents` `CHECK` confirmed live by attempting to set it to `3901` on a real tenant row and getting a constraint violation, not a silent truncation.
 - The role-rename migration: applied on top of the full existing chain against a real seeded `'dealer'` row — backfilled to `'staff'` automatically (confirmed by querying the row directly afterward, not just trusting the migration's own `UPDATE 1` output), and the reissued `users_role_check` then rejects `'dealer'` outright. `submit_referral()`'s renamed `staff_email`/`staff_name` columns confirmed correct through the full live API flow (create customer → share → submit lead → notification email arrives addressed correctly) — see [`../api/README.md`](../api/README.md)'s own "Verified" entry for the detail.
+- The `tenant_branding_shape` migration: applied on top of the full existing chain — the `CHECK (jsonb_typeof(branding) = 'object')` constraint added cleanly against every existing row, including tenants still on the untouched `'{}'` default, confirming it's a pure guard rather than a data change. Set two real seeded tenants' `branding` to genuinely different values (Good Steward Structures' real green/brown palette; the "50." test tenant to a deliberately unrelated placeholder color, specifically to prove per-tenant data is what renders, not a coincidental default match) and confirmed both round-tripped correctly through `GET /api/me`'s `tenant_branding` field. Full end-to-end browser verification of what actually consumes this — `fifty-template-dealer.html` re-skinning itself per tenant after sign-in — is in [`../api/README.md`](../api/README.md)'s own "Verified" entry.
 
 ## Not yet built
 

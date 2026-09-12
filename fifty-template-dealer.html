@@ -140,8 +140,8 @@
     <img data-tenant-logo alt="logo" />
   </div>
   <div class="wordmark">
-    <div class="name" data-tenant-name>Good Steward Structures</div>
-    <div class="tag" data-tenant-tagline>Referral Program</div>
+    <div class="name" data-tenant-name>50.</div>
+    <div class="tag" data-tenant-tagline>Welcome to 50.</div>
   </div>
 
   <hr class="divider" />
@@ -213,21 +213,37 @@
 </div>
 
 <script>
-const TENANT = {
-  name: "Good Steward Structures",
-  tagline: "Referral Program",
-  code: "good-steward-structures",
+// This page is shared by every tenant — Good Steward Structures, 50.
+// itself, or any future business — rather than one hardcoded per file
+// (compare fifty-template-customer.html/fifty-template-lead.html, which
+// are still per-tenant copies). There is deliberately no per-tenant
+// TENANT object here anymore: before sign-in, nobody has told the page
+// who they are yet, so it shows 50.'s own neutral branding
+// (DEFAULT_BRANDING below); after sign-in, GET /api/me tells it exactly
+// which tenant this person belongs to and what that tenant's branding
+// is (tenant_name, tenant_branding — see the tenant_branding_shape
+// migration and GET /api/me's own comment), and the page re-skins itself
+// from that response. Same file, same URL, different look per login.
+const DEFAULT_BRANDING = {
+  name: "50.",
+  tagline: "Welcome to 50.",
   colors: {
-    primary: "#1F4D36",
-    primaryDark: "#2D6A4F",
-    secondary: "#40916C",
-    accent: "#8B5E3C",
-    accentDark: "#6B4A2E",
-    bg: "#F8F5F0"
+    primary: "#1C2B33",
+    primaryDark: "#33475A",
+    secondary: "#7C9FBB",
+    accent: "#C9974B",
+    accentDark: "#8B6B2E",
+    bg: "#F7F4EE"
   },
-  domain: "goodstewardstructures.com",
-  logoUrl: "assets/gss-logo-badge.png"
+  logoUrl: "assets/50-platform-logo.png"
 };
+
+// Shown once signed in, in place of DEFAULT_BRANDING.tagline — a fixed,
+// generic description of the page, not part of any tenant's own
+// branding. Only name/colors/logo come from the tenant; see GET /api/me
+// and the request that added tenant_branding for why tagline isn't one
+// of the fields a tenant sets.
+const SIGNED_IN_TAGLINE = "Referral Program";
 
 // The lines to change per deployment: where the API is served, and this
 // tenant's own Supabase project. The anon key is meant to be public — it's
@@ -236,22 +252,54 @@ const API_BASE = "https://five0-platform.onrender.com/api";
 const SUPABASE_URL = "https://jzjmuttqbtandwjmwwfn.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_RE92j36ZEVFvSBwV-Rl8hg_JyfxRT6a";
 
-function applyTenantBranding(){
-  document.title = TENANT.name + ' — Referral Incentive';
+// Applies one branding object — {name, tagline, colors:{primary,
+// primaryDark, secondary, accent, accentDark, bg}, logoUrl} — to the
+// page. Called with DEFAULT_BRANDING before sign-in, and again with the
+// signed-in tenant's own branding (see tenantBrandingFromMe below) right
+// after GET /api/me resolves; both calls go through the exact same
+// function so there is only one code path that ever touches these
+// elements/CSS variables, not a separate "reset to default" special case.
+function applyBranding(branding){
+  document.title = branding.name + ' — Referral Incentive';
   const r = document.documentElement.style;
-  r.setProperty('--primary', TENANT.colors.primary);
-  r.setProperty('--primary-dark', TENANT.colors.primaryDark);
-  r.setProperty('--secondary', TENANT.colors.secondary);
-  r.setProperty('--accent', TENANT.colors.accent);
-  r.setProperty('--accent-dark', TENANT.colors.accentDark);
-  r.setProperty('--bg', TENANT.colors.bg);
+  r.setProperty('--primary', branding.colors.primary);
+  r.setProperty('--primary-dark', branding.colors.primaryDark);
+  r.setProperty('--secondary', branding.colors.secondary);
+  r.setProperty('--accent', branding.colors.accent);
+  r.setProperty('--accent-dark', branding.colors.accentDark);
+  r.setProperty('--bg', branding.colors.bg);
   document.querySelectorAll('[data-tenant-logo]').forEach(el => {
-    el.src = TENANT.logoUrl;
+    el.src = branding.logoUrl;
   });
-  document.querySelectorAll('[data-tenant-name]').forEach(el => { el.textContent = TENANT.name; });
-  document.querySelectorAll('[data-tenant-tagline]').forEach(el => { el.textContent = TENANT.tagline; });
+  document.querySelectorAll('[data-tenant-name]').forEach(el => { el.textContent = branding.name; });
+  document.querySelectorAll('[data-tenant-tagline]').forEach(el => { el.textContent = branding.tagline; });
 }
-applyTenantBranding();
+
+// Merges GET /api/me's tenant_branding — {primaryColor, primaryDark,
+// secondary, accentColor, accentDark, bg, logoUrl}, every key optional —
+// onto DEFAULT_BRANDING's colors/logo, so a tenant that has only set
+// some fields (or none at all — tenant_branding is '{}' until someone
+// sets it) still gets a coherent, fully-specified look rather than a
+// half-styled page. Name always comes from the tenant; tagline never
+// does (see SIGNED_IN_TAGLINE above).
+function tenantBrandingFromMe(me){
+  const t = me.tenant_branding || {};
+  return {
+    name: me.tenant_name,
+    tagline: SIGNED_IN_TAGLINE,
+    colors: {
+      primary: t.primaryColor || DEFAULT_BRANDING.colors.primary,
+      primaryDark: t.primaryDark || DEFAULT_BRANDING.colors.primaryDark,
+      secondary: t.secondary || DEFAULT_BRANDING.colors.secondary,
+      accent: t.accentColor || DEFAULT_BRANDING.colors.accent,
+      accentDark: t.accentDark || DEFAULT_BRANDING.colors.accentDark,
+      bg: t.bg || DEFAULT_BRANDING.colors.bg
+    },
+    logoUrl: t.logoUrl || DEFAULT_BRANDING.logoUrl
+  };
+}
+
+applyBranding(DEFAULT_BRANDING);
 
 
 function showMsg(text){ const el = document.getElementById('formMsg'); el.textContent = text; el.className = 'msg show err'; }
@@ -305,6 +353,7 @@ async function refreshSession(){
 function signOut(){
   setSession(null);
   currentUser = null;
+  applyBranding(DEFAULT_BRANDING);
   showLoggedOut();
 }
 
@@ -357,6 +406,7 @@ function showLoggedIn(){
 
 async function loadCurrentUser(){
   currentUser = await apiFetch('/me');
+  applyBranding(tenantBrandingFromMe(currentUser));
 }
 
 async function init(){
@@ -422,7 +472,15 @@ document.getElementById('sendForm').addEventListener('submit', async (e)=>{
       body: JSON.stringify({ name, email, phone: phone || undefined })
     });
 
-    const link = result.invite_link.url || (TENANT.domain + '/50/' + result.invite_link.code);
+    // No more hardcoded TENANT.domain to fall back to now that this page
+    // is shared by every tenant — a domain-shaped guess would be wrong
+    // for whichever tenant isn't the one this file used to be hardcoded
+    // for. result.invite_link.url is the API's own built link (see
+    // routes/customers.js's buildInviteUrl and FRONTEND_BASE_URL in
+    // api/README.md) and is expected to be present in every real
+    // deployment; showing the bare code is an honest last resort rather
+    // than fabricating a URL this page can't actually vouch for.
+    const link = result.invite_link.url || ('Invite code: ' + result.invite_link.code);
     const emailSent = result.email && result.email.sent;
 
     document.getElementById('confirmHeadline').textContent = emailSent

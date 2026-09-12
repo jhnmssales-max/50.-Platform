@@ -50,6 +50,13 @@ router.get('/me', requireAuth, async (req, res, next) => {
       email: result.me.email,
       role: result.me.role,
       tenant_name: result.ctx.tenant_name,
+      // {primaryColor, primaryDark, secondary, accentColor, accentDark, bg,
+      // logoUrl}, every key optional — see the tenant_branding_shape
+      // migration's own comment. fifty-template-dealer.html (the one
+      // consumer today) falls back to its own neutral defaults for any
+      // key a tenant hasn't set, including when this is the column's
+      // untouched default ('{}').
+      tenant_branding: result.ctx.tenant_branding,
       billing: {
         per_card_rate_cents: result.ctx.per_card_rate_cents,
         cards_per_referral: 2,
