@@ -54,7 +54,7 @@ const PAID_EXPR = `(
 )`;
 
 // ---------------------------------------------------------------------------
-// GET /api/referrals — the dealer's searchable pipeline of friend
+// GET /api/referrals — the staff member's searchable pipeline of friend
 // submissions, one row per referrals row. A single customer can hold
 // several share links and so generate several referrals, each of which
 // gets paid out (or not) independently — so status lives per referral,

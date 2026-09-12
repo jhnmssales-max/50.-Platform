@@ -16,7 +16,7 @@ function forbidden(message) {
 // ---------------------------------------------------------------------------
 // GET /api/me — who the caller is, once a real Supabase Auth session exists
 // instead of a pasted access token: their name, role, and tenant. The
-// dealer page uses this right after sign-in to show "Signed in as ..." and
+// staff page uses this right after sign-in to show "Signed in as ..." and
 // to decide whether to let this session mark a referral paid client-side
 // (the server still enforces that on PATCH /referrals/:id/status either
 // way — this is display only, never a trust boundary).
@@ -24,12 +24,12 @@ function forbidden(message) {
 // `billing` expresses pricing per card, not as one undifferentiated
 // per-referral total: cards_per_referral is always 2 (one for the
 // referrer, one for the new customer — see per_referral_charge_cents'
-// own comment in the billing-schema migration), so a dealer sees
+// own comment in the billing-schema migration), so a staff member sees
 // "2 cards x $99.50 = $199.00" rather than a single $199 figure with no
 // visible breakdown. Only these three named fields, same discipline as
 // every other route touching ctx — stripe_customer_id,
 // stripe_payment_method_id, and billing_status never appear here or
-// anywhere else a dealer-facing response is built from ctx.
+// anywhere else a staff-facing response is built from ctx.
 // ---------------------------------------------------------------------------
 router.get('/me', requireAuth, async (req, res, next) => {
   try {

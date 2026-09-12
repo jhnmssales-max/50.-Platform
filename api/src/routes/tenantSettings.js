@@ -23,7 +23,7 @@ async function requireAdminCtx(client, userId) {
 }
 
 // ---------------------------------------------------------------------------
-// Per-tenant Tremendous credentials — each dealer company connects its own
+// Per-tenant Tremendous credentials — each tenant connects its own
 // API key, funding source (their own card), and campaign (their own
 // branding/reward choice), so a reward is always funded by — and issued
 // under — the company whose customer earned it, never a shared platform

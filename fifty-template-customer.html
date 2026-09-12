@@ -96,9 +96,9 @@
 
   <hr class="divider" />
 
-  <button class="sharebtn" id="shareBtn">Get my referral code and earn a <span class="dollar">$50 eGift card</span> for every friend who orders</button>
+  <button class="sharebtn" id="shareBtn">Get my referral code and earn a <span class="dollar">$50 eGift card</span> for every friend who becomes a customer</button>
 
-  <p class="finePrint">This is your one referral code — share it with as many friends as you like. You'll get $50 for every friend who orders, and so will they.</p>
+  <p class="finePrint">This is your one referral code — share it with as many friends as you like. You'll get $50 for every friend who becomes a customer, and so will they.</p>
 
   <div class="shareResult" id="shareResult">
     <div class="label">Your referral code</div>
@@ -111,9 +111,9 @@
 
   <span class="demoToggle" id="demoToggle">Demo settings</span>
   <div class="demoPanel" id="demoPanel">
-    <input type="text" id="demoCode" placeholder="Your invite code (from the dealer)" />
+    <input type="text" id="demoCode" placeholder="Your invite code (from the staff member)" />
     <button type="button" class="copybtn" id="demoLoadBtn" style="width:100%;padding:10px;margin-bottom:10px;">Load</button>
-    <p class="note">In a real deployment this page already knows who you are from the link the dealer sent you (?code=...) — this field only exists so the demo works without that link.</p>
+    <p class="note">In a real deployment this page already knows who you are from the link the staff member sent you (?code=...) — this field only exists so the demo works without that link.</p>
   </div>
 </div>
 
@@ -226,8 +226,8 @@ document.getElementById('shareBtn').addEventListener('click', async ()=>{
     if(navigator.share){
       try{
         await navigator.share({
-          title: 'Get $50 toward your order from ' + TENANT.name,
-          text: 'I referred you — use my link and we both get $50 when you order.',
+          title: 'Get $50 when you become a customer of ' + TENANT.name,
+          text: 'I referred you — use my link and we both get $50 once you\'re a customer.',
           url: fullLink
         });
         document.getElementById('shareStatusMsg').textContent = 'Shared!';

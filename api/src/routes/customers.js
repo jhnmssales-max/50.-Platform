@@ -37,10 +37,10 @@ function forbidden(message) {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/customers — a dealer enters a customer's name/contact; the
-// customer and their referral (invite) link are created atomically, then
-// the invite is emailed to them through Postmark. This is "creating a
-// referral link" from the dealer's side of the flow; the customer's own
+// POST /api/customers — a staff member enters a customer's name/contact;
+// the customer and their referral (invite) link are created atomically,
+// then the invite is emailed to them through Postmark. This is "creating a
+// referral link" from staff's side of the flow; the customer's own
 // onward "share" link is a public-facing action and out of scope here.
 //
 // A tenant with its own verified sending domain (tenants.send_domain_verified)

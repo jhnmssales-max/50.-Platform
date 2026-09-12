@@ -1,9 +1,9 @@
-// Builds the email a dealer gets the moment one of their customers'
-// referrals actually submits the lead form — this is the "someone needs
-// to follow up" alert, distinct from src/lib/inviteEmail.js (which goes
-// to the customer, not the dealer).
-function buildLeadNotificationEmail({ tenantName, dealerName, leadName, leadEmail, leadPhone, leadMessage, referrerName }) {
-  const dealerFirstName = (dealerName || '').trim().split(' ')[0] || 'there';
+// Builds the email a staff member gets the moment one of their
+// customers' referrals actually submits the lead form — this is the
+// "someone needs to follow up" alert, distinct from
+// src/lib/inviteEmail.js (which goes to the customer, not staff).
+function buildLeadNotificationEmail({ tenantName, staffName, leadName, leadEmail, leadPhone, leadMessage, referrerName }) {
+  const staffFirstName = (staffName || '').trim().split(' ')[0] || 'there';
   const contact = leadPhone ? `${leadEmail} / ${leadPhone}` : leadEmail;
   const messageLine = leadMessage
     ? `Here's what they said: "${leadMessage}"`
@@ -11,7 +11,7 @@ function buildLeadNotificationEmail({ tenantName, dealerName, leadName, leadEmai
 
   const subject = `New referral lead — ${leadName}`;
 
-  const textBody = `Hi ${dealerFirstName},
+  const textBody = `Hi ${staffFirstName},
 
 You've received a new lead through your ${tenantName} referral program.
 
@@ -23,7 +23,7 @@ This came from your customer ${referrerName}.`;
 
   const htmlBody = `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;color:#1B1B1B;">
-  <p style="font-size:15px;line-height:1.6;">Hi ${escapeHtml(dealerFirstName)},</p>
+  <p style="font-size:15px;line-height:1.6;">Hi ${escapeHtml(staffFirstName)},</p>
   <p style="font-size:15px;line-height:1.6;">
     You've received a new lead through your <strong>${escapeHtml(tenantName)}</strong> referral program.
   </p>
