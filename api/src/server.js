@@ -5,6 +5,8 @@ const referralsRouter = require('./routes/referrals');
 const publicRouter = require('./routes/public');
 const meRouter = require('./routes/me');
 const tenantSettingsRouter = require('./routes/tenantSettings');
+const billingRouter = require('./routes/billing');
+const webhooksRouter = require('./routes/webhooks');
 
 const app = express();
 
@@ -18,6 +20,15 @@ if (process.env.TRUST_PROXY) {
   app.set('trust proxy', Number(process.env.TRUST_PROXY));
 }
 
+// Mounted before express.json(), not after: Stripe's webhook signature
+// covers the exact raw bytes of the request body, and routes/webhooks.js
+// applies its own express.raw() to that one path. If express.json() ran
+// first, the raw bytes would already be gone by the time the webhook
+// route saw the request, and verification would fail on every real
+// Stripe delivery — this ordering is what actually prevents that, not
+// just the raw() call in isolation.
+app.use('/api', webhooksRouter);
+
 app.use(express.json());
 
 app.get('/health', (req, res) => res.json({ ok: true }));
@@ -27,6 +38,7 @@ app.use('/api', referralsRouter);
 app.use('/api', publicRouter);
 app.use('/api', meRouter);
 app.use('/api', tenantSettingsRouter);
+app.use('/api', billingRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });

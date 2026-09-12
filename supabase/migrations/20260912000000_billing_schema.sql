@@ -152,6 +152,19 @@ alter table referrals
   add column reward_issued_at  timestamptz,
   add column billing_event_id  uuid references billing_events(id);
 
+-- 'closed' is its own dedicated status, set only via POST
+-- /api/referrals/:id/close (never a side effect of the general-purpose
+-- PATCH /api/referrals/:id/status, which explicitly refuses to move a
+-- referral into or out of 'closed' — see api/src/routes/referrals.js) —
+-- so status and closed_at can never disagree about whether a referral is
+-- closed. Postgres has no ALTER ... ADD VALUE for an inline CHECK the
+-- way it does for a native enum type, so this drops and recreates the
+-- constraint under its default name.
+alter table referrals drop constraint referrals_status_check;
+alter table referrals
+  add constraint referrals_status_check
+    check (status in ('new', 'contacted', 'ordered', 'closed', 'rewarded', 'declined'));
+
 -- Derived from closed_at by trigger rather than set by application code,
 -- so the 7-day hold can never be computed wrong (or forgotten) by
 -- whatever code path sets closed_at — and if closed_at is ever

@@ -67,18 +67,30 @@ async function withPublicTransaction(fn) {
 }
 
 // Resolves who the caller is, once per request: their tenant, whether
-// they're an admin, and their tenant's branding/domain/reward/sending
-// details (for building invite links and invite emails). Runs as
-// `authenticated` inside the same transaction, so it's itself subject to
-// RLS — a userId with no matching `users` row (not a recognized staff
-// member) simply returns undefined.
+// they're an admin, and their tenant's branding/domain/reward/sending/
+// billing details (for building invite links and invite emails, and for
+// billing decisions like the close/reopen endpoints and the checkout
+// endpoint). Runs as `authenticated` inside the same transaction, so
+// it's itself subject to RLS — a userId with no matching `users` row
+// (not a recognized staff member) simply returns undefined.
+//
+// This is an internal decision-making object, not a response shape: it
+// deliberately includes stripe_customer_id/stripe_payment_method_id
+// (needed to reuse a tenant's saved payment method for an off-session
+// charge) precisely because nothing that returns ctx to a caller may
+// ever echo those two fields back — every route builds its own response
+// body from named fields, never by spreading ctx or a raw tenants row.
 async function getCallerContext(client, userId) {
   const { rows } = await client.query(
     `select
        u.tenant_id, u.role = 'admin' as is_admin,
        t.domain as tenant_domain, t.name as tenant_name,
        t.reward_amount_cents, t.reward_currency,
-       t.send_from_address, t.send_from_name, t.send_domain_verified
+       t.send_from_address, t.send_from_name, t.send_domain_verified,
+       t.billing_status, t.activation_fee_cents, t.activation_paid_at,
+       t.platform_fee_cents, t.per_referral_charge_cents,
+       t.monthly_spend_cap_cents, t.payment_method_type,
+       t.stripe_customer_id, t.stripe_payment_method_id
      from users u
      join tenants t on t.id = u.tenant_id
      where u.id = $1`,
@@ -87,4 +99,42 @@ async function getCallerContext(client, userId) {
   return rows[0];
 }
 
-module.exports = { pool, withUserTransaction, withPublicTransaction, getCallerContext };
+// Runs `fn` with the pool's own connecting role — no `SET LOCAL ROLE`
+// impersonation at all. That's deliberate, not an oversight, and not a
+// separate connection or a second pool: DATABASE_URL's own connection
+// (`postgres`, per .env.example — the same superuser every migration
+// already runs as, and the same one supabase/README.md's "Staff
+// accounts" section relies on to bypass RLS for provisioning) already
+// bypasses RLS by default at the connection level. withUserTransaction
+// and withPublicTransaction each spend one `SET LOCAL ROLE` to
+// deliberately *downgrade* that connection to `authenticated`/`anon` for
+// the scope of one transaction, so RLS applies as if the caller really
+// were that lesser role. This function is the one case that doesn't
+// downgrade at all — confirmed live: running the exact same query
+// through a lesser role that's merely a *member* of `authenticated`
+// (not the actual superuser) silently affected 0 rows, RLS-filtered,
+// with no error — which is exactly why this must run as the real
+// connection, not some other narrower role.
+//
+// Reserved for code with no logged-in user to impersonate in the first
+// place: a Stripe webhook (verified by signature, not a JWT) and the
+// reward-issuance background worker. Never use this for anything an
+// authenticated staff member's own request triggers — that must go
+// through withUserTransaction, so RLS actually scopes what they can
+// see and touch.
+async function withServiceRole(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { pool, withUserTransaction, withPublicTransaction, withServiceRole, getCallerContext };

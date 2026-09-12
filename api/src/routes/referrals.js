@@ -24,6 +24,19 @@ function notFound(message) {
   return err;
 }
 
+function conflict(message) {
+  const err = new Error(message);
+  err.status = 409;
+  return err;
+}
+
+async function requireAdminCtx(client, userId) {
+  const ctx = await getCallerContext(client, userId);
+  if (!ctx) throw forbidden('No staff account found for this user');
+  if (!ctx.is_admin) throw forbidden('Admin access required');
+  return ctx;
+}
+
 // A referral counts as "paid" once either signal says so: a gift card was
 // actually issued (gift_card_transactions — not wired up yet, since the
 // Amazon Incentives integration doesn't exist), or an admin has manually
@@ -178,6 +191,18 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
 
       if (!ctx.is_admin) throw forbidden('Admin access required to change a referral\'s status');
 
+      // 'closed' has its own dedicated endpoints (POST .../close and
+      // .../reopen below) precisely so status and closed_at/
+      // reward_eligible_at can never disagree — this endpoint refuses to
+      // touch a closed referral at all rather than risk flipping status
+      // out of 'closed' while leaving closed_at (and the 7-day hold it
+      // started) stale. 'closed' was never a valid *target* here either
+      // (see patchStatusSchema below) — this only needs to guard the
+      // *current* status.
+      if (current.status === 'closed') {
+        throw conflict("This referral is closed — use POST /api/referrals/:id/reopen, not this endpoint.");
+      }
+
       let transition;
       if (current.status === targetStatus) {
         // Idempotent no-op: already at the requested status — most likely a
@@ -326,5 +351,182 @@ function encryptionKeySafe() {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// POST /api/referrals/:id/close — starts the 7-day reward hold.
+// Admin-only, same gate as PATCH .../status, since this also sets money
+// in motion. Idempotent: closing an already-closed referral is a no-op,
+// not an error — a double-click or a client retry must not fail.
+// Rejects a 'declined' or already-'rewarded' referral (closing either
+// doesn't mean anything) and rejects outright if the tenant's own
+// billing_status isn't 'active' — no point starting a hold toward a
+// reward this tenant currently can't be charged for.
+// ---------------------------------------------------------------------------
+router.post('/referrals/:id/close', requireAuth, async (req, res, next) => {
+  const parsedId = referralIdSchema.safeParse(req.params.id);
+  if (!parsedId.success) {
+    return res.status(400).json({ error: 'Invalid referral id' });
+  }
+  const referralId = parsedId.data;
+
+  try {
+    const result = await withUserTransaction(req.userId, async (client) => {
+      const ctx = await requireAdminCtx(client, req.userId);
+
+      const { rows: [current] } = await client.query(
+        'select id, status, closed_at, reward_eligible_at from referrals where id = $1',
+        [referralId]
+      );
+      if (!current) throw notFound('Referral not found');
+
+      if (current.status === 'closed') {
+        // Idempotent no-op — already closed. No new audit row: nothing
+        // actually happened on this call.
+        return { ...current, changed: false };
+      }
+
+      if (current.status === 'declined' || current.status === 'rewarded') {
+        throw conflict(`Cannot close a referral with status '${current.status}'`);
+      }
+
+      if (ctx.billing_status !== 'active') {
+        throw conflict('Billing is not active for this tenant');
+      }
+
+      // The WHERE clause (not just the SELECT above) is the real guard
+      // against a double-close race, same pattern as PATCH .../status:
+      // whichever concurrent request loses the race affects 0 rows and
+      // falls into the re-read branch below instead of writing a second
+      // audit_log row.
+      const { rows: [updated] } = await client.query(
+        `update referrals
+         set status = 'closed', closed_at = now()
+         where id = $1 and status is distinct from 'closed'
+         returning id, status, closed_at, reward_eligible_at, tenant_id`,
+        [referralId]
+      );
+
+      if (!updated) {
+        const { rows: [now] } = await client.query(
+          'select id, status, closed_at, reward_eligible_at from referrals where id = $1',
+          [referralId]
+        );
+        return { ...now, changed: false };
+      }
+
+      await client.query(
+        `insert into audit_log (tenant_id, actor_user_id, action, entity_type, entity_id, metadata)
+         values ($1, $2, 'referral.closed', 'referrals', $3, $4::jsonb)`,
+        [updated.tenant_id, req.userId, updated.id, JSON.stringify({ from: current.status, to: 'closed' })]
+      );
+
+      return { ...updated, changed: true };
+    });
+
+    res.json({
+      id: result.id,
+      status: result.status,
+      closed_at: result.closed_at,
+      reward_eligible_at: result.reward_eligible_at,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/referrals/:id/reopen — undoes a close, but only while
+// there's genuinely something to undo. Same admin-only gate. Two hard
+// requirements, both enforced in the guarded UPDATE's WHERE clause (not
+// just an earlier SELECT), since either can become false at any moment
+// out from under this request — the reward-issuance worker (Stage 4)
+// runs on its own schedule, not this request's:
+//   - reward_issued_at must still be null — once a card is out, this is
+//     permanently rejected, full stop.
+//   - now() must still be before reward_eligible_at — once the 7-day
+//     hold has run out, the referral is no longer "provisionally"
+//     closed, it's actually eligible, whether or not the worker has
+//     gotten to it yet.
+// Reverts status to whatever it was immediately before closing, read
+// back from that close action's own audit_log row (metadata.from) —
+// not a separate stored column, so there's exactly one place that fact
+// is recorded.
+// ---------------------------------------------------------------------------
+router.post('/referrals/:id/reopen', requireAuth, async (req, res, next) => {
+  const parsedId = referralIdSchema.safeParse(req.params.id);
+  if (!parsedId.success) {
+    return res.status(400).json({ error: 'Invalid referral id' });
+  }
+  const referralId = parsedId.data;
+
+  try {
+    const result = await withUserTransaction(req.userId, async (client) => {
+      await requireAdminCtx(client, req.userId);
+
+      const { rows: [current] } = await client.query(
+        'select id, status, reward_issued_at from referrals where id = $1',
+        [referralId]
+      );
+      if (!current) throw notFound('Referral not found');
+
+      if (current.reward_issued_at) {
+        throw conflict('Cannot reopen — the reward has already been issued');
+      }
+
+      if (current.status !== 'closed') {
+        throw conflict('Referral is not currently closed');
+      }
+
+      const { rows: [closedEvent] } = await client.query(
+        `select metadata->>'from' as previous_status
+         from audit_log
+         where entity_type = 'referrals' and entity_id = $1 and action = 'referral.closed'
+         order by created_at desc
+         limit 1`,
+        [referralId]
+      );
+      if (!closedEvent || !closedEvent.previous_status) {
+        // Shouldn't happen — every close goes through POST .../close,
+        // which always writes this row on the transition that actually
+        // closed the referral. Surfaced as a 500 (not a 409) since this
+        // means the data itself is in a state this code doesn't expect,
+        // not that the caller did anything wrong.
+        throw new Error(`Referral ${referralId} is closed but has no referral.closed audit_log row to revert from`);
+      }
+      const previousStatus = closedEvent.previous_status;
+
+      // Clearing closed_at here also clears reward_eligible_at
+      // automatically (the trigger from the billing-schema migration
+      // recomputes it as closed_at + 7 days, and null + any interval is
+      // null) — no separate SET needed for it.
+      const { rows: [updated] } = await client.query(
+        `update referrals
+         set status = $1, closed_at = null
+         where id = $2
+           and status = 'closed'
+           and reward_issued_at is null
+           and reward_eligible_at > now()
+         returning id, status, tenant_id`,
+        [previousStatus, referralId]
+      );
+
+      if (!updated) {
+        throw conflict('Cannot reopen — the hold has ended or the reward has already been issued');
+      }
+
+      await client.query(
+        `insert into audit_log (tenant_id, actor_user_id, action, entity_type, entity_id, metadata)
+         values ($1, $2, 'referral.reopened', 'referrals', $3, $4::jsonb)`,
+        [updated.tenant_id, req.userId, updated.id, JSON.stringify({ from: 'closed', to: previousStatus })]
+      );
+
+      return updated;
+    });
+
+    res.json({ id: result.id, status: result.status, closed_at: null, reward_eligible_at: null });
+  } catch (err) {
+    next(err);
+  }
+});
 
 module.exports = router;
