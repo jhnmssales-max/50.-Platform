@@ -82,15 +82,24 @@
   p.finePrint a{color:var(--accent);text-decoration:underline;}
   p.finePrint a:hover{color:var(--accent-dark);}
 
-  .websitelink{
-    display:block;text-align:center;margin-top:20px;font-size:13px;
-    color:#b9b3a5;cursor:default;user-select:none;
-  }
-
   .confirm{display:none;text-align:center;}
   .confirm.show{display:block;}
   .confirm h2{font-family:'Fraunces',serif;font-weight:500;font-size:19px;color:var(--primary);margin:0 0 10px;}
   .confirm p{font-size:13.5px;color:var(--muted);line-height:1.6;}
+
+  /* The "Design Your Own Building" link, shown only once builderUrl
+     resolves from the tenant's own branding (see checkAndRender below)
+     — a separate class from button.submitbtn rather than reusing it,
+     since this is an <a> (it navigates to an external site, not a form
+     submit) and reusing a tag-scoped `button.submitbtn` selector
+     wouldn't even match an anchor element. */
+  a.builderbtn{
+    display:none;width:100%;background:var(--primary);color:var(--bg);
+    border-radius:10px;padding:16px;font-size:15px;font-weight:700;
+    font-family:'Inter';text-decoration:none;text-align:center;
+    margin-top:20px;box-sizing:border-box;
+  }
+  a.builderbtn:hover{background:var(--primary-dark);}
 
   .invalidstate{display:none;text-align:center;}
   .invalidstate.show{display:block;}
@@ -156,8 +165,6 @@
       <p class="finePrint">By submitting, you agree to be contacted about your inquiry and to our <a href="privacy-policy.html" target="_blank" rel="noopener">Privacy Policy</a> and <a href="referral-terms.html" target="_blank" rel="noopener">Referral Program Terms</a>.</p>
     </form>
 
-    <span class="websitelink">Visit our website — coming soon</span>
-
     <span class="demoToggle" id="demoToggle">Demo settings</span>
     <div class="demoPanel" id="demoPanel">
       <label for="demoCode">Referral link code (from page 2)</label>
@@ -169,6 +176,10 @@
   <div class="confirm" id="confirmState">
     <h2>You're all set.</h2>
     <p>Thanks, <span id="confirmName"></span> — we've got your info and someone will reach out soon. Once you're a customer, you and <span id="confirmReferrer"></span> will each get a $50 eGift card.</p>
+    <!-- Hidden by default (a.builderbtn's own CSS); shown and given a
+         real href only if this tenant has a builderUrl set — see
+         checkAndRender's own comment on where that value comes from. -->
+    <a id="builderBtn" class="builderbtn" href="#" target="_blank" rel="noopener">Design Your Own Building</a>
   </div>
 
   <div class="invalidstate" id="invalidState">
@@ -238,6 +249,7 @@ async function apiFetch(path, options={}){
 
 let shareCode = null;
 let referrerName = 'A friend';
+let builderUrl = null;
 
 function showMsg(text){ const el = document.getElementById('formMsg'); el.textContent = text; el.className = 'msg show err'; }
 function clearMsg(){ document.getElementById('formMsg').className = 'msg'; }
@@ -260,6 +272,13 @@ async function checkAndRender(){
   try{
     const link = await apiFetch('/links/' + encodeURIComponent(shareCode));
     referrerName = link.referrer_first_name || 'A friend';
+    // A new per-tenant setting, not hardcoded: tenants.branding (the
+    // same jsonb column fifty-template-dealer.html reads via GET
+    // /api/me) already comes back on this public endpoint too, as
+    // tenant.branding — see routes/public.js. builderUrl is just
+    // another optional key in it, same as logoUrl; a tenant with none
+    // set simply has this be undefined, and the button never appears.
+    builderUrl = (link.tenant && link.tenant.branding && link.tenant.branding.builderUrl) || null;
     // Same querySelectorAll+forEach pattern applyTenantBranding already
     // uses for [data-tenant-name-inline] — the new copy uses the
     // referrer's name twice (headline + body), tenant name twice
@@ -320,6 +339,13 @@ document.getElementById('leadForm').addEventListener('submit', async (e)=>{
 
     document.getElementById('confirmName').textContent = name.split(' ')[0];
     document.getElementById('confirmReferrer').textContent = referrerName;
+    const builderBtn = document.getElementById('builderBtn');
+    if(builderUrl){
+      builderBtn.href = builderUrl;
+      builderBtn.style.display = 'block';
+    } else {
+      builderBtn.style.display = 'none';
+    }
     showState('confirmState');
   }catch(err){
     if(err.status === 404){
