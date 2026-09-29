@@ -12,11 +12,38 @@
     --accent:#8B5E3C; --accent-dark:#6B4A2E; --bg:#F8F5F0; --charcoal:#1B1B1B; --muted:#6B6A63;
   }
   *{box-sizing:border-box;}
-  html,body{height:100%;}
   body{
     margin:0;font-family:'Inter',sans-serif;color:var(--charcoal);
     background:var(--primary);
-    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    display:flex;flex-direction:column;align-items:center;
+    /* `min-height`, not `height` — with a fixed `height:100%` (matching
+       the old html,body{height:100%}), content taller than the viewport
+       overflowed a box that was centered but never allowed to grow,
+       which pushes the top of the overflow to a negative y-offset that
+       normal document scrolling can't reach (a well-known flexbox
+       "unsafe centering" gap — Chrome/Safari both default to `unsafe
+       center`, not the spec's `safe center` fallback). `min-height`
+       lets the box grow past one viewport when content needs more room,
+       so the browser's ordinary scroll takes over and the top is always
+       reachable. `100dvh` (falls back to the unsupported-safe `100vh`
+       on older browsers, since the browser ignores the second
+       declaration's *value* but keeps the property from the first) is
+       what makes this actually respond to the mobile on-screen keyboard
+       shrinking the visible area — confirmed live: this is exactly the
+       reproducible case (small phone height once a keyboard opens) that
+       made the old fixed-height version's top content permanently
+       unreachable no matter how far up you scrolled. */
+    min-height:100vh;
+    min-height:100dvh;
+    /* Progressive-enhancement belt on top of the min-height fix above,
+       not a replacement for it: `safe center` (where supported) refuses
+       to center past an edge in the first place. An unsupported value
+       here makes the whole declaration invalid, so the earlier `center`
+       above still applies — this line is free to add and never a
+       regression. */
+    justify-content:center;
+    justify-content:safe center;
+    gap:14px;
     padding:24px;
   }
   .card{
