@@ -83,7 +83,7 @@ async function withPublicTransaction(fn) {
 async function getCallerContext(client, userId) {
   const { rows } = await client.query(
     `select
-       u.tenant_id, u.role = 'admin' as is_admin,
+       u.tenant_id, u.role = 'admin' as is_admin, u.email as user_email,
        t.domain as tenant_domain, t.name as tenant_name, t.branding as tenant_branding,
        t.reward_amount_cents, t.reward_currency,
        t.send_from_address, t.send_from_name, t.send_domain_verified,
