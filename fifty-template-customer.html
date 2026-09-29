@@ -113,7 +113,7 @@
 
   <button class="sharebtn" id="shareBtn">Get my referral link</button>
 
-  <p class="finePrint">This is your one referral link — it never expires and can be shared as many times as you like. Text it, post it, or hand it out to as many friends and family as you'd like. You'll get a <span data-reward-amount>$50</span> Amazon gift card for every friend who becomes a customer, and so will they — no strings attached.</p>
+  <p class="finePrint">This is your one referral link — it never expires and can be shared as many times as you like. Text it, post it, or hand it out to as many friends and family as you'd like. You'll get a <span data-reward-amount>$50</span> Amazon gift card for every friend who makes a purchase, and so will they — no strings attached.</p>
 
   <div class="shareResult" id="shareResult">
     <div class="label">Your referral code</div>
@@ -228,8 +228,8 @@ document.getElementById('shareBtn').addEventListener('click', async ()=>{
     if(navigator.share){
       try{
         await navigator.share({
-          title: 'Get ' + TenantBranding.rewardText() + ' when you become a customer of ' + TenantBranding.name(),
-          text: 'I referred you — use my link and we both get ' + TenantBranding.rewardText() + ' once you\'re a customer.',
+          title: 'Get ' + TenantBranding.rewardText() + ' when you make a purchase from ' + TenantBranding.name(),
+          text: 'I referred you — make your purchase through my link and we both get ' + TenantBranding.rewardText() + '.',
           url: fullLink
         });
         document.getElementById('shareStatusMsg').textContent = 'Shared!';
