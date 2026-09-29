@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="branding-pending">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,8 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --primary:#1F4D36; --primary-dark:#2D6A4F; --secondary:#40916C;
-    --accent:#8B5E3C; --accent-dark:#6B4A2E; --bg:#F8F5F0; --charcoal:#1B1B1B; --muted:#6B6A63;
+    --primary:#1C2B33; --primary-dark:#33475A; --secondary:#7C9FBB;
+    --accent:#C9974B; --accent-dark:#8B6B2E; --bg:#F7F4EE; --charcoal:#1B1B1B; --muted:#6B6A63;
   }
   *{box-sizing:border-box;}
   body{
@@ -131,6 +131,9 @@
   }
   .poweredBy strong{font-weight:700;color:rgba(255,255,255,.78);}
   .poweredBy img{flex-shrink:0;display:block;width:20px;height:auto;}
+  /* Hidden until tenant-branding.js has this tenant's own look applied. */
+  .branding-pending .card{visibility:hidden;}
+  .shield-wrap img{width:auto !important;height:52px !important;max-width:200px;object-fit:contain;}
 </style>
 </head>
 <body>
@@ -140,7 +143,7 @@
     <img data-tenant-logo alt="logo" />
   </div>
   <div class="wordmark">
-    <div class="name" data-tenant-name>Good Steward Structures</div>
+    <div class="name" data-tenant-name></div>
     <div class="tag" data-tenant-tagline>Referral Program</div>
   </div>
 
@@ -152,7 +155,7 @@
       <p>
         <span class="who" data-referrer-name>A friend</span> thought you might need <span data-tenant-name-inline>50.</span>'s
         services and wanted to pass along a personal recommendation. When you place your order, you and
-        <span class="who" data-referrer-name>A friend</span> will each get a <span class="reward">$50 electronic gift card</span> — no strings attached.
+        <span class="who" data-referrer-name>A friend</span> will each get a <span class="reward"><span data-reward-amount>$50</span> electronic gift card</span> — no strings attached.
       </p>
     </div>
 
@@ -171,9 +174,9 @@
       <label for="leadPhone">Phone number</label>
       <input type="text" id="leadPhone" placeholder="(717) 555-0134" autocomplete="off" />
 
-      <button type="submit" class="submitbtn" id="submitBtn">Get my $50 offer</button>
+      <button type="submit" class="submitbtn" id="submitBtn">Get my <span data-reward-amount>$50</span> offer</button>
 
-      <p class="finePrint">By submitting, you agree to be contacted about your inquiry and to our <a href="privacy-policy.html" target="_blank" rel="noopener">Privacy Policy</a> and <a href="referral-terms.html" target="_blank" rel="noopener">Referral Program Terms</a>.</p>
+      <p class="finePrint">By submitting, you agree to be contacted about your inquiry and to our <a href="privacy-policy.html" data-legal-link target="_blank" rel="noopener">Privacy Policy</a> and <a href="referral-terms.html" data-legal-link target="_blank" rel="noopener">Referral Program Terms</a>.</p>
     </form>
 
     <span class="demoToggle" id="demoToggle">Demo settings</span>
@@ -186,7 +189,7 @@
 
   <div class="confirm" id="confirmState">
     <h2>You're all set.</h2>
-    <p>Thanks, <span id="confirmName"></span> — we've got your info and someone will reach out soon. Once you're a customer, you and <span id="confirmReferrer"></span> will each get a $50 eGift card.</p>
+    <p>Thanks, <span id="confirmName"></span> — we've got your info and someone will reach out soon. Once you're a customer, you and <span id="confirmReferrer"></span> will each get a <span data-reward-amount>$50</span> eGift card.</p>
     <!-- Hidden by default (a.builderbtn's own CSS); shown and given a
          real href only if this tenant has a builderUrl set — see
          checkAndRender's own comment on where that value comes from. -->
@@ -205,44 +208,14 @@
   <span>Powered by <strong>50.</strong></span>
 </div>
 
+<script src="tenant-branding.js"></script>
 <script>
-const TENANT = {
-  name: "Good Steward Structures",
-  tagline: "Referral Program",
-  code: "good-steward-structures",
-  colors: {
-    primary: "#1F4D36",
-    primaryDark: "#2D6A4F",
-    secondary: "#40916C",
-    accent: "#8B5E3C",
-    accentDark: "#6B4A2E",
-    bg: "#F8F5F0"
-  },
-  domain: "goodstewardstructures.com",
-  logoUrl: "assets/gss-logo-badge.png"
-};
 
 // The one line to change per deployment: where the API from /api is served.
 const API_BASE = "https://five0-platform.onrender.com/api";
 
-function applyTenantBranding(){
-  const r = document.documentElement.style;
-  r.setProperty('--primary', TENANT.colors.primary);
-  r.setProperty('--primary-dark', TENANT.colors.primaryDark);
-  r.setProperty('--secondary', TENANT.colors.secondary);
-  r.setProperty('--accent', TENANT.colors.accent);
-  r.setProperty('--accent-dark', TENANT.colors.accentDark);
-  r.setProperty('--bg', TENANT.colors.bg);
-  document.querySelectorAll('[data-tenant-logo]').forEach(el => {
-    el.src = TENANT.logoUrl;
-  });
-  document.querySelectorAll('[data-tenant-name]').forEach(el => { el.textContent = TENANT.name; });
-  document.querySelectorAll('[data-tenant-tagline]').forEach(el => { el.textContent = TENANT.tagline; });
-}
-applyTenantBranding();
 
 
-document.querySelectorAll('[data-tenant-name-inline]').forEach(el => { el.textContent = TENANT.name; });
 
 async function apiFetch(path, options={}){
   const res = await fetch(API_BASE + path, {
@@ -276,6 +249,7 @@ async function init(){
   const params = new URLSearchParams(window.location.search);
   shareCode = params.get('ref');
   if(shareCode) await checkAndRender();
+  else TenantBranding.applyFromLink(null);
 }
 
 // Returns true if the code resolved to a usable (active, share-kind) link —
@@ -283,6 +257,13 @@ async function init(){
 async function checkAndRender(){
   try{
     const link = await apiFetch('/links/' + encodeURIComponent(shareCode));
+    // The referring customer's own business — never a hardcoded tenant.
+    TenantBranding.applyFromLink(link);
+    // Privacy and terms pages look up the same code to show this
+    // business's name and contact instead of another tenant's.
+    document.querySelectorAll('[data-legal-link]').forEach(a => {
+      a.href = a.getAttribute('href').split('?')[0] + '?ref=' + encodeURIComponent(shareCode);
+    });
     referrerName = link.referrer_first_name || 'A friend';
     // A new per-tenant setting, not hardcoded: tenants.branding (the
     // same jsonb column fifty-template-dealer.html reads via GET
@@ -302,8 +283,12 @@ async function checkAndRender(){
       showState('invalidState');
       return false;
     }
+    // A real customer's friend never needs the manual-code testing panel.
+    document.getElementById('demoToggle').style.display = 'none';
+    document.getElementById('demoPanel').style.display = 'none';
     return true;
   }catch(err){
+    TenantBranding.applyFromLink(null);
     showState('invalidState');
     return false;
   }
@@ -371,7 +356,7 @@ document.getElementById('leadForm').addEventListener('submit', async (e)=>{
     } else {
       showMsg('Something went wrong submitting that. Try again.');
     }
-    btn.disabled = false; btn.textContent = 'Get my $50 offer';
+    btn.disabled = false; btn.textContent = 'Get my ' + TenantBranding.rewardText() + ' offer';
   }
 });
 </script>

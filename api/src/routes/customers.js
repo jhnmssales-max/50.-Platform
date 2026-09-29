@@ -125,6 +125,7 @@ router.post('/customers', requireAuth, async (req, res, next) => {
         rewardCurrency: result.ctx.reward_currency,
         customerName: result.customer.name,
         inviteUrl,
+        buttonColor: (result.ctx.tenant_branding || {}).primaryColor,
       });
 
       // Replies go to the staff member who sent the invite (their own

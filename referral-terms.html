@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="branding-pending">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,8 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --primary:#1F4D36; --primary-dark:#2D6A4F; --secondary:#40916C;
-    --accent:#8B5E3C; --accent-dark:#6B4A2E; --bg:#F8F5F0; --charcoal:#1B1B1B; --muted:#6B6A63;
+    --primary:#1C2B33; --primary-dark:#33475A; --secondary:#7C9FBB;
+    --accent:#C9974B; --accent-dark:#8B6B2E; --bg:#F7F4EE; --charcoal:#1B1B1B; --muted:#6B6A63;
   }
   *{box-sizing:border-box;}
   html,body{min-height:100%;}
@@ -55,6 +55,9 @@
   }
   .poweredBy strong{font-weight:700;color:rgba(255,255,255,.78);}
   .poweredBy img{flex-shrink:0;display:block;width:20px;height:auto;}
+  /* Hidden until tenant-branding.js has this tenant's own look applied. */
+  .branding-pending .card{visibility:hidden;}
+  .shield-wrap img{width:auto !important;height:52px !important;max-width:200px;object-fit:contain;}
 </style>
 </head>
 <body>
@@ -64,7 +67,7 @@
     <img data-tenant-logo alt="logo" />
   </div>
   <div class="wordmark">
-    <div class="name" data-tenant-name>Good Steward Structures</div>
+    <div class="name" data-tenant-name></div>
     <div class="tag">Referral Program Terms</div>
   </div>
 
@@ -76,13 +79,13 @@
   <article>
     <section>
       <h2>Eligibility</h2>
-      <p>The &ldquo;50.&rdquo; referral program is open to customers of Good Steward Structures who have placed an order with us. Each participant may enroll using their own contact information and may generate and share multiple unique referral links.</p>
+      <p>The &ldquo;50.&rdquo; referral program is open to customers of <span data-tenant-name-inline></span> who have placed an order with us. Each participant may enroll using their own contact information and may generate and share multiple unique referral links.</p>
     </section>
 
     <section>
       <h2>How rewards are earned</h2>
-      <p>A participant (&ldquo;Referrer&rdquo;) shares a unique referral link with another individual (&ldquo;Referred Customer&rdquo;). If the Referred Customer submits their contact information through that link and subsequently places and completes an order for a building, both the Referrer and the Referred Customer will each receive a $50 digital gift card.</p>
-      <p style="margin-top:12px;">A reward is issued only after Good Steward Structures confirms the referred order has actually been placed and a qualifying deposit received. Cancelled, refunded, or unfulfilled orders do not qualify for a reward. Each referral link may be used once; a Referrer may share as many separate links as they like and will be rewarded for each one that results in a qualifying order.</p>
+      <p>A participant (&ldquo;Referrer&rdquo;) shares a unique referral link with another individual (&ldquo;Referred Customer&rdquo;). If the Referred Customer submits their contact information through that link and subsequently places and completes an order for a building, both the Referrer and the Referred Customer will each receive a <span data-reward-amount>$50</span> digital gift card.</p>
+      <p style="margin-top:12px;">A reward is issued only after <span data-tenant-name-inline></span> confirms the referred order has actually been placed and a qualifying deposit received. Cancelled, refunded, or unfulfilled orders do not qualify for a reward. Each referral link may be used once; a Referrer may share as many separate links as they like and will be rewarded for each one that results in a qualifying order.</p>
     </section>
 
     <section>
@@ -92,17 +95,17 @@
 
     <section>
       <h2>Fraud and abuse</h2>
-      <p>Self-referrals, duplicate accounts, and referrals submitted without a genuine interest in purchasing are prohibited. Good Steward Structures reserves the right to withhold or reverse a reward, and to suspend a participant's access to the program, if we reasonably believe the program is being abused.</p>
+      <p>Self-referrals, duplicate accounts, and referrals submitted without a genuine interest in purchasing are prohibited. <span data-tenant-name-inline></span> reserves the right to withhold or reverse a reward, and to suspend a participant's access to the program, if we reasonably believe the program is being abused.</p>
     </section>
 
     <section>
       <h2>Taxes</h2>
-      <p>Referral rewards may constitute taxable income depending on applicable law. Participants are responsible for determining and reporting any tax obligations arising from rewards received. Good Steward Structures does not provide tax advice.</p>
+      <p>Referral rewards may constitute taxable income depending on applicable law. Participants are responsible for determining and reporting any tax obligations arising from rewards received. <span data-tenant-name-inline></span> does not provide tax advice.</p>
     </section>
 
     <section>
       <h2>Program changes</h2>
-      <p>Good Steward Structures may modify, suspend, or terminate this program, including the reward amount, at any time. Changes will not affect rewards already earned for orders completed before the change takes effect.</p>
+      <p><span data-tenant-name-inline></span> may modify, suspend, or terminate this program, including the reward amount, at any time. Changes will not affect rewards already earned for orders completed before the change takes effect.</p>
     </section>
 
     <section>
@@ -112,7 +115,7 @@
 
     <section>
       <h2>Contact</h2>
-      <p>Questions about this program can be directed to <a href="mailto:joseph@goodstewardstructures.com">joseph@goodstewardstructures.com</a>.</p>
+      <p data-contact-line>Questions about this program can be directed to <a data-contact-email href="#"></a>.</p>
     </section>
   </article>
 
@@ -124,32 +127,13 @@
   <span>Powered by <strong>50.</strong></span>
 </div>
 
+<script src="tenant-branding.js"></script>
 <script>
-const TENANT = {
-  name: "Good Steward Structures",
-  colors: {
-    primary: "#1F4D36",
-    primaryDark: "#2D6A4F",
-    secondary: "#40916C",
-    accent: "#8B5E3C",
-    accentDark: "#6B4A2E",
-    bg: "#F8F5F0"
-  },
-  logoUrl: "assets/gss-logo-badge.png"
-};
+// Same API the referral pages use. The page is opened from a lead page
+// link carrying ?ref=<code>, which says which business's program this is.
+const API_BASE = "https://five0-platform.onrender.com/api";
+TenantBranding.loadForCode(API_BASE, new URLSearchParams(window.location.search).get('ref'));
 
-function applyTenantBranding(){
-  const r = document.documentElement.style;
-  r.setProperty('--primary', TENANT.colors.primary);
-  r.setProperty('--primary-dark', TENANT.colors.primaryDark);
-  r.setProperty('--secondary', TENANT.colors.secondary);
-  r.setProperty('--accent', TENANT.colors.accent);
-  r.setProperty('--accent-dark', TENANT.colors.accentDark);
-  r.setProperty('--bg', TENANT.colors.bg);
-  document.querySelectorAll('[data-tenant-logo]').forEach(el => { el.src = TENANT.logoUrl; });
-  document.querySelectorAll('[data-tenant-name]').forEach(el => { el.textContent = TENANT.name; });
-}
-applyTenantBranding();
 </script>
 
 </body>
