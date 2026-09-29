@@ -101,6 +101,17 @@
   }
   a.builderbtn:hover{background:var(--primary-dark);}
 
+  /* Fixed link to the 50. platform's own site — not tenant branding,
+     always shown regardless of builderUrl. Ghost/outline style so it
+     reads as secondary to a.builderbtn whenever both appear. */
+  a.learnmorebtn{
+    display:block;width:100%;background:none;border:1px solid var(--muted);color:var(--muted);
+    border-radius:8px;padding:10px;font-size:12px;font-weight:600;
+    font-family:'Inter';text-decoration:none;text-align:center;
+    margin-top:12px;box-sizing:border-box;
+  }
+  a.learnmorebtn:hover{border-color:var(--primary);color:var(--primary);}
+
   .invalidstate{display:none;text-align:center;}
   .invalidstate.show{display:block;}
   .invalidstate h2{font-family:'Fraunces',serif;font-weight:500;font-size:19px;color:var(--primary);margin:0 0 10px;}
@@ -180,6 +191,7 @@
          real href only if this tenant has a builderUrl set — see
          checkAndRender's own comment on where that value comes from. -->
     <a id="builderBtn" class="builderbtn" href="#" target="_blank" rel="noopener">Design Your Own Building</a>
+    <a class="learnmorebtn" href="https://referwith50.com" target="_blank" rel="noopener">Learn more about 50.</a>
   </div>
 
   <div class="invalidstate" id="invalidState">

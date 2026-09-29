@@ -102,6 +102,17 @@
     display:block;margin:14px auto 0;background:none;border:none;color:var(--accent);
     font-size:12px;font-weight:600;text-decoration:underline;cursor:pointer;font-family:'Inter';
   }
+  /* Fixed link to the 50. platform's own site — not tenant branding,
+     always shown, always the same URL regardless of which dealer's
+     colors are active. Ghost/outline style so it stays visibly
+     secondary to any primary action nearby. */
+  a.learnmorebtn{
+    display:block;width:100%;background:none;border:1px solid var(--muted);color:var(--muted);
+    border-radius:8px;padding:10px;font-size:12px;font-weight:600;
+    font-family:'Inter';text-decoration:none;text-align:center;
+    margin-top:12px;box-sizing:border-box;
+  }
+  a.learnmorebtn:hover{border-color:var(--primary);color:var(--primary);}
 
   .listsection{margin-top:26px;padding-top:22px;border-top:1px solid #e3ddd0;}
   .listsection h2{font-family:'Fraunces',serif;font-weight:500;font-size:16px;color:var(--primary);margin:0 0 4px;}
@@ -221,6 +232,7 @@
       </div>
       <p class="note" id="confirmNote"></p>
       <button class="sendagain" id="sendAgainBtn">Send another</button>
+      <a class="learnmorebtn" href="https://referwith50.com" target="_blank" rel="noopener">Learn more about 50.</a>
     </div>
 
     <div class="listsection">
