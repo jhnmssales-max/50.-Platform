@@ -5,6 +5,8 @@ const { requireAuth } = require('../middleware/auth');
 const { withUserTransaction, getCallerContext } = require('../db');
 const { createOrder } = require('../lib/tremendous');
 const { encryptionKey } = require('../lib/tenantCredentials');
+const { sendEmail } = require('../lib/postmark');
+const { buildPaidNotificationEmail } = require('../lib/paidNotificationEmail');
 
 const router = express.Router();
 
@@ -175,7 +177,7 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
   const targetStatus = parsedBody.data.status;
 
   try {
-    const { transition, rewardClaim } = await withUserTransaction(req.userId, async (client) => {
+    const { transition, rewardClaim, paidNotification } = await withUserTransaction(req.userId, async (client) => {
       const ctx = await getCallerContext(client, req.userId);
       if (!ctx) throw forbidden('No staff account found for this user');
 
@@ -241,6 +243,40 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
         }
       }
 
+      // Whether or not this notification actually gets sent (a slow/failed
+      // Postmark call is best-effort, same as the lead-notification email
+      // in routes/public.js), the data for it is gathered here, inside the
+      // transaction, only on a genuine transition into 'rewarded' this
+      // call — gated on transition.changed, not just targetStatus, so an
+      // idempotent double-click/retry against an already-rewarded referral
+      // never re-notifies. Same shape as submit_referral()'s own
+      // staff_email/staff_name/admin_emails — reused here as field names,
+      // not reinvented, since this is the same "who to notify" question
+      // for the same tenant.
+      let paidNotification = null;
+      if (transition.changed && transition.status === 'rewarded') {
+        const { rows: [n] } = await client.query(
+          `select
+             r.name as friend_name, r.email as friend_email, r.phone as friend_phone,
+             c.name as referrer_name, c.email as referrer_email, c.phone as referrer_phone,
+             u.email as staff_email, u.name as staff_name,
+             t.name as tenant_name,
+             t.send_domain_verified as tenant_send_domain_verified,
+             t.send_from_address as tenant_send_from_address,
+             t.send_from_name as tenant_send_from_name,
+             t.reward_amount_cents, t.reward_currency,
+             (select array_agg(u2.email) from users u2 where u2.tenant_id = t.id and u2.role = 'admin') as admin_emails
+           from referrals r
+           join referral_links rl on rl.id = r.referral_link_id
+           join customers c on c.id = rl.customer_id
+           left join users u on u.id = c.created_by_user_id
+           join tenants t on t.id = r.tenant_id
+           where r.id = $1`,
+          [referralId]
+        );
+        paidNotification = n;
+      }
+
       // Whether or not *this* request is what flipped the status (an admin
       // could double-click, or two admins could click at once), a reward is
       // attempted at most once per referral, ever: claim the idempotency
@@ -294,7 +330,7 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
         }
       }
 
-      return { transition, rewardClaim };
+      return { transition, rewardClaim, paidNotification };
     });
 
     const responseBody = { id: referralId, status: transition.status };
@@ -333,6 +369,70 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
     }
 
     res.json(responseBody);
+
+    // Best-effort, same as the lead-notification email in routes/public.js:
+    // the status change (and any reward attempt) above already succeeded
+    // and the response already went out, so a slow/failing Postmark call
+    // here can only ever be logged, never surfaced to the caller. Same
+    // To/Cc addressing as that email too — the inviting staff member gets
+    // "To", every admin on the tenant gets "Cc" (deduped against the
+    // staff address), admins become "To" if there's no staff member on
+    // record — reused deliberately, not reimplemented, since it's the
+    // same "who on this tenant needs to know" question either way.
+    if (paidNotification) {
+      const adminEmails = paidNotification.admin_emails || [];
+      if (!paidNotification.staff_email && !adminEmails.length) {
+        console.log(
+          `No staff member or admin to notify for referral ${referralId}'s paid status — skipping paid-notification email.`
+        );
+      } else {
+        try {
+          const fromAddress =
+            (paidNotification.tenant_send_domain_verified && paidNotification.tenant_send_from_address) ||
+            process.env.EMAIL_FROM_ADDRESS;
+          if (!fromAddress) {
+            throw new Error('No verified sending address configured for this tenant, and no platform default is set');
+          }
+          const fromName =
+            (paidNotification.tenant_send_domain_verified && paidNotification.tenant_send_from_name) ||
+            paidNotification.tenant_name;
+
+          const { subject, htmlBody, textBody } = buildPaidNotificationEmail({
+            tenantName: paidNotification.tenant_name,
+            staffName: paidNotification.staff_name,
+            referrerName: paidNotification.referrer_name,
+            referrerEmail: paidNotification.referrer_email,
+            referrerPhone: paidNotification.referrer_phone,
+            friendName: paidNotification.friend_name,
+            friendEmail: paidNotification.friend_email,
+            friendPhone: paidNotification.friend_phone,
+            rewardAmountCents: paidNotification.reward_amount_cents,
+            currency: paidNotification.reward_currency,
+          });
+
+          const to = paidNotification.staff_email || adminEmails.join(', ');
+          const ccEmails = paidNotification.staff_email
+            ? adminEmails.filter((e) => e.toLowerCase() !== paidNotification.staff_email.toLowerCase())
+            : [];
+          const cc = ccEmails.length ? ccEmails.join(', ') : undefined;
+
+          await sendEmail({
+            from: `${fromName} <${fromAddress}>`,
+            to,
+            cc,
+            subject,
+            htmlBody,
+            textBody,
+          });
+
+          console.log(
+            `Sent paid-notification email for referral ${referralId} — to=${to}${cc ? ` cc=${cc}` : ''}`
+          );
+        } catch (emailErr) {
+          console.error('Failed to send paid-notification email:', emailErr.message);
+        }
+      }
+    }
   } catch (err) {
     next(err);
   }
