@@ -125,7 +125,7 @@
       <label for="leadEmail">Contact email</label>
       <input type="text" id="leadEmail" placeholder="mike@email.com" autocomplete="off" />
 
-      <label for="leadPhone">Contact phone <span style="text-transform:none;font-weight:400;">(optional)</span></label>
+      <label for="leadPhone">Contact phone</label>
       <input type="text" id="leadPhone" placeholder="(717) 555-0134" autocomplete="off" />
 
       <button type="submit" class="submitbtn" id="submitBtn">Get my $50 signup bonus</button>
@@ -283,6 +283,11 @@ document.getElementById('leadForm').addEventListener('submit', async (e)=>{
 
   if(!name){ showMsg('Enter the business name.'); return; }
   if(!email){ showMsg('Enter a contact email.'); return; }
+  // Kept in sync with fifty-template-lead.html: the backend
+  // (routes/public.js's submitReferralSchema) now requires phone on
+  // every tenant's lead page, this one included, since both share the
+  // one POST /api/links/:code/referrals endpoint.
+  if(!phone){ showMsg('Enter a contact phone number.'); return; }
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true; btn.textContent = 'Submitting...';
@@ -290,7 +295,7 @@ document.getElementById('leadForm').addEventListener('submit', async (e)=>{
   try{
     await apiFetch('/links/' + encodeURIComponent(shareCode) + '/referrals', {
       method: 'POST',
-      body: JSON.stringify({ name, email, phone: phone || undefined, message: message || undefined })
+      body: JSON.stringify({ name, email, phone, message: message || undefined })
     });
 
     document.getElementById('confirmName').textContent = name.split(' ')[0];
