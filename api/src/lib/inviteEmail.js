@@ -9,7 +9,10 @@
 // rewardAmountCents/rewardCurrency alongside these three; they're simply
 // ignored here now rather than removed from the call site, since neither
 // is otherwise reused.
-function buildInviteEmail({ tenantName, customerName, inviteUrl }) {
+// buttonColor is the tenant's own branding.primaryColor, so each business's
+// invite button is in its own color rather than one tenant's green.
+function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor }) {
+  const btnColor = /^#[0-9a-fA-F]{3,8}$/.test(buttonColor || '') ? buttonColor : '#1C2B33';
   const firstName = (customerName || '').trim().split(' ')[0] || 'there';
 
   const subject = `${tenantName} wants to say thank you.`;
@@ -37,7 +40,7 @@ ${inviteUrl}`;
     out to as many friends and family as you'd like.
   </p>
   <p style="margin:28px 0;">
-    <a href="${inviteUrl}" style="background:#1F4D36;color:#F8F5F0;text-decoration:none;
+    <a href="${inviteUrl}" style="background:${btnColor};color:#FFFFFF;text-decoration:none;
        padding:14px 22px;border-radius:8px;font-weight:bold;display:inline-block;">
       Get my referral link
     </a>
