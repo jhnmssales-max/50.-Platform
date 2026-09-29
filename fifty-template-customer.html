@@ -64,6 +64,18 @@
 
   .msg{font-size:12px;color:var(--muted);margin-top:10px;}
 
+  /* Fixed link to the 50. platform's own site — not tenant branding,
+     always shown, always the same URL regardless of which dealer's
+     colors are active. Ghost/outline style so it stays visibly
+     secondary to any primary action nearby. */
+  a.learnmorebtn{
+    display:block;width:100%;background:none;border:1px solid var(--muted);color:var(--muted);
+    border-radius:8px;padding:10px;font-size:12px;font-weight:600;
+    font-family:'Inter';text-decoration:none;text-align:center;
+    margin-top:12px;box-sizing:border-box;
+  }
+  a.learnmorebtn:hover{border-color:var(--primary);color:var(--primary);}
+
   .demoToggle{font-size:11px;color:var(--muted);text-decoration:underline;cursor:pointer;margin-top:26px;display:inline-block;}
   .demoPanel{display:none;margin-top:12px;text-align:left;}
   .demoPanel input{width:100%;padding:10px 12px;border:1px solid #ddd6c8;border-radius:8px;font-family:'Inter';font-size:13px;margin-bottom:10px;}
@@ -107,6 +119,7 @@
       <button class="copybtn" id="copyBtn">Copy</button>
     </div>
     <p class="msg" id="shareStatusMsg"></p>
+    <a class="learnmorebtn" href="https://referwith50.com" target="_blank" rel="noopener">Learn more about 50.</a>
   </div>
 
   <span class="demoToggle" id="demoToggle">Demo settings</span>
