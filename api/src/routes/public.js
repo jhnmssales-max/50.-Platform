@@ -143,10 +143,19 @@ router.post('/links/:code/share', createShareLimiter, async (req, res, next) => 
 // conversion, not entered by staff directly) simply has nothing to
 // notify; that's not a failure.
 // ---------------------------------------------------------------------------
+// phone is required, not optional — an explicit decision (the friend
+// submitting this form should always be reachable by phone, not just
+// email), enforced here as the actual trust boundary, not just in the
+// lead pages' own client-side checks. Every lead page (both
+// fifty-template-lead.html and fifty-referral-lead.html, "50."'s own
+// copy — see supabase/README.md's "New tenants" — share this one
+// endpoint) must send a non-empty phone or this 400s; both were updated
+// to require it client-side too, so this is never a surprise reached
+// only after a submit attempt.
 const submitReferralSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(200),
   email: z.string().trim().email('A valid email is required').max(254),
-  phone: z.string().trim().max(40).optional().nullable(),
+  phone: z.string().trim().min(1, 'Phone number is required').max(40),
   message: z.string().trim().max(1000).optional().nullable(),
 });
 

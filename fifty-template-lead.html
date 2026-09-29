@@ -12,11 +12,30 @@
     --accent:#8B5E3C; --accent-dark:#6B4A2E; --bg:#F8F5F0; --charcoal:#1B1B1B; --muted:#6B6A63;
   }
   *{box-sizing:border-box;}
-  html,body{height:100%;}
   body{
     margin:0;font-family:'Inter',sans-serif;color:var(--charcoal);
     background:var(--primary);
-    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    display:flex;flex-direction:column;align-items:center;
+    /* Same mobile-scroll fix as fifty-template-dealer.html: `height:100%`
+       (via the old html,body{height:100%}) pinned this page to exactly
+       one viewport tall while centering it, so once content overflowed
+       (a small phone, or any phone once the on-screen keyboard shrinks
+       the visible area) the browser's default *unsafe* centering pushed
+       the top — this page's branding and "referred by ..." line —
+       to a negative y-offset ordinary scrolling can't reach. min-height
+       (not height) lets the box grow past one viewport when content
+       needs more room; 100dvh tracks the real visible viewport,
+       including the keyboard-shrunk case. justify-content:safe center
+       is a defensive second line on top of the existing center value —
+       ignored outright by browsers that don't support `safe`, so it's a
+       pure addition, never a regression. See fifty-template-dealer.html
+       for the original live reproduction/verification of this exact bug.
+    */
+    min-height:100vh;
+    min-height:100dvh;
+    justify-content:center;
+    justify-content:safe center;
+    gap:14px;
     padding:24px;
   }
   .card{
@@ -36,7 +55,7 @@
 
   .referral-msg{text-align:center;margin-bottom:26px;}
   .referral-msg h1{font-family:'Fraunces',serif;font-weight:600;font-size:26px;color:var(--primary);line-height:1.3;margin:0 0 12px;}
-  .referral-msg h1 .reward{color:var(--accent);}
+  .referral-msg .reward{color:var(--accent);}
   .referral-msg p{font-size:13px;color:var(--muted);line-height:1.6;margin:0;}
   .referral-msg p .who{color:var(--primary-dark);font-weight:700;}
 
@@ -109,8 +128,12 @@
 
   <div id="activeState">
     <div class="referral-msg">
-      <h1>You and <span id="referrerNameOut2">your friend</span> will each get a <span class="reward">$50 eGift card</span></h1>
-      <p><span class="who" id="referrerNameOut">A friend</span> referred you to <span data-tenant-name-inline>50.</span> — just become a customer to unlock it.</p>
+      <h1>Your friend <span data-referrer-name>your friend</span> trusts <span data-tenant-name-inline>50.</span></h1>
+      <p>
+        <span class="who" data-referrer-name>A friend</span> thought you might need <span data-tenant-name-inline>50.</span>'s
+        services and wanted to pass along a personal recommendation. When you place your order, you and
+        <span class="who" data-referrer-name>A friend</span> will each get a <span class="reward">$50 electronic gift card</span> — no strings attached.
+      </p>
     </div>
 
     <div id="formMsg" class="msg"></div>
@@ -125,7 +148,7 @@
       <label for="leadEmail">Your email</label>
       <input type="text" id="leadEmail" placeholder="mike@email.com" autocomplete="off" />
 
-      <label for="leadPhone">Phone number <span style="text-transform:none;font-weight:400;">(optional)</span></label>
+      <label for="leadPhone">Phone number</label>
       <input type="text" id="leadPhone" placeholder="(717) 555-0134" autocomplete="off" />
 
       <button type="submit" class="submitbtn" id="submitBtn">Get my $50 offer</button>
@@ -237,8 +260,13 @@ async function checkAndRender(){
   try{
     const link = await apiFetch('/links/' + encodeURIComponent(shareCode));
     referrerName = link.referrer_first_name || 'A friend';
-    document.getElementById('referrerNameOut').textContent = referrerName;
-    document.getElementById('referrerNameOut2').textContent = referrerName;
+    // Same querySelectorAll+forEach pattern applyTenantBranding already
+    // uses for [data-tenant-name-inline] — the new copy uses the
+    // referrer's name twice (headline + body), tenant name twice
+    // (also headline + body), so one shared attribute per placeholder
+    // type scales to however many occurrences the copy needs, rather
+    // than a getElementById call per occurrence.
+    document.querySelectorAll('[data-referrer-name]').forEach(el => { el.textContent = referrerName; });
     if(link.kind !== 'share' || link.status !== 'active'){
       showState('invalidState');
       return false;
@@ -279,6 +307,7 @@ document.getElementById('leadForm').addEventListener('submit', async (e)=>{
 
   if(!name){ showMsg('Enter your name.'); return; }
   if(!email){ showMsg('Enter your email.'); return; }
+  if(!phone){ showMsg('Enter your phone number.'); return; }
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true; btn.textContent = 'Submitting...';
@@ -286,7 +315,7 @@ document.getElementById('leadForm').addEventListener('submit', async (e)=>{
   try{
     await apiFetch('/links/' + encodeURIComponent(shareCode) + '/referrals', {
       method: 'POST',
-      body: JSON.stringify({ name, email, phone: phone || undefined, message: message || undefined })
+      body: JSON.stringify({ name, email, phone, message: message || undefined })
     });
 
     document.getElementById('confirmName').textContent = name.split(' ')[0];
