@@ -96,9 +96,9 @@
 
   <hr class="divider" />
 
-  <button class="sharebtn" id="shareBtn">Get my referral code and earn a <span class="dollar">$50 eGift card</span> for every friend who becomes a customer</button>
+  <button class="sharebtn" id="shareBtn">Get my referral link</button>
 
-  <p class="finePrint">This is your one referral code — share it with as many friends as you like. You'll get $50 for every friend who becomes a customer, and so will they.</p>
+  <p class="finePrint">This is your one referral link — it never expires and can be shared as many times as you like. Text it, post it, or hand it out to as many friends and family as you'd like. You'll get a $50 Amazon gift card for every friend who becomes a customer, and so will they — no strings attached.</p>
 
   <div class="shareResult" id="shareResult">
     <div class="label">Your referral code</div>
@@ -192,6 +192,19 @@ async function resolveCode(code){
 async function init(){
   const params = new URLSearchParams(window.location.search);
   await resolveCode(params.get('code'));
+
+  // Bug fix: "Demo settings" was always in the DOM regardless of whether
+  // a real ?code= actually resolved — a real customer visiting their own
+  // link saw it too, not just someone testing the page with no link at
+  // all. It exists purely as a manual-code-entry fallback for that
+  // no-link case (see the panel's own note); once currentCode is set
+  // from a real, successfully-resolved link, there is nothing left for
+  // it to do, so hide it outright rather than leave an unreachable-but-
+  // visible testing affordance on a real customer's page.
+  if(currentCode){
+    document.getElementById('demoToggle').style.display = 'none';
+    document.getElementById('demoPanel').style.display = 'none';
+  }
 }
 init();
 

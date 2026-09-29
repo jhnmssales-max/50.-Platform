@@ -1,38 +1,40 @@
-function formatReward(amountCents, currency) {
-  return (amountCents / 100).toLocaleString('en-US', {
-    style: 'currency',
-    currency: currency || 'USD',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  });
-}
-
 // Builds the email a customer gets when a staff member creates their
 // referral link — the invite that gets them to their own share page. Plain,
 // inline-styled HTML (email clients don't reliably support much more)
 // plus a text fallback.
-function buildInviteEmail({ tenantName, rewardAmountCents, rewardCurrency, customerName, inviteUrl }) {
-  const reward = formatReward(rewardAmountCents, rewardCurrency);
+//
+// Copy is fixed, not templated off a tenant's own reward_amount_cents —
+// it says "$50 Amazon gift card" literally, matching the exact wording
+// asked for. routes/customers.js's caller still passes
+// rewardAmountCents/rewardCurrency alongside these three; they're simply
+// ignored here now rather than removed from the call site, since neither
+// is otherwise reused.
+function buildInviteEmail({ tenantName, customerName, inviteUrl }) {
   const firstName = (customerName || '').trim().split(' ')[0] || 'there';
 
-  const subject = `Refer a friend, get ${reward} — from ${tenantName}`;
+  const subject = `${tenantName} wants to say thank you.`;
 
-  const textBody = `Hi ${firstName},
+  const textBody = `Hi ${firstName}, ${tenantName} wants to say thank you.
 
-${tenantName} wants to say thanks — here's your personal referral link. Share it with a friend, and when they place an order, you'll both get ${reward}.
+If you know a friend or family member who's in need of our services, we'd appreciate your recommendation. Share your personal link below. When your friend places an order, you'll both get a $50 Amazon gift card emailed to you — no strings attached.
 
-${inviteUrl}
+Your link never expires and can be shared as many times as you like. Text it, post it, or hand it out to as many friends and family as you'd like.
 
-Thanks,
-${tenantName}`;
+${inviteUrl}`;
 
   const htmlBody = `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;color:#1B1B1B;">
-  <p style="font-size:15px;line-height:1.6;">Hi ${escapeHtml(firstName)},</p>
   <p style="font-size:15px;line-height:1.6;">
-    ${escapeHtml(tenantName)} wants to say thanks — here's your personal referral link.
-    Share it with a friend, and when they place an order, you'll both get
-    <strong>${reward}</strong>.
+    Hi ${escapeHtml(firstName)}, <strong>${escapeHtml(tenantName)}</strong> wants to say thank you.
+  </p>
+  <p style="font-size:15px;line-height:1.6;">
+    If you know a friend or family member who's in need of our services, we'd appreciate your recommendation.
+    Share your personal link below. When your friend places an order, you'll both get a
+    <strong>$50 Amazon gift card</strong> emailed to you — no strings attached.
+  </p>
+  <p style="font-size:15px;line-height:1.6;">
+    Your link never expires and can be shared as many times as you like. Text it, post it, or hand it
+    out to as many friends and family as you'd like.
   </p>
   <p style="margin:28px 0;">
     <a href="${inviteUrl}" style="background:#1F4D36;color:#F8F5F0;text-decoration:none;
@@ -43,7 +45,6 @@ ${tenantName}`;
   <p style="font-size:12px;color:#6B6A63;word-break:break-all;">
     Or copy this link: ${inviteUrl}
   </p>
-  <p style="font-size:14px;color:#6B6A63;">Thanks,<br>${escapeHtml(tenantName)}</p>
 </div>`;
 
   return { subject, htmlBody, textBody };
@@ -57,4 +58,4 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-module.exports = { buildInviteEmail, formatReward };
+module.exports = { buildInviteEmail };
