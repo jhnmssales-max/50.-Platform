@@ -9,7 +9,11 @@ const POSTMARK_API_BASE = process.env.POSTMARK_API_BASE || 'https://api.postmark
 // inactive/bounced recipient) — so callers get one consistent failure
 // path to handle rather than checking two different shapes of "it didn't
 // work."
-async function sendEmail({ from, to, cc, subject, htmlBody, textBody }) {
+// replyTo is optional. Every tenant without its own verified domain sends
+// from the platform's one shared address (EMAIL_FROM_ADDRESS), so without a
+// Reply-To a customer hitting "Reply" would land in that shared inbox
+// instead of the business's own — pass the business's address here.
+async function sendEmail({ from, to, cc, replyTo, subject, htmlBody, textBody }) {
   const token = process.env.POSTMARK_SERVER_TOKEN;
   if (!token) {
     throw new Error('POSTMARK_SERVER_TOKEN is not set — see .env.example');
@@ -26,6 +30,7 @@ async function sendEmail({ from, to, cc, subject, htmlBody, textBody }) {
       From: from,
       To: to,
       ...(cc ? { Cc: cc } : {}),
+      ...(replyTo ? { ReplyTo: replyTo } : {}),
       Subject: subject,
       HtmlBody: htmlBody,
       TextBody: textBody,

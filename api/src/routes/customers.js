@@ -127,9 +127,14 @@ router.post('/customers', requireAuth, async (req, res, next) => {
         inviteUrl,
       });
 
+      // Replies go to the staff member who sent the invite (their own
+      // business inbox), not the platform's shared sending address.
+      const replyTo = result.ctx.user_email ? `${fromName} <${result.ctx.user_email}>` : undefined;
+
       await sendEmail({
         from: `${fromName} <${fromAddress}>`,
         to: result.customer.email,
+        replyTo,
         subject,
         htmlBody,
         textBody,
