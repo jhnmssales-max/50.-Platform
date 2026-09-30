@@ -101,6 +101,18 @@
   }
   a.builderbtn:hover{background:var(--primary-dark);}
 
+  /* "Design Your Own Building" and "Visit our website" sit side by side;
+     each only appears if the tenant has that URL set (builderUrl /
+     websiteUrl in tenants.branding). A lone button fills the row. */
+  .ctarow{display:flex;gap:10px;margin-top:20px;}
+  .ctarow a.builderbtn,.ctarow a.websitebtn{flex:1 1 0;margin-top:0;padding:14px 10px;font-size:14px;line-height:1.3;
+    display:none;align-items:center;justify-content:center;border:2px solid var(--primary);}
+  a.websitebtn{
+    background:none;border:2px solid var(--primary);color:var(--primary);
+    border-radius:10px;font-weight:700;font-family:'Inter';text-decoration:none;text-align:center;box-sizing:border-box;
+  }
+  a.websitebtn:hover{background:var(--primary);color:var(--bg);}
+
   /* Fixed link to the 50. platform's own site — not tenant branding,
      always shown regardless of builderUrl. Ghost/outline style so it
      reads as secondary to a.builderbtn whenever both appear. */
@@ -193,7 +205,10 @@
     <!-- Hidden by default (a.builderbtn's own CSS); shown and given a
          real href only if this tenant has a builderUrl set — see
          checkAndRender's own comment on where that value comes from. -->
-    <a id="builderBtn" class="builderbtn" href="#" target="_blank" rel="noopener">Design Your Own Building</a>
+    <div class="ctarow">
+      <a id="builderBtn" class="builderbtn" href="#" target="_blank" rel="noopener">Design Your Own Building</a>
+      <a id="websiteBtn" class="websitebtn" href="#" target="_blank" rel="noopener">Visit our website</a>
+    </div>
   </div>
 
   <div class="invalidstate" id="invalidState">
@@ -234,6 +249,7 @@ async function apiFetch(path, options={}){
 let shareCode = null;
 let referrerName = 'A friend';
 let builderUrl = null;
+let websiteUrl = null;
 
 function showMsg(text){ const el = document.getElementById('formMsg'); el.textContent = text; el.className = 'msg show err'; }
 function clearMsg(){ document.getElementById('formMsg').className = 'msg'; }
@@ -271,6 +287,7 @@ async function checkAndRender(){
     // another optional key in it, same as logoUrl; a tenant with none
     // set simply has this be undefined, and the button never appears.
     builderUrl = (link.tenant && link.tenant.branding && link.tenant.branding.builderUrl) || null;
+    websiteUrl = (link.tenant && link.tenant.branding && link.tenant.branding.websiteUrl) || null;
     // Same querySelectorAll+forEach pattern applyTenantBranding already
     // uses for [data-tenant-name-inline] — the new copy uses the
     // referrer's name twice (headline + body), tenant name twice
@@ -338,9 +355,16 @@ document.getElementById('leadForm').addEventListener('submit', async (e)=>{
     const builderBtn = document.getElementById('builderBtn');
     if(builderUrl){
       builderBtn.href = builderUrl;
-      builderBtn.style.display = 'block';
+      builderBtn.style.display = 'flex';
     } else {
       builderBtn.style.display = 'none';
+    }
+    const websiteBtn = document.getElementById('websiteBtn');
+    if(websiteUrl){
+      websiteBtn.href = websiteUrl;
+      websiteBtn.style.display = 'flex';
+    } else {
+      websiteBtn.style.display = 'none';
     }
     showState('confirmState');
   }catch(err){
