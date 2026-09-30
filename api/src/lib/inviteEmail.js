@@ -4,7 +4,7 @@
 // plus a text fallback.
 //
 // Copy is fixed, not templated off a tenant's own reward_amount_cents —
-// it says "$50 Amazon gift card" literally, matching the exact wording
+// it says "$50 gift card" literally, matching the exact wording
 // asked for. routes/customers.js's caller still passes
 // rewardAmountCents/rewardCurrency alongside these three; they're simply
 // ignored here now rather than removed from the call site, since neither
@@ -19,7 +19,7 @@ function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor }) 
 
   const textBody = `Hi ${firstName}, ${tenantName} wants to say thank you.
 
-If you know a friend or family member who's in need of our services, we'd appreciate your recommendation. Share your personal link below. When your friend places an order, you'll both get a $50 Amazon gift card emailed to you — no strings attached.
+If you know a friend or family member who's in need of our services, we'd appreciate your recommendation. Share your personal link below. When your friend places an order, you'll both get a $50 gift card emailed to you — no strings attached.
 
 Your link never expires and can be shared as many times as you like. Text it, post it, or hand it out to as many friends and family as you'd like.
 
@@ -33,7 +33,7 @@ ${inviteUrl}`;
   <p style="font-size:15px;line-height:1.6;">
     If you know a friend or family member who's in need of our services, we'd appreciate your recommendation.
     Share your personal link below. When your friend places an order, you'll both get a
-    <strong>$50 Amazon gift card</strong> emailed to you — no strings attached.
+    <strong>$50 gift card</strong> emailed to you — no strings attached.
   </p>
   <p style="font-size:15px;line-height:1.6;">
     Your link never expires and can be shared as many times as you like. Text it, post it, or hand it
