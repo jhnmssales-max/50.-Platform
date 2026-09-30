@@ -2,7 +2,7 @@
 // customers' referrals actually submits the lead form — this is the
 // "someone needs to follow up" alert, distinct from
 // src/lib/inviteEmail.js (which goes to the customer, not staff).
-function buildLeadNotificationEmail({ tenantName, staffName, leadName, leadEmail, leadPhone, leadMessage, referrerName }) {
+function buildLeadNotificationEmail({ tenantName, staffName, leadName, leadEmail, leadPhone, leadMessage, leadZip, referrerName }) {
   const staffFirstName = (staffName || '').trim().split(' ')[0] || 'there';
   const contact = leadPhone ? `${leadEmail} / ${leadPhone}` : leadEmail;
   const messageLine = leadMessage
@@ -17,7 +17,8 @@ You've received a new lead through your ${tenantName} referral program.
 
 ${leadName} is interested. ${messageLine}
 
-Contact them at: ${contact}
+Contact them at: ${contact}${leadZip ? `
+ZIP code: ${leadZip}` : ''}
 
 This came from your customer ${referrerName}.`;
 
@@ -37,7 +38,10 @@ This came from your customer ${referrerName}.`;
       : `They didn't leave a message, but you have their contact info below.</p>`}
   <p style="font-size:14px;line-height:1.6;">
     <strong>Contact:</strong> ${escapeHtml(leadEmail)}${leadPhone ? ` / ${escapeHtml(leadPhone)}` : ''}
-  </p>
+  </p>${leadZip ? `
+  <p style="font-size:14px;line-height:1.6;">
+    <strong>ZIP code:</strong> ${escapeHtml(leadZip)}
+  </p>` : ''}
   <p style="font-size:13px;color:#6B6A63;">This came from your customer ${escapeHtml(referrerName)}.</p>
 </div>`;
 
