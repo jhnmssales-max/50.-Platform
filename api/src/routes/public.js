@@ -157,6 +157,16 @@ const submitReferralSchema = z.object({
   email: z.string().trim().email('A valid email is required').max(254),
   phone: z.string().trim().min(1, 'Phone number is required').max(40),
   message: z.string().trim().max(1000).optional().nullable(),
+  // Required on the business lead page (fifty-template-lead.html) so staff
+  // can check the job is in their service area. Optional here only
+  // because 50.'s own lead page (fifty-referral-lead.html) doesn't ask for
+  // it; when sent, it must be a real US ZIP.
+  zip_code: z
+    .string()
+    .trim()
+    .regex(/^\d{5}(-\d{4})?$/, 'Enter a valid 5-digit ZIP code')
+    .optional()
+    .nullable(),
 });
 
 router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, next) => {
@@ -167,17 +177,18 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
   if (!parsedBody.success) {
     return res.status(400).json({ error: 'Invalid request', details: parsedBody.error.flatten() });
   }
-  const { name, email, phone, message } = parsedBody.data;
+  const { name, email, phone, message, zip_code: zipCode } = parsedBody.data;
 
   try {
     const referral = await withPublicTransaction(async (client) => {
       try {
-        const { rows } = await client.query('select * from submit_referral($1, $2, $3, $4, $5)', [
+        const { rows } = await client.query('select * from submit_referral($1, $2, $3, $4, $5, $6)', [
           parsedCode.data,
           name,
           email,
           phone || null,
           message || null,
+          zipCode || null,
         ]);
         return rows[0];
       } catch (err) {
@@ -228,6 +239,7 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
           leadEmail: email,
           leadPhone: phone || null,
           leadMessage: message || null,
+          leadZip: zipCode || null,
           referrerName: referral.referrer_name,
         });
 

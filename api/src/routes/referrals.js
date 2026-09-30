@@ -94,7 +94,7 @@ router.get('/referrals', requireAuth, async (req, res, next) => {
       const { rows } = await client.query(
         `with pipeline as (
            select
-             r.id, r.name, r.email, r.phone, r.message,
+             r.id, r.name, r.email, r.phone, r.message, r.zip_code,
              r.status as referral_status, r.submitted_at,
              c.id as referrer_id, c.name as referrer_name,
              ${PAID_EXPR} as paid
@@ -109,6 +109,7 @@ router.get('/referrals', requireAuth, async (req, res, next) => {
            or lower(name) like $1
            or lower(coalesce(email, '')) like $1
            or lower(coalesce(phone, '')) like $1
+           or lower(coalesce(zip_code, '')) like $1
            or lower(referrer_name) like $1
          )
          and ($2::text is null or ($2 = 'paid' and paid) or ($2 = 'pending' and not paid))
@@ -129,6 +130,7 @@ router.get('/referrals', requireAuth, async (req, res, next) => {
         email: r.email,
         phone: r.phone,
         message: r.message,
+        zip_code: r.zip_code,
         submitted_at: r.submitted_at,
         referral_status: r.referral_status,
         status: r.paid ? 'paid' : 'pending',

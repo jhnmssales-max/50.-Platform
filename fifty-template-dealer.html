@@ -600,7 +600,7 @@ async function renderList(query){
   const canMarkPaid = currentUser && currentUser.role === 'admin';
   container.innerHTML = data.referrals.map(r => {
     const isPaid = r.status === 'paid';
-    const contact = r.email || r.phone || '';
+    const contact = (r.email || r.phone || '') + (r.zip_code ? ' · ZIP ' + r.zip_code : '');
     const toggleTitle = isPaid
       ? 'Already marked paid'
       : (canMarkPaid ? 'Mark this referral paid' : 'Only admins can mark a referral paid');

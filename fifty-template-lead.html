@@ -186,6 +186,9 @@
       <label for="leadPhone">Phone number</label>
       <input type="text" id="leadPhone" placeholder="(717) 555-0134" autocomplete="off" />
 
+      <label for="leadZip">ZIP code</label>
+      <input type="text" id="leadZip" placeholder="17201" inputmode="numeric" maxlength="10" autocomplete="postal-code" />
+
       <button type="submit" class="submitbtn" id="submitBtn">Get my <span data-reward-amount>$50</span> offer</button>
 
       <p class="finePrint">By submitting, you agree to be contacted about your inquiry and to our <a href="privacy-policy.html" data-legal-link target="_blank" rel="noopener">Privacy Policy</a> and <a href="referral-terms.html" data-legal-link target="_blank" rel="noopener">Referral Program Terms</a>.</p>
@@ -336,10 +339,12 @@ document.getElementById('leadForm').addEventListener('submit', async (e)=>{
   const name = document.getElementById('leadName').value.trim();
   const email = document.getElementById('leadEmail').value.trim();
   const phone = document.getElementById('leadPhone').value.trim();
+  const zip = document.getElementById('leadZip').value.trim();
 
   if(!name){ showMsg('Enter your name.'); return; }
   if(!email){ showMsg('Enter your email.'); return; }
   if(!phone){ showMsg('Enter your phone number.'); return; }
+  if(!/^\d{5}(-\d{4})?$/.test(zip)){ showMsg('Enter your 5-digit ZIP code so we can confirm you\'re in our service area.'); return; }
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true; btn.textContent = 'Submitting...';
@@ -347,7 +352,7 @@ document.getElementById('leadForm').addEventListener('submit', async (e)=>{
   try{
     await apiFetch('/links/' + encodeURIComponent(shareCode) + '/referrals', {
       method: 'POST',
-      body: JSON.stringify({ name, email, phone, message: message || undefined })
+      body: JSON.stringify({ name, email, phone, zip_code: zip, message: message || undefined })
     });
 
     document.getElementById('confirmName').textContent = name.split(' ')[0];
