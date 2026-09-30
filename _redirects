@@ -1,0 +1,12 @@
+# Render static site redirect/rewrite rules for go.referwith50.com.
+# Format (Netlify-compatible, what Render's static sites support):
+#   <source>  <destination>  <status>
+# Status 200 = rewrite (mask): the browser URL bar stays at <source>,
+# but the response body is <destination>'s content. Anything else
+# (301, 302, ...) is a visible redirect that changes the URL bar.
+#
+# /login -> fifty-template-dealer.html: a short, memorable URL for the
+# staff/admin sign-in page, instead of making people type or link to the
+# raw .html filename. Kept as a 200 rewrite (not a redirect) so
+# go.referwith50.com/login is the URL people actually see and bookmark.
+/login  /fifty-template-dealer.html  200
