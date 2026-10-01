@@ -26,7 +26,7 @@
 //
 // --stripe=test: real Stripe test mode. Requires STRIPE_SECRET_KEY=sk_test_…
 // (anything else is refused), and STRIPE_WEBHOOK_SECRET=whsec_… from
-//   stripe listen --forward-to http://127.0.0.1:${E2E_API_PORT:-3100}/api/webhooks/stripe
+//   stripe listen --all-snapshot --forward-to http://127.0.0.1:${E2E_API_PORT:-3100}/api/webhooks/stripe
 // running alongside, so Stripe's own signed webhooks reach this API. The
 // Checkout payment is completed on Stripe's real hosted page with test
 // card 4242 4242 4242 4242 — automatically when possible, otherwise the
@@ -508,7 +508,7 @@ async function main() {
   }
   if (!STAND_IN) {
     if (!/^sk_test_/.test(STRIPE_KEY || '')) throw new Error('--stripe=test requires STRIPE_SECRET_KEY=sk_test_… — refusing to run against anything else, live keys especially.');
-    if (!/^whsec_/.test(WEBHOOK_SECRET || '')) throw new Error('--stripe=test requires STRIPE_WEBHOOK_SECRET=whsec_… from `stripe listen --forward-to http://127.0.0.1:' + PORTS.api + '/api/webhooks/stripe`.');
+    if (!/^whsec_/.test(WEBHOOK_SECRET || '')) throw new Error('--stripe=test requires STRIPE_WEBHOOK_SECRET=whsec_… from `stripe listen --all-snapshot --forward-to http://127.0.0.1:' + PORTS.api + '/api/webhooks/stripe`.');
   }
   fs.mkdirSync(OUT_DIR, { recursive: true });
   console.log(`Activation gate e2e — Stripe: ${STAND_IN ? 'local stand-in' : 'REAL Stripe TEST mode'} — results in ${OUT_DIR}`);
