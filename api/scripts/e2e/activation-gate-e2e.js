@@ -571,6 +571,10 @@ async function main() {
   // it goes through the environment's HTTPS proxy when there is one —
   // never for this run's own local servers.
   const proxyServer = !STAND_IN && (process.env.HTTPS_PROXY || process.env.https_proxy);
+  // Playwright appends Chromium's <-loopback> rule after `bypass`, and the
+  // later rule wins: without this, 127.0.0.1 is proxied anyway, and an
+  // HTTPS-only proxy answers the dealer page with a 405.
+  if (proxyServer) process.env.PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK = '1';
   browser = await chromium.launch({
     headless: !args.headed,
     ...(proxyServer ? { proxy: { server: proxyServer, bypass: '127.0.0.1,localhost' } } : {}),
@@ -1312,7 +1316,12 @@ async function main() {
 async function completeRealCheckout(page) {
   try {
     const email = page.locator('#email');
-    if (await email.isVisible({ timeout: 15000 }).catch(() => false)) await email.fill('e2e-owner@example.test');
+    await email.waitFor({ state: 'visible', timeout: 30000 }).then(() => email.fill('e2e-owner@example.test'), () => {});
+    // With more than one payment method enabled, Checkout lists them as an
+    // accordion (Card, Cash App Pay, Klarna, …) and only renders the card
+    // fields once "Card" is selected.
+    const cardRow = page.locator('[data-testid="card-accordion-item"]');
+    if (!(await page.locator('#cardNumber').isVisible()) && (await cardRow.count())) await cardRow.click();
     await page.fill('#cardNumber', '4242424242424242', { timeout: 15000 });
     await page.fill('#cardExpiry', '12 / 34');
     await page.fill('#cardCvc', '123');
@@ -1320,7 +1329,18 @@ async function completeRealCheckout(page) {
     if (await name.isVisible().catch(() => false)) await name.fill('E2E Owner');
     const zip = page.locator('#billingPostalCode');
     if (await zip.isVisible().catch(() => false)) await zip.fill('17101');
+    // Link's "Save my information for faster checkout" comes pre-checked and
+    // then requires a phone number — this is a test payment, not a Link signup.
+    const link = page.locator('#enableStripePass');
+    if ((await link.isVisible().catch(() => false)) && (await link.isChecked())) await link.uncheck();
     await page.click('button[type=submit]');
+    // If Stripe hasn't sent the browser back a minute after submitting, keep
+    // a screenshot of what Checkout is showing (a decline, a challenge, …).
+    const shot = path.join(OUT_DIR, 'checkout-not-redirected.png');
+    page
+      .waitForURL((u) => !u.href.includes('checkout.stripe.com'), { timeout: 60000 })
+      .catch(() => page.screenshot({ path: shot, fullPage: true }).then(() => console.log(`\n  Still on Checkout 60s after submitting — screenshot: ${shot}\n`)))
+      .catch(() => {});
   } catch (err) {
     console.log(`\n  Couldn't fill Stripe's Checkout page automatically (${err.message}).`);
     console.log(`  Pay it by hand with test card 4242 4242 4242 4242, any future expiry, any CVC:\n  ${page.url()}\n`);
