@@ -7,7 +7,15 @@
 // internally so a plain fetch call doesn't need one.
 const crypto = require('crypto');
 
-const STRIPE_API_BASE = process.env.STRIPE_API_BASE || 'https://api.stripe.com/v1';
+const REAL_STRIPE_API_BASE = 'https://api.stripe.com/v1';
+const STRIPE_API_BASE = process.env.STRIPE_API_BASE || REAL_STRIPE_API_BASE;
+
+// Stripe secret keys are sk_test_/sk_live_ (restricted keys rk_test_/
+// rk_live_) followed by an alphanumeric body. Anything else — unset, a
+// placeholder, a publishable pk_ key, a whsec_ pasted into the wrong
+// variable — is not a key Stripe would ever accept.
+const SECRET_KEY_PATTERN = /^(sk|rk)_(test|live)_[A-Za-z0-9]{10,}$/;
+const WEBHOOK_SECRET_PATTERN = /^whsec_\S{10,}$/;
 
 function secretKey() {
   const key = process.env.STRIPE_SECRET_KEY;
@@ -15,6 +23,83 @@ function secretKey() {
     throw new Error('STRIPE_SECRET_KEY is not set — see .env.example');
   }
   return key;
+}
+
+// 'live' or 'test', from the configured key's own prefix — or null when
+// no recognizable key is configured. Never throws: the activation gate
+// (lib/activation.js) calls this on every signed-in request and has to
+// keep working (strictly) even when Stripe isn't configured at all.
+function stripeKeyMode() {
+  const match = SECRET_KEY_PATTERN.exec(process.env.STRIPE_SECRET_KEY || '');
+  return match ? match[2] : null;
+}
+
+// Hard safety gate for every billing action on the activation-gate /
+// usage-fee path — the Stripe counterpart of giftCardProvider.js's
+// assertRealGiftCardProviderConfigured(), and the same stance: called
+// before anything that would create a Checkout Session, charge a card,
+// or unlock a tenant, and a throw is fatal to that action, never caught
+// and downgraded to a warning.
+//
+// What it refuses, and why each one matters:
+//   - No STRIPE_SECRET_KEY, or one that isn't shaped like a Stripe
+//     secret key at all.
+//   - STRIPE_API_BASE pointed anywhere other than Stripe's real API.
+//     That variable exists for local stand-ins, and a stand-in answers
+//     "succeeded" to everything — so a server left pointed at one would
+//     record real tenants as activated, and their usage fees as
+//     collected, with no money ever moving. Local tests reach their
+//     stand-in below this module instead (scripts/e2e/), never through
+//     configuration a real deployment could carry.
+//   - With requireWebhookSecret, a STRIPE_WEBHOOK_SECRET that isn't a
+//     whsec_ value — the secret is all that stands between this API and
+//     a forged "payment succeeded" event.
+//
+// What it deliberately does *not* refuse is a test-mode key: test mode is
+// how this path is verified at all. Test-mode results are flagged instead
+// — Stripe stamps livemode: false on every test object, and that flag is
+// recorded (tenants.activation_livemode, billing_events.livemode) and
+// enforced (lib/activation.js) so nothing done in test mode can ever
+// count as real once the API runs on a live key.
+//
+// Throws rather than returning a boolean, for the same reason the gift
+// card gate does: nothing that calls this may decide to proceed anyway.
+function assertRealStripeConfigured({ requireWebhookSecret = false } = {}) {
+  const problems = [];
+  const mode = stripeKeyMode();
+  if (!process.env.STRIPE_SECRET_KEY) {
+    problems.push('STRIPE_SECRET_KEY is not set');
+  } else if (!mode) {
+    problems.push('STRIPE_SECRET_KEY is not a Stripe secret key (expected sk_test_/sk_live_ or rk_test_/rk_live_)');
+  }
+  if (STRIPE_API_BASE !== REAL_STRIPE_API_BASE) {
+    problems.push(`STRIPE_API_BASE is "${STRIPE_API_BASE}" — not Stripe's real API (${REAL_STRIPE_API_BASE}), i.e. a stand-in`);
+  }
+  if (requireWebhookSecret && !WEBHOOK_SECRET_PATTERN.test(process.env.STRIPE_WEBHOOK_SECRET || '')) {
+    problems.push('STRIPE_WEBHOOK_SECRET is not set to a whsec_ signing secret');
+  }
+  if (problems.length) {
+    throw new Error(
+      `Refusing to run a Stripe billing action against a stub/fake Stripe configuration: ${problems.join('; ')}. ` +
+        'Nothing was charged, created, or unlocked. Fix the configuration (see api/.env.example) — a stand-in or ' +
+        'placeholder must never be able to make an activation or a usage fee look successful.'
+    );
+  }
+  return { mode, livemode: mode === 'live' };
+}
+
+// One line for the server's startup log, so which Stripe mode the API is
+// in is never something to infer from behavior. Never includes any part
+// of a secret.
+function describeStripeConfig() {
+  try {
+    const { mode } = assertRealStripeConfigured({ requireWebhookSecret: true });
+    return mode === 'live'
+      ? 'Stripe billing: LIVE mode — activations and usage fees are real charges.'
+      : 'Stripe billing: TEST mode — activations and usage fees are Stripe test-mode only and never count once the API runs on a live key.';
+  } catch (err) {
+    return `Stripe billing: NOT USABLE — ${err.message} Billing-required tenants cannot activate until this is fixed; billing-exempt tenants are unaffected.`;
+  }
 }
 
 // Recursively flattens a nested JS object/array into Stripe's bracket-
@@ -52,39 +137,101 @@ function toFormBody(obj) {
 // header — a retried request with the same key returns the original
 // result rather than creating a second object, per Stripe's documented
 // guarantee (including for two genuinely concurrent requests with the
-// same key). createCheckoutSession/retrievePaymentIntent never need
-// this (the checkout flow has its own natural one-shot shape); Stage 4's
-// off-session per-referral charge does — see chargeOffSession below.
+// same key). Every off-session charge passes one — Stage 4's
+// per-referral charge and the referral usage fee (lib/referralFee.js),
+// see chargeOffSession below — and so does the activation Checkout
+// Session (routes/billing.js), so two tabs or two admins starting
+// activation at the same moment get one $500 session between them,
+// not one each.
 async function stripeRequest(path, body, idempotencyKey) {
-  const res = await fetch(`${STRIPE_API_BASE}${path}`, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Authorization: `Bearer ${secretKey()}`,
-      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
-    },
-    body: toFormBody(body),
-  });
+  let res;
+  try {
+    res = await fetch(`${STRIPE_API_BASE}${path}`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: `Bearer ${secretKey()}`,
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      },
+      body: toFormBody(body),
+    });
+  } catch (cause) {
+    throw outcomeUnknownError(path, cause);
+  }
 
   const responseBody = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const message = (responseBody.error && responseBody.error.message) || `Stripe request failed (${res.status})`;
-    const err = new Error(message);
-    err.stripeStatus = res.status;
-    err.stripeCode = responseBody.error && responseBody.error.code;
-    throw err;
+    throw stripeHttpError(res.status, responseBody);
   }
   return responseBody;
 }
 
+// A request that never got an HTTP response back (DNS, connection reset,
+// timeout). Stripe may or may not have acted on it — a money-moving
+// caller must treat the outcome as unknown and retry with the *same*
+// Idempotency-Key, never mark it failed and start over.
+function outcomeUnknownError(path, cause) {
+  const err = new Error(`No response from Stripe for ${path}: ${cause.message}`);
+  err.stripeOutcomeUnknown = true;
+  return err;
+}
+
+// Stripe's own error body, kept intact enough for a caller to act on:
+// the decline code a dealer can understand, and — for a declined
+// PaymentIntent confirmation — the PaymentIntent Stripe still created,
+// so the ledger can point at it. A 5xx (or a 409 for an idempotent
+// request still in flight) means Stripe may have processed the request
+// anyway, so it's flagged outcome-unknown, same as no response at all.
+function stripeHttpError(status, responseBody) {
+  const stripeError = responseBody.error || {};
+  const err = new Error(stripeError.message || `Stripe request failed (${status})`);
+  err.stripeStatus = status;
+  err.stripeCode = stripeError.code;
+  err.stripeType = stripeError.type;
+  err.stripeDeclineCode = stripeError.decline_code;
+  err.stripePaymentIntentId = stripeError.payment_intent && stripeError.payment_intent.id;
+  err.stripePaymentIntentLivemode = stripeError.payment_intent && stripeError.payment_intent.livemode;
+  err.stripeOutcomeUnknown = status >= 500 || status === 409;
+  return err;
+}
+
+async function stripeGet(path) {
+  let res;
+  try {
+    res = await fetch(`${STRIPE_API_BASE}${path}`, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${secretKey()}` },
+    });
+  } catch (cause) {
+    throw outcomeUnknownError(path, cause);
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw stripeHttpError(res.status, body);
+  }
+  return body;
+}
+
 // Creates a Checkout Session for the one-time activation charge.
-// setup_future_usage: 'off_session' on the PaymentIntent is what saves
-// the payment method for Stage 4's later off-session per-referral
-// charges — without it, the card/bank account used here couldn't be
-// charged again without the customer present. Pricing is inline
-// (price_data), not a catalog price id, since activation_fee_cents is
-// per-tenant and variable.
+// mode: 'payment' (a real charge, not 'setup'). setup_future_usage:
+// 'off_session' on the PaymentIntent is what saves the payment method
+// for the later off-session charges (the per-referral usage fee) —
+// without it, the card/bank account used here couldn't be charged again
+// without the customer present. Pricing is inline (price_data), not a
+// catalog price id, since activation_fee_cents is per-tenant and
+// variable.
+//
+// customer_creation: 'always' when there's no Customer yet, so the
+// completed session is guaranteed to carry a Customer id for the webhook
+// to store alongside the saved payment method — the usage fee can't be
+// charged without both. (Stripe rejects customer and customer_creation
+// together, hence one or the other.)
+//
+// metadata.kind = 'activation' on the session itself (and on its
+// PaymentIntent) is what the webhook checks before treating a paid
+// session as an activation: anything else on this Stripe account that
+// happens to carry a tenant's id in client_reference_id — a Payment Link
+// lets a buyer set that field from the URL — is never mistaken for one.
 async function createCheckoutSession({
   tenantId,
   tenantName,
@@ -94,6 +241,7 @@ async function createCheckoutSession({
   existingCustomerId,
   successUrl,
   cancelUrl,
+  idempotencyKey,
 }) {
   return stripeRequest('/checkout/sessions', {
     mode: 'payment',
@@ -110,16 +258,33 @@ async function createCheckoutSession({
     ],
     payment_intent_data: {
       setup_future_usage: 'off_session',
+      description: `50. Platform activation — ${tenantName}`,
       metadata: { tenant_id: tenantId, kind: 'activation' },
     },
+    metadata: { tenant_id: tenantId, kind: 'activation' },
     // client_reference_id is Stripe's own dedicated field for exactly
     // this — correlating a session back to our own record — read by the
     // checkout.session.completed webhook handler.
     client_reference_id: tenantId,
     customer: existingCustomerId || undefined,
+    customer_creation: existingCustomerId ? undefined : 'always',
     success_url: successUrl,
     cancel_url: cancelUrl,
-  });
+  }, idempotencyKey);
+}
+
+// Reads back a Checkout Session — used to reuse a tenant's still-open
+// activation session instead of creating a second one, and to see that
+// one has already been paid while its webhook is still on the way.
+async function retrieveCheckoutSession(sessionId) {
+  return stripeGet(`/checkout/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+// A Checkout Session's payment_intent is a string id unless the request
+// asked Stripe to expand it into the full object — either way, the id.
+function paymentIntentIdOf(session) {
+  const pi = session && session.payment_intent;
+  return typeof pi === 'string' ? pi : (pi && pi.id) || null;
 }
 
 // Stage 4's per-referral reward charge: creates and confirms a
@@ -143,7 +308,7 @@ async function createCheckoutSession({
 // error body — stripeRequest's existing !res.ok handling already throws
 // for that, with err.stripeCode set (e.g. 'card_declined'), so callers
 // use the same try/catch shape as every other Stripe call in this file.
-async function chargeOffSession({ customerId, paymentMethodId, amountCents, currency, metadata, idempotencyKey }) {
+async function chargeOffSession({ customerId, paymentMethodId, amountCents, currency, metadata, description, idempotencyKey }) {
   if (!idempotencyKey) {
     throw new Error('chargeOffSession requires an idempotencyKey — refusing to charge without one');
   }
@@ -156,6 +321,7 @@ async function chargeOffSession({ customerId, paymentMethodId, amountCents, curr
       payment_method: paymentMethodId,
       off_session: true,
       confirm: true,
+      description,
       metadata,
     },
     idempotencyKey
@@ -167,17 +333,7 @@ async function chargeOffSession({ customerId, paymentMethodId, amountCents, curr
 // read its .payment_method (also a string id) so the tenant's saved
 // payment method can be stored. GET, not POST: no form body.
 async function retrievePaymentIntent(paymentIntentId) {
-  const res = await fetch(`${STRIPE_API_BASE}/payment_intents/${paymentIntentId}`, {
-    headers: { Accept: 'application/json', Authorization: `Bearer ${secretKey()}` },
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const message = (body.error && body.error.message) || `Stripe request failed (${res.status})`;
-    const err = new Error(message);
-    err.stripeStatus = res.status;
-    throw err;
-  }
-  return body;
+  return stripeGet(`/payment_intents/${encodeURIComponent(paymentIntentId)}`);
 }
 
 // Verifies a webhook request's Stripe-Signature header against the raw
@@ -228,4 +384,15 @@ function verifyWebhookSignature(rawBody, signatureHeader, webhookSecret, toleran
   return JSON.parse(rawBodyBuffer.toString('utf8'));
 }
 
-module.exports = { createCheckoutSession, chargeOffSession, retrievePaymentIntent, verifyWebhookSignature };
+module.exports = {
+  REAL_STRIPE_API_BASE,
+  assertRealStripeConfigured,
+  stripeKeyMode,
+  describeStripeConfig,
+  createCheckoutSession,
+  retrieveCheckoutSession,
+  paymentIntentIdOf,
+  chargeOffSession,
+  retrievePaymentIntent,
+  verifyWebhookSignature,
+};

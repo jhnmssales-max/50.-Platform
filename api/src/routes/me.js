@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { requireAuth } = require('../middleware/auth');
 const { withUserTransaction, getCallerContext } = require('../db');
+const { computeReferralFee } = require('../lib/referralFee');
 
 const router = express.Router();
 
@@ -30,11 +31,22 @@ function forbidden(message) {
 // every other route touching ctx — stripe_customer_id,
 // stripe_payment_method_id, and billing_status never appear here or
 // anywhere else a staff-facing response is built from ctx.
+//
+// Also the one staff route a not-yet-activated tenant can still call
+// (allowUnactivatedTenant — see db.js's getCallerContext): `activation`
+// tells the dealer page whether to send an admin to Checkout / show
+// staff the "ask your admin" screen instead of the app, and carries the
+// tenant's name and branding so that screen is theirs, not 50.'s
+// generic one. `referral_fee` is the usage fee a "mark as paid" will
+// charge (null for a billing-exempt tenant, which is never charged) —
+// what the page's confirm dialog quotes, computed by the same function
+// that computes the real charge. Like `billing`, only named fields: the
+// raw billing_required flag and activation timestamps never leave here.
 // ---------------------------------------------------------------------------
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
     const result = await withUserTransaction(req.userId, async (client) => {
-      const ctx = await getCallerContext(client, req.userId);
+      const ctx = await getCallerContext(client, req.userId, { allowUnactivatedTenant: true });
       if (!ctx) throw forbidden('No staff account found for this user');
 
       const { rows: [me] } = await client.query(
@@ -44,6 +56,12 @@ router.get('/me', requireAuth, async (req, res, next) => {
 
       return { me, ctx };
     });
+
+    const { ctx } = result;
+    const billingRequired = ctx.billing_required !== false;
+    const fee = billingRequired
+      ? computeReferralFee({ rewardAmountCents: ctx.reward_amount_cents, rateBps: ctx.referral_fee_bps })
+      : null;
 
     res.json({
       name: result.me.name,
@@ -63,6 +81,19 @@ router.get('/me', requireAuth, async (req, res, next) => {
         per_referral_charge_cents: result.ctx.per_referral_charge_cents,
         currency: result.ctx.reward_currency,
       },
+      activation: {
+        required: ctx.activation.required,
+        fee_cents: ctx.activation.required ? ctx.activation_fee_cents : null,
+        currency: ctx.reward_currency,
+      },
+      referral_fee: fee
+        ? {
+            rate_bps: ctx.referral_fee_bps,
+            payout_cents: fee.payoutCents,
+            fee_cents: fee.feeCents,
+            currency: ctx.reward_currency,
+          }
+        : null,
     });
   } catch (err) {
     next(err);

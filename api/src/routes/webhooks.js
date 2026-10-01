@@ -1,5 +1,11 @@
 const express = require('express');
-const { verifyWebhookSignature, retrievePaymentIntent } = require('../lib/stripe');
+const {
+  verifyWebhookSignature,
+  retrievePaymentIntent,
+  assertRealStripeConfigured,
+  stripeKeyMode,
+  paymentIntentIdOf,
+} = require('../lib/stripe');
 const { withServiceRole, assertRowsAffected } = require('../db');
 
 const router = express.Router();
@@ -73,13 +79,13 @@ router.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
 // undefined if this exact event was already recorded.
 async function recordBillingEvent(
   client,
-  { tenantId, referralId, eventType, amountCents, rewardAmountCents, platformFeeCents, stripePaymentIntentId, status, errorDetail, stripeEventId }
+  { tenantId, referralId, eventType, amountCents, rewardAmountCents, platformFeeCents, stripePaymentIntentId, status, errorDetail, stripeEventId, livemode }
 ) {
   const { rows: [inserted] } = await client.query(
     `insert into billing_events
        (tenant_id, referral_id, event_type, amount_cents, reward_amount_cents, platform_fee_cents,
-        stripe_payment_intent_id, status, error_detail, stripe_event_id)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        stripe_payment_intent_id, status, error_detail, stripe_event_id, livemode)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      on conflict (stripe_event_id) do nothing
      returning id`,
     [
@@ -93,6 +99,7 @@ async function recordBillingEvent(
       status,
       errorDetail || null,
       stripeEventId || null,
+      typeof livemode === 'boolean' ? livemode : null,
     ]
   );
   return inserted;
@@ -100,12 +107,28 @@ async function recordBillingEvent(
 
 // Activates a tenant: records the activation_charge billing_events row
 // (idempotent on stripeEventId), then flips billing_status/
-// activation_paid_at/stripe_customer_id/stripe_payment_method_id.
-// Shared by checkout.session.completed (when payment_status is already
-// 'paid') and checkout.session.async_payment_succeeded (the delayed
-// ACH-clears-later outcome) — same end state, two different Stripe
-// events can lead here.
-async function activateTenant({ tenantId, eventId, paymentIntentId, paymentMethodId, customerId, amountCents }) {
+// activation_paid_at/activation_livemode/stripe_customer_id/
+// stripe_payment_method_id. Shared by checkout.session.completed (when
+// payment_status is already 'paid') and
+// checkout.session.async_payment_succeeded (the delayed ACH-clears-later
+// outcome) — same end state, two different Stripe events can lead here.
+// This is the only place in the codebase that ever sets
+// activation_paid_at — i.e. the only thing that lifts the activation
+// gate — and it only runs on a signature-verified Stripe event saying
+// the payment succeeded, never on a browser returning from Checkout.
+//
+// livemode is Stripe's own flag on the paid session. A live payment
+// always activates, including over an earlier test-mode activation (the
+// WHERE clause's second half) — otherwise a tenant that had once been
+// "activated" in test mode could pay real money and stay locked, since
+// lib/activation.js doesn't count test-mode activations on a live key.
+async function activateTenant({ tenantId, eventId, paymentIntentId, paymentMethodId, customerId, amountCents, livemode }) {
+  // Defense in depth — finishActivationFromSession, the only caller,
+  // already asserted this. The one place that unlocks a tenant refuses a
+  // stub/fake Stripe configuration itself rather than trusting every
+  // future caller to have checked.
+  assertRealStripeConfigured({ requireWebhookSecret: true });
+
   await withServiceRole(async (client) => {
     const inserted = await recordBillingEvent(client, {
       tenantId,
@@ -114,20 +137,43 @@ async function activateTenant({ tenantId, eventId, paymentIntentId, paymentMetho
       stripePaymentIntentId: paymentIntentId,
       status: 'succeeded',
       stripeEventId: eventId,
+      livemode,
     });
     if (!inserted) {
       console.log(`Stripe event ${eventId} already processed — activation no-op for tenant ${tenantId}`);
       return;
     }
 
+    const { rows: [tenant] } = await client.query('select billing_required from tenants where id = $1', [tenantId]);
+    if (tenant && tenant.billing_required === false) {
+      // Should be impossible — POST /api/billing/checkout-session never
+      // creates a session for an exempt tenant — but money has moved, so
+      // it's recorded (above) and shouted about rather than dropped.
+      console.error(
+        `BILLING-EXEMPT TENANT CHARGED — tenant ${tenantId} is billing_required = false but paid an activation charge (${paymentIntentId}, event ${eventId}). Refund it in Stripe.`
+      );
+    }
+    if (!livemode && stripeKeyMode() === 'live') {
+      console.error(
+        `TEST-MODE activation received by a live-mode API — tenant ${tenantId}, event ${eventId}. Recorded, but it will not unlock the tenant (lib/activation.js). Check that STRIPE_WEBHOOK_SECRET is the live endpoint's secret.`
+      );
+    }
+    if (!customerId || !paymentMethodId) {
+      console.error(
+        `ACTIVATION WITHOUT SAVED PAYMENT METHOD — tenant ${tenantId} (event ${eventId}) customer=${customerId || 'none'} payment_method=${paymentMethodId || 'none'}. The tenant is unlocked, but its referral usage fee can't be charged until a payment method is saved.`
+      );
+    }
+
     const result = await client.query(
       `update tenants
        set stripe_customer_id = $1,
-           stripe_payment_method_id = coalesce($2, stripe_payment_method_id),
+           stripe_payment_method_id = $2,
            billing_status = 'active',
-           activation_paid_at = now()
-       where id = $3 and activation_paid_at is null`,
-      [customerId, paymentMethodId, tenantId]
+           activation_paid_at = now(),
+           activation_livemode = $4
+       where id = $3
+         and (activation_paid_at is null or ($4 and activation_livemode is distinct from true))`,
+      [customerId, paymentMethodId, tenantId, livemode === true]
     );
 
     if (result.rowCount === 0) {
@@ -137,11 +183,29 @@ async function activateTenant({ tenantId, eventId, paymentIntentId, paymentMetho
       // 0 rows as a real failure.
       const { rows: [current] } = await client.query('select activation_paid_at from tenants where id = $1', [tenantId]);
       if (current && current.activation_paid_at) {
-        console.log(`Tenant ${tenantId} already activated (lost a benign race to another event) — event ${eventId}`);
+        // Benign only if it's the same payment. A *different* succeeded
+        // activation payment means the tenant paid twice (e.g. two admins
+        // completing two checkouts at once) — both are in the ledger;
+        // this makes sure a human hears about the second one.
+        const { rows: earlier } = await client.query(
+          `select stripe_payment_intent_id from billing_events
+           where tenant_id = $1 and event_type = 'activation_charge' and status = 'succeeded'
+             and stripe_payment_intent_id is distinct from $2`,
+          [tenantId, paymentIntentId]
+        );
+        if (earlier.length) {
+          console.error(
+            `DUPLICATE ACTIVATION PAYMENT — tenant ${tenantId} was already activated (${earlier.map((r) => r.stripe_payment_intent_id).join(', ')}) and paid again (${paymentIntentId}, event ${eventId}). Refund the duplicate in Stripe.`
+          );
+        } else {
+          console.log(`Tenant ${tenantId} already activated (lost a benign race to another event) — event ${eventId}`);
+        }
         return;
       }
       await assertRowsAffected(client, result, { table: 'tenants', id: tenantId });
     }
+
+    console.log(`ACTIVATION tenant ${tenantId} activated by ${paymentIntentId} (livemode=${livemode === true}, event ${eventId})`);
   });
 }
 
@@ -149,7 +213,7 @@ async function activateTenant({ tenantId, eventId, paymentIntentId, paymentMetho
 // row (idempotent on stripeEventId), then flips billing_status to
 // 'suspended' unless it's already there. Shared by
 // payment_intent.payment_failed and charge.dispute.created.
-async function suspendTenantBilling({ tenantId, referralId, eventType, amountCents, stripePaymentIntentId, errorDetail, eventId }) {
+async function suspendTenantBilling({ tenantId, referralId, eventType, amountCents, stripePaymentIntentId, errorDetail, eventId, livemode }) {
   await withServiceRole(async (client) => {
     const inserted = await recordBillingEvent(client, {
       tenantId,
@@ -160,6 +224,7 @@ async function suspendTenantBilling({ tenantId, referralId, eventType, amountCen
       status: eventType === 'dispute_created' ? 'disputed' : 'failed',
       errorDetail,
       stripeEventId: eventId,
+      livemode,
     });
     if (!inserted) {
       console.log(`Stripe event ${eventId} already processed — suspend no-op for tenant ${tenantId}`);
@@ -198,13 +263,43 @@ async function suspendTenantBilling({ tenantId, referralId, eventType, amountCen
 // there are three handlers here, not one: `completed` fires immediately
 // regardless of how the payment method eventually resolves; the async_*
 // events are what carry the actual outcome for a delayed method.
+//
+// All three first confirm the session is one this API created for
+// activation (isActivationSession below) before touching any tenant.
 // ---------------------------------------------------------------------------
+
+// Only a Checkout Session created by POST /api/billing/checkout-session —
+// metadata.kind 'activation' naming this same tenant — can activate a
+// tenant. Anything else on this Stripe account that happens to carry a
+// tenant's id in client_reference_id (a Payment Link lets a buyer set
+// that field from the URL, at whatever price that link charges) is
+// ignored. Sessions created before session-level metadata existed carry
+// the same marker on their PaymentIntent instead, so that's checked for
+// them.
+async function isActivationSession(session, tenantId) {
+  const metadata = session.metadata || {};
+  if (metadata.kind) {
+    return metadata.kind === 'activation' && metadata.tenant_id === tenantId;
+  }
+  const paymentIntentId = paymentIntentIdOf(session);
+  if (!paymentIntentId) return false;
+  const paymentIntent = await retrievePaymentIntent(paymentIntentId);
+  const piMetadata = paymentIntent.metadata || {};
+  return piMetadata.kind === 'activation' && piMetadata.tenant_id === tenantId;
+}
+
 async function handleCheckoutSessionCompleted(session, eventId) {
   if (session.mode !== 'payment') return; // not our activation checkout
 
   const tenantId = session.client_reference_id;
   if (!tenantId) {
     throw new Error(`checkout.session.completed with no client_reference_id (session ${session.id})`);
+  }
+  if (!(await isActivationSession(session, tenantId))) {
+    console.error(
+      `checkout.session.completed for session ${session.id} names tenant ${tenantId} but is not an activation session this API created — ignored, nothing activated (event ${eventId})`
+    );
+    return;
   }
 
   // Recorded regardless of payment_status — this is what makes a
@@ -235,6 +330,12 @@ async function handleCheckoutSessionAsyncPaymentSucceeded(session, eventId) {
   if (!session.client_reference_id) {
     throw new Error(`checkout.session.async_payment_succeeded with no client_reference_id (session ${session.id})`);
   }
+  if (!(await isActivationSession(session, session.client_reference_id))) {
+    console.error(
+      `checkout.session.async_payment_succeeded for session ${session.id} is not an activation session this API created — ignored, nothing activated (event ${eventId})`
+    );
+    return;
+  }
   await finishActivationFromSession(session, eventId);
 }
 
@@ -243,6 +344,10 @@ async function handleCheckoutSessionAsyncPaymentFailed(session, eventId) {
   const tenantId = session.client_reference_id;
   if (!tenantId) {
     throw new Error(`checkout.session.async_payment_failed with no client_reference_id (session ${session.id})`);
+  }
+  if (!(await isActivationSession(session, tenantId))) {
+    console.error(`checkout.session.async_payment_failed for session ${session.id} is not an activation session — ignored (event ${eventId})`);
+    return;
   }
 
   let errorDetail = 'Bank debit failed';
@@ -266,6 +371,7 @@ async function handleCheckoutSessionAsyncPaymentFailed(session, eventId) {
       status: 'failed',
       errorDetail,
       stripeEventId: eventId,
+      livemode: session.livemode,
     });
     if (!inserted) {
       console.log(`Stripe event ${eventId} already processed — async payment failure no-op for tenant ${tenantId}`);
@@ -279,6 +385,13 @@ async function handleCheckoutSessionAsyncPaymentFailed(session, eventId) {
 }
 
 async function finishActivationFromSession(session, eventId) {
+  // Refuses a stub/fake Stripe configuration before anything that could
+  // unlock a tenant — the same gate as the checkout endpoint and the usage
+  // fee (lib/stripe.js). Thrown, so the webhook answers 500 and Stripe
+  // keeps retrying until the configuration is fixed, rather than the
+  // activation being acknowledged and lost.
+  assertRealStripeConfigured({ requireWebhookSecret: true });
+
   let paymentMethodId = null;
   if (session.payment_intent) {
     const paymentIntent = await retrievePaymentIntent(session.payment_intent);
@@ -292,6 +405,7 @@ async function finishActivationFromSession(session, eventId) {
     paymentMethodId,
     customerId: session.customer,
     amountCents: session.amount_total,
+    livemode: session.livemode === true,
   });
 }
 
@@ -309,9 +423,11 @@ async function handlePaymentIntentPaymentFailed(paymentIntent, eventId) {
     console.log(`payment_intent.payment_failed with no tenant_id metadata (${paymentIntent.id}) — ignored`);
     return;
   }
-  // Stage 4's per-referral reward PaymentIntents are expected to also set
-  // metadata.referral_id — read defensively now so this handler doesn't
-  // need to change when that lands.
+  // Stage 4's per-referral reward PaymentIntents and the referral usage
+  // fee's (lib/referralFee.js) both set metadata.referral_id. A declined
+  // usage fee is already recorded on its own 'referral_fee' row at the
+  // moment it's declined; this adds the suspension and a payment_failed
+  // row, same as for any other declined charge.
   const referralId = (paymentIntent.metadata && paymentIntent.metadata.referral_id) || null;
   const errorDetail = (paymentIntent.last_payment_error && paymentIntent.last_payment_error.message) || 'Payment failed';
 
@@ -323,6 +439,7 @@ async function handlePaymentIntentPaymentFailed(paymentIntent, eventId) {
     stripePaymentIntentId: paymentIntent.id,
     errorDetail,
     eventId,
+    livemode: paymentIntent.livemode,
   });
 }
 
@@ -352,6 +469,7 @@ async function handleChargeDisputeCreated(dispute, eventId) {
     stripePaymentIntentId: dispute.payment_intent,
     errorDetail: `Dispute: ${dispute.reason || 'unknown reason'}`,
     eventId,
+    livemode: dispute.livemode,
   });
 }
 

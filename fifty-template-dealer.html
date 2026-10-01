@@ -158,6 +158,13 @@
   .loginBox .msg.err{display:block;}
   .loginBox .hint{font-size:11.5px;color:var(--muted);text-align:center;margin-top:14px;line-height:1.5;}
 
+  /* Activation gate — shown instead of the app while this tenant's
+     one-time activation isn't confirmed (GET /api/me's activation). */
+  .msg.info{background:#EEF3EE;color:var(--primary);}
+  .gateFooter{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:22px;padding-top:14px;border-top:1px solid #e3ddd0;}
+  .gateFooter #gateWho{font-size:12px;color:var(--muted);}
+  .gateFooter #gateWho strong{color:var(--primary);}
+
   /* Small, unobtrusive platform credit — sits below the card, on the page
      background, so it never competes with the tenant's own branding at
      the top of the card. Uses currentColor throughout so it stays
@@ -198,6 +205,17 @@
       <button type="submit" class="send" id="loginBtn">Sign in</button>
     </form>
     <p class="hint">Don't have an account yet? Ask your company's admin to set one up.</p>
+  </div>
+
+  <div id="gateBox" style="display:none;">
+    <h1 id="gateTitle"></h1>
+    <p class="lede" id="gateLede"></p>
+    <div id="gateMsg" class="msg"></div>
+    <button type="button" class="send" id="gateBtn" style="display:none;"></button>
+    <div class="gateFooter">
+      <span id="gateWho"></span>
+      <button type="button" class="authSignOut" id="gateSignOutBtn">Sign out</button>
+    </div>
   </div>
 
   <div id="appArea" style="display:none;">
@@ -389,6 +407,8 @@ async function refreshSession(){
 }
 
 function signOut(){
+  stopActivationPolling();
+  activationReturn = null;
   setSession(null);
   currentUser = null;
   applyBranding(DEFAULT_BRANDING);
@@ -398,6 +418,7 @@ function signOut(){
 // A 401 gets exactly one retry, after a token refresh — never a silent
 // retry loop. If the refresh itself fails, the error propagates as a 401
 // same as before, and callers already know to treat that as "signed out".
+// err.code is the API's machine-readable reason, when it sends one.
 async function apiFetch(path, options={}, retried){
   const session = getSession();
   const res = await fetch(API_BASE + path, {
@@ -416,6 +437,12 @@ async function apiFetch(path, options={}, retried){
   if(!res.ok){
     const err = new Error((body && body.error) || ('Request failed (' + res.status + ')'));
     err.status = res.status;
+    err.code = body && body.code;
+    // Every staff endpoint refuses a not-yet-activated account with this
+    // code (see the API's activation gate) — wherever it surfaces, the
+    // whole page switches to the activation screen rather than showing a
+    // one-off error.
+    if(res.status === 402 && err.code === 'activation_required') onActivationRequired();
     throw err;
   }
   return body;
@@ -432,14 +459,19 @@ function escapeHtmlLite(s){
 
 function showLoggedOut(){
   document.getElementById('loginBox').style.display = 'block';
+  document.getElementById('gateBox').style.display = 'none';
   document.getElementById('appArea').style.display = 'none';
+}
+
+function signedInAsHtml(){
+  return 'Signed in as <strong>' + escapeHtmlLite(currentUser.name) + '</strong> · ' + escapeHtmlLite(currentUser.role);
 }
 
 function showLoggedIn(){
   document.getElementById('loginBox').style.display = 'none';
+  document.getElementById('gateBox').style.display = 'none';
   document.getElementById('appArea').style.display = 'block';
-  document.getElementById('authWho').innerHTML =
-    'Signed in as <strong>' + escapeHtmlLite(currentUser.name) + '</strong> · ' + escapeHtmlLite(currentUser.role);
+  document.getElementById('authWho').innerHTML = signedInAsHtml();
 }
 
 async function loadCurrentUser(){
@@ -447,19 +479,196 @@ async function loadCurrentUser(){
   applyBranding(tenantBrandingFromMe(currentUser));
 }
 
+function fmtMoney(cents, currency){
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: (currency || 'USD').toUpperCase() }).format(cents / 100);
+}
+
+// ---------------------------------------------------------------------
+// Activation gate. A business that pays 50. (billing-required) can't use
+// this page — or any staff endpoint behind it — until its one-time
+// activation is paid. GET /api/me says whether that's still the case;
+// for Good Steward Structures, North Mountain Structures, and 50. itself
+// it never is, and none of this ever shows.
+//
+// An admin is sent straight to Stripe Checkout on sign-in. Staff can't
+// pay (the card becomes the account's card for every future usage fee),
+// so they see who can. Returning from Checkout unlocks nothing by itself
+// — ?activation=success only makes this page wait and re-ask GET
+// /api/me, which reports activated only once Stripe's webhook has
+// confirmed the payment on the server.
+// ---------------------------------------------------------------------
+let activationReturn = new URLSearchParams(window.location.search).get('activation');
+if(activationReturn){
+  // Stripped right away, so a reload or a bookmark never replays it.
+  history.replaceState(null, '', window.location.pathname);
+}
+// Applies to the first sign-in after returning from Checkout only — never
+// to a later sign-in in the same tab (e.g. after signing out, or another
+// admin signing in), which has nothing to do with that checkout.
+function takeActivationReturn(){
+  const value = activationReturn;
+  activationReturn = null;
+  return value;
+}
+
+let activationPollTimer = null;
+function stopActivationPolling(){
+  if(activationPollTimer){ clearTimeout(activationPollTimer); activationPollTimer = null; }
+}
+
+function isActivationRequired(me){
+  return !!(me && me.activation && me.activation.required);
+}
+
+function activationPrice(){
+  const a = currentUser.activation || {};
+  return a.fee_cents ? fmtMoney(a.fee_cents, a.currency) : 'one-time';
+}
+
+// One screen, several states — each sets every field, so nothing from a
+// previous state lingers.
+function showGate(state, options={}){
+  stopActivationPolling();
+  const tenant = escapeHtmlLite(currentUser.tenant_name);
+  const title = document.getElementById('gateTitle');
+  const lede = document.getElementById('gateLede');
+  const msg = document.getElementById('gateMsg');
+  const btn = document.getElementById('gateBtn');
+  let msgText = options.message || '';
+  let msgKind = options.error ? 'err' : 'info';
+  let btnText = '';
+  let btnAction = null;
+
+  if(state === 'staff'){
+    title.textContent = 'Account not activated yet';
+    lede.innerHTML = tenant + ' hasn\'t finished its one-time activation with 50. An admin on your account needs to sign in and complete it — then you\'ll be able to send referrals here.';
+    btnText = 'Check again'; btnAction = recheckActivation;
+  } else if(state === 'processing' || state === 'processing_slow'){
+    title.textContent = 'Payment received';
+    lede.innerHTML = state === 'processing'
+      ? 'We\'re confirming your payment with Stripe. This page opens automatically as soon as it\'s confirmed — usually within a few seconds.'
+      : 'Your payment is still being confirmed. Card payments usually confirm within a minute; bank payments can take a few business days. Check again in a little while — if a card payment still hasn\'t confirmed after an hour, contact 50. support.';
+    if(state === 'processing_slow'){ btnText = 'Check again'; btnAction = recheckActivation; }
+  } else { // 'pay' — an admin, before or between checkout attempts
+    title.textContent = 'Activate your account';
+    lede.innerHTML = tenant + ' needs a one-time ' + escapeHtmlLite(activationPrice()) + ' activation with 50. before you can start sending referrals. You\'ll pay securely through Stripe, and this page opens as soon as your payment is confirmed.';
+    btnText = 'Continue to secure checkout'; btnAction = startCheckout;
+  }
+
+  msg.textContent = msgText;
+  msg.className = msgText ? 'msg show ' + msgKind : 'msg';
+  btn.textContent = btnText;
+  btn.style.display = btnAction ? 'block' : 'none';
+  btn.disabled = false;
+  btn.onclick = btnAction;
+  document.getElementById('gateWho').innerHTML = signedInAsHtml();
+  document.getElementById('loginBox').style.display = 'none';
+  document.getElementById('appArea').style.display = 'none';
+  document.getElementById('gateBox').style.display = 'block';
+}
+
+// Creates (or reuses) the account's activation Checkout Session and goes
+// there. return_url brings the admin back to this same page afterward.
+async function startCheckout(){
+  const btn = document.getElementById('gateBtn');
+  showGate('pay', { message: 'Opening secure checkout…' });
+  btn.disabled = true;
+  try{
+    const result = await apiFetch('/billing/checkout-session', {
+      method: 'POST',
+      body: JSON.stringify({ return_url: window.location.origin + window.location.pathname })
+    });
+    if(result && result.url){ window.location.assign(result.url); return; }
+    if(result && result.status === 'processing'){ showGate('processing'); pollActivation(); return; }
+    throw new Error('Unexpected response');
+  }catch(err){
+    if(err.status === 401){ signOut(); return; }
+    if(err.code === 'already_activated' || err.code === 'billing_not_required'){ await recheckActivation(); return; }
+    showGate('pay', {
+      error: true,
+      message: err.status && err.status < 500 && err.message
+        ? err.message
+        : 'Checkout isn\'t available right now. Try again in a few minutes, or contact 50. support.'
+    });
+  }
+}
+
+// Re-reads GET /api/me every 2s for up to 90s after a return from
+// Checkout, waiting for the webhook-confirmed activation.
+function pollActivation(){
+  stopActivationPolling();
+  const started = Date.now();
+  const tick = async () => {
+    try{
+      await loadCurrentUser();
+      if(!isActivationRequired(currentUser)){ enterApp(); return; }
+    }catch(err){
+      if(err.status === 401){ signOut(); return; }
+    }
+    if(Date.now() - started > 90000){ showGate('processing_slow'); return; }
+    activationPollTimer = setTimeout(tick, 2000);
+  };
+  tick();
+}
+
+async function recheckActivation(){
+  try{
+    await loadCurrentUser();
+  }catch(err){
+    if(err.status === 401){ signOut(); return; }
+  }
+  enterApp();
+}
+
+// Where every successful sign-in (and page load) lands.
+function enterApp(fromCheckout){
+  stopActivationPolling();
+  if(!isActivationRequired(currentUser)){
+    showLoggedIn();
+    renderList();
+    return;
+  }
+  if(currentUser.role !== 'admin'){ showGate('staff'); return; }
+  if(fromCheckout === 'success'){ showGate('processing'); pollActivation(); return; }
+  if(fromCheckout === 'cancelled'){
+    showGate('pay', { message: 'Checkout was cancelled, so nothing was charged. Continue whenever you\'re ready.' });
+    return;
+  }
+  startCheckout();
+}
+
+// A staff endpoint said this account isn't activated (mid-session, e.g.
+// right after an activation was reversed). Re-read who we are and gate.
+let handlingActivationRequired = false;
+async function onActivationRequired(){
+  if(handlingActivationRequired || !getSession()) return;
+  handlingActivationRequired = true;
+  try{
+    await loadCurrentUser();
+    if(isActivationRequired(currentUser)){
+      if(currentUser.role === 'admin') showGate('pay'); else showGate('staff');
+    }
+  }catch(err){
+    if(err.status === 401) signOut();
+  }finally{
+    handlingActivationRequired = false;
+  }
+}
+
 async function init(){
   if(!getSession()){ showLoggedOut(); return; }
   try{
     await loadCurrentUser();
-    showLoggedIn();
-    renderList();
   }catch(err){
     setSession(null);
     showLoggedOut();
+    return;
   }
+  enterApp(takeActivationReturn());
 }
 
 document.getElementById('signOutBtn').addEventListener('click', signOut);
+document.getElementById('gateSignOutBtn').addEventListener('click', signOut);
 
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -480,8 +689,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     await signIn(email, password);
     await loadCurrentUser();
     document.getElementById('loginPassword').value = '';
-    showLoggedIn();
-    renderList();
+    enterApp(takeActivationReturn());
   }catch(err){
     setSession(null);
     msgEl.textContent = err.message || 'Sign-in failed.';
@@ -622,7 +830,7 @@ async function renderList(query){
     input.addEventListener('change', async (e) => {
       if(!e.target.checked) return; // already-paid rows render disabled+checked, nothing to un-check
       const referralId = e.target.dataset.referralId;
-      const confirmed = confirm('Mark this referral as paid? This can\'t be undone.');
+      const confirmed = confirm(markPaidConfirmText());
       if(!confirmed){ e.target.checked = false; return; }
 
       e.target.disabled = true;
@@ -640,16 +848,38 @@ async function renderList(query){
         }
       }catch(err){
         if(err.status === 401){ signOut(); return; }
+        if(err.code === 'activation_required') return; // the activation screen has taken over
         e.target.checked = false;
         e.target.disabled = false;
         if(err.status === 403){
           alert('Your account isn\'t an admin — only admins can mark a referral paid.');
+        } else if(err.code && (err.code.indexOf('referral_fee_') === 0 || err.code === 'billing_not_ready')){
+          // The API's own wording: what happened to the usage fee, and
+          // that the referral was not marked paid. Then the list is
+          // re-read, so it shows where things actually stand (e.g. another
+          // admin's charge for this same referral, still in flight a
+          // moment ago, may have finished).
+          alert(err.message);
+          renderList(document.getElementById('searchBox').value);
         } else {
           alert('Something went wrong marking that paid. Try again.');
         }
       }
     });
   });
+}
+
+// For an account that pays 50.'s usage fee, the confirm quotes the exact
+// charge (GET /api/me's referral_fee — computed by the same function the
+// API charges with). Billing-exempt accounts get the same wording as
+// always.
+function markPaidConfirmText(){
+  const base = 'Mark this referral as paid? This can\'t be undone.';
+  const fee = currentUser && currentUser.referral_fee;
+  if(!fee) return base;
+  return base + '\n\nYour card on file will be charged 50.\'s usage fee of ' +
+    fmtMoney(fee.fee_cents, fee.currency) + ' (' + (fee.rate_bps / 100) + '% of the ' +
+    fmtMoney(fee.payout_cents, fee.currency) + ' in gift cards for this referral).';
 }
 
 document.getElementById('searchBox').addEventListener('input', debounce((e) => renderList(e.target.value), 300));
