@@ -50,7 +50,7 @@ declare
   exempt_slugs constant text[] := array[
     'good-steward-structures',    -- Good Steward Structures
     'north-mountain-structures',  -- North Mountain Structures
-    'fifty-platform'              -- 50. itself
+    '50-platform'                 -- 50. itself
   ];
   missing text[];
   existing text;
@@ -97,7 +97,7 @@ end $$;
 alter table tenants
   add constraint tenants_permanently_billing_exempt
     check (billing_required = false
-           or slug not in ('good-steward-structures', 'north-mountain-structures', 'fifty-platform'));
+           or slug not in ('good-steward-structures', 'north-mountain-structures', '50-platform'));
 
 comment on column tenants.billing_required is 'true (default for every new tenant): staff are blocked from the dealer page and every staff API route until the one-time activation charge succeeds (Stripe webhook-confirmed), and each referral marked rewarded is charged 50.''s usage fee (referral_fee_bps of the total payout). false: no activation gate, no activation charge, no usage fee — set only for Good Steward Structures, North Mountain Structures, and 50. itself, permanently (see tenants_permanently_billing_exempt).';
 comment on constraint tenants_permanently_billing_exempt on tenants is 'Good Steward Structures, North Mountain Structures, and 50. itself are never billed — no activation charge, no referral usage fee. Changing that requires a migration that drops this constraint.';

@@ -380,7 +380,7 @@ const USERS = {
   newStaff: { id: 'a0000000-0000-4000-8000-000000000002', email: 'rep@e2e-new-dealer.test', name: 'Sam Rep', role: 'staff', tenant: 'e2e-new-dealer' },
   gssAdmin: { id: 'a0000000-0000-4000-8000-000000000003', email: 'admin@gss.test', name: 'GSS Admin', role: 'admin', tenant: 'good-steward-structures' },
   nmsAdmin: { id: 'a0000000-0000-4000-8000-000000000004', email: 'admin@nms.test', name: 'NMS Admin', role: 'admin', tenant: 'north-mountain-structures' },
-  fiftyAdmin: { id: 'a0000000-0000-4000-8000-000000000005', email: 'admin@fifty.test', name: '50. Admin', role: 'admin', tenant: 'fifty-platform' },
+  fiftyAdmin: { id: 'a0000000-0000-4000-8000-000000000005', email: 'admin@fifty.test', name: '50. Admin', role: 'admin', tenant: '50-platform' },
   acmeAdmin: { id: 'a0000000-0000-4000-8000-000000000006', email: 'admin@acme.test', name: 'Acme Admin', role: 'admin', tenant: 'acme-sheds' },
   legacyAdmin: { id: 'a0000000-0000-4000-8000-000000000007', email: 'admin@legacy.test', name: 'Legacy Admin', role: 'admin', tenant: 'e2e-legacy-session-dealer' },
 };
@@ -391,7 +391,7 @@ const PRE_MIGRATION_TENANTS = `
   insert into tenants (slug, name) values
     ('good-steward-structures', 'Good Steward Structures'),
     ('north-mountain-structures', 'North Mountain Structures'),
-    ('fifty-platform', '50.'),
+    ('50-platform', '50.'),
     ('acme-sheds', 'Acme Sheds (pre-existing dealer)');`;
 
 let auth;
@@ -527,7 +527,7 @@ async function main() {
   await check('Exactly GSS, NMS and 50. are billing_required = false; the pre-existing dealer is true', async () => {
     const rows = await sql('select slug, billing_required from tenants order by slug');
     const exempt = rows.filter((r) => !r.billing_required).map((r) => r.slug);
-    eq(JSON.stringify(exempt), JSON.stringify(['fifty-platform', 'good-steward-structures', 'north-mountain-structures']), 'exempt slugs');
+    eq(JSON.stringify(exempt), JSON.stringify(['50-platform', 'good-steward-structures', 'north-mountain-structures']), 'exempt slugs');
     eq(rows.find((r) => r.slug === 'acme-sheds').billing_required, true, 'acme-sheds billing_required');
     return rows.map((r) => `${r.slug}=${r.billing_required}`).join(', ');
   });
@@ -545,7 +545,7 @@ async function main() {
     return `new tenant -> true; NMS -> true refused: "${refused}"`;
   });
   await check('Migration aborts (and changes nothing) when an exempt slug matches no tenant', async () => {
-    await bootstrapDatabase(DB_NEG, `insert into tenants (slug, name) values ('good-steward-structures','Good Steward Structures'), ('nms','North Mountain Structures'), ('fifty-platform','50.')`);
+    await bootstrapDatabase(DB_NEG, `insert into tenants (slug, name) values ('good-steward-structures','Good Steward Structures'), ('nms','North Mountain Structures'), ('50-platform','50.')`);
     const neg = await applyNewMigration(DB_NEG);
     assert(!neg.ok, 'migration unexpectedly succeeded with NMS under a different slug');
     const leftover = await withClient(dbUrl(DB_NEG), (c) =>
