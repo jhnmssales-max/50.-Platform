@@ -8,6 +8,7 @@ const meRouter = require('./routes/me');
 const tenantSettingsRouter = require('./routes/tenantSettings');
 const billingRouter = require('./routes/billing');
 const webhooksRouter = require('./routes/webhooks');
+const { describeStripeConfig } = require('./lib/stripe');
 
 const app = express();
 
@@ -55,7 +56,9 @@ app.use((req, res) => {
 // Centralized error handler. Only intentionally-thrown errors (with a
 // .status) get their message sent to the client; anything else is logged
 // server-side and reported generically, so a stray SQL/driver error never
-// leaks internal detail to an API caller.
+// leaks internal detail to an API caller. publicCode (never pg's own
+// .code) is a stable machine-readable reason the dealer page branches on
+// — e.g. 'activation_required' from the activation gate.
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   const status = err.status || 500;
@@ -63,10 +66,15 @@ app.use((err, req, res, next) => {
     console.error(err);
     return res.status(500).json({ error: 'Internal server error' });
   }
-  res.status(status).json({ error: err.message });
+  res.status(status).json({ error: err.message, ...(err.publicCode ? { code: err.publicCode } : {}) });
 });
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`referral-platform-api listening on :${port}`);
+  // Which Stripe mode this process is in, stated outright at boot rather
+  // than inferred later from behavior — see lib/stripe.js's
+  // assertRealStripeConfigured(). Not a startup refusal: billing-exempt
+  // tenants must keep working even while Stripe isn't usable.
+  console.log(describeStripeConfig());
 });

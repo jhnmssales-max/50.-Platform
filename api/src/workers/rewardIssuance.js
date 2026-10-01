@@ -466,7 +466,7 @@ async function fetchReferralBillingInfo(client, referralId, now, { lockForUpdate
        r.id as referral_id, r.tenant_id,
        r.name as friend_name, r.email as friend_email, r.phone as friend_phone,
        c.id as referrer_customer_id, c.name as referrer_name, c.email as referrer_email,
-       t.billing_status, t.stripe_customer_id, t.stripe_payment_method_id,
+       t.billing_required, t.billing_status, t.stripe_customer_id, t.stripe_payment_method_id,
        t.per_referral_charge_cents, t.reward_amount_cents, t.platform_fee_cents,
        t.reward_currency, t.monthly_spend_cap_cents
      from referrals r
@@ -494,6 +494,14 @@ async function fetchReferralBillingInfo(client, referralId, now, { lockForUpdate
         ? 'not currently eligible — already handled, reopened, reward_eligible_at moved, or locked by a concurrent run'
         : 'not currently eligible — already handled, reopened, or reward_eligible_at moved',
     };
+  }
+
+  // Checked first, ahead of billing_status: a billing-exempt tenant (Good
+  // Steward Structures, North Mountain Structures, 50. itself — see the
+  // activation-gate migration) is never charged by this worker either,
+  // whatever its billing_status or saved payment method happen to say.
+  if (row.billing_required === false) {
+    return { eligible: false, tenantId: row.tenant_id, amountCents: row.per_referral_charge_cents, reason: 'tenant is billing-exempt (billing_required = false) — never charged' };
   }
 
   if (row.billing_status !== 'active') {

@@ -7,6 +7,7 @@ const { createOrder } = require('../lib/tremendous');
 const { encryptionKey } = require('../lib/tenantCredentials');
 const { sendEmail } = require('../lib/postmark');
 const { buildPaidNotificationEmail } = require('../lib/paidNotificationEmail');
+const { collectReferralFee } = require('../lib/referralFee');
 
 const router = express.Router();
 
@@ -160,11 +161,58 @@ router.get('/referrals', requireAuth, async (req, res, next) => {
 // status transition, its audit log entry, or a reward, twice — see the
 // guarded UPDATE below for the status, and the claimed-before-calling
 // gift_card_transactions insert below for the reward.
+//
+// For a billing-required tenant, a genuine transition into 'rewarded'
+// also charges 50.'s usage fee (lib/referralFee.js — 30% of the total
+// payout, both cards) — *before* the status changes. If the fee can't be
+// charged, the request fails (402 declined, 409 still processing, 502
+// unconfirmed) and the referral is not marked rewarded, so the
+// paid-notification email and any Tremendous order only follow a
+// collected fee. The fee is charged at most once per referral, ever
+// (moving a referral out of 'rewarded' and back never charges again). A
+// billing-exempt tenant (Good Steward Structures, North Mountain
+// Structures, 50. itself) never reaches Stripe at all — this endpoint
+// behaves for them exactly as it did before the fee existed.
 // ---------------------------------------------------------------------------
 const referralIdSchema = z.string().uuid();
 const patchStatusSchema = z.object({
   status: z.enum(['contacted', 'ordered', 'rewarded', 'declined']),
 });
+
+// Everything that must hold before a status change — run once before the
+// usage fee is charged (so nothing is charged for a change that would be
+// refused anyway) and again inside the transaction that makes the change
+// (the state may have moved in between).
+async function loadStatusChangeTarget(client, userId, referralId) {
+  const ctx = await getCallerContext(client, userId);
+  if (!ctx) throw forbidden('No staff account found for this user');
+
+  // Visible to any staff member in the tenant (referrals_select_same_tenant),
+  // so a 0-row result here means "doesn't exist or isn't yours" — never
+  // "you're not an admin". That distinction is checked explicitly next,
+  // so the error message is honest either way.
+  const { rows: [current] } = await client.query(
+    'select id, status from referrals where id = $1',
+    [referralId]
+  );
+  if (!current) throw notFound('Referral not found');
+
+  if (!ctx.is_admin) throw forbidden('Admin access required to change a referral\'s status');
+
+  // 'closed' has its own dedicated endpoints (POST .../close and
+  // .../reopen below) precisely so status and closed_at/
+  // reward_eligible_at can never disagree — this endpoint refuses to
+  // touch a closed referral at all rather than risk flipping status
+  // out of 'closed' while leaving closed_at (and the 7-day hold it
+  // started) stale. 'closed' was never a valid *target* here either
+  // (see patchStatusSchema below) — this only needs to guard the
+  // *current* status.
+  if (current.status === 'closed') {
+    throw conflict("This referral is closed — use POST /api/referrals/:id/reopen, not this endpoint.");
+  }
+
+  return { ctx, current };
+}
 
 router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
   const parsedId = referralIdSchema.safeParse(req.params.id);
@@ -178,34 +226,18 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
   const referralId = parsedId.data;
   const targetStatus = parsedBody.data.status;
 
+  let fee = null;
   try {
-    const { transition, rewardClaim, paidNotification } = await withUserTransaction(req.userId, async (client) => {
-      const ctx = await getCallerContext(client, req.userId);
-      if (!ctx) throw forbidden('No staff account found for this user');
-
-      // Visible to any staff member in the tenant (referrals_select_same_tenant),
-      // so a 0-row result here means "doesn't exist or isn't yours" — never
-      // "you're not an admin". That distinction is checked explicitly next,
-      // so the error message is honest either way.
-      const { rows: [current] } = await client.query(
-        'select id, status from referrals where id = $1',
-        [referralId]
-      );
-      if (!current) throw notFound('Referral not found');
-
-      if (!ctx.is_admin) throw forbidden('Admin access required to change a referral\'s status');
-
-      // 'closed' has its own dedicated endpoints (POST .../close and
-      // .../reopen below) precisely so status and closed_at/
-      // reward_eligible_at can never disagree — this endpoint refuses to
-      // touch a closed referral at all rather than risk flipping status
-      // out of 'closed' while leaving closed_at (and the 7-day hold it
-      // started) stale. 'closed' was never a valid *target* here either
-      // (see patchStatusSchema below) — this only needs to guard the
-      // *current* status.
-      if (current.status === 'closed') {
-        throw conflict("This referral is closed — use POST /api/referrals/:id/reopen, not this endpoint.");
+    if (targetStatus === 'rewarded') {
+      const pre = await withUserTransaction(req.userId, (client) => loadStatusChangeTarget(client, req.userId, referralId));
+      if (pre.current.status !== 'rewarded' && pre.ctx.billing_required !== false) {
+        const collected = await collectReferralFee({ tenantId: pre.ctx.tenant_id, referralId });
+        if (collected.status === 'succeeded') fee = collected;
       }
+    }
+
+    const { transition, rewardClaim, paidNotification } = await withUserTransaction(req.userId, async (client) => {
+      const { ctx, current } = await loadStatusChangeTarget(client, req.userId, referralId);
 
       let transition;
       if (current.status === targetStatus) {
@@ -333,9 +365,29 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
       }
 
       return { transition, rewardClaim, paidNotification };
+    }).catch((err) => {
+      if (fee && fee.newlyCharged) {
+        // The state moved between the pre-check and this transaction (or
+        // the database failed). The fee stays collected and recorded, and
+        // marking this referral paid again later won't charge it twice —
+        // but a human should know it's sitting there.
+        console.error(
+          `REFERRAL_FEE collected for referral ${referralId} (billing_events ${fee.billingEventId}, ${fee.paymentIntentId}) but marking it rewarded then failed: ${err.message}`
+        );
+      }
+      throw err;
     });
 
     const responseBody = { id: referralId, status: transition.status };
+    if (fee) {
+      responseBody.fee = {
+        amount_cents: fee.feeCents,
+        payout_cents: fee.payoutCents,
+        rate_bps: fee.rateBps,
+        currency: fee.currency,
+        charged_now: fee.newlyCharged,
+      };
+    }
 
     // The Tremendous call itself happens outside the transaction above —
     // never hold a database transaction open across a slow external HTTP

@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { activationState, activationRequiredError } = require('./lib/activation');
 
 if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL is not set — see .env.example');
@@ -80,7 +81,19 @@ async function withPublicTransaction(fn) {
 // charge) precisely because nothing that returns ctx to a caller may
 // ever echo those two fields back — every route builds its own response
 // body from named fields, never by spreading ctx or a raw tenants row.
-async function getCallerContext(client, userId) {
+//
+// Also the enforcement point of the new-dealer activation gate
+// (lib/activation.js): for a billing-required tenant that hasn't
+// completed activation, this throws a 402 (publicCode
+// 'activation_required') instead of returning — so every staff route,
+// including any added later, refuses a not-yet-activated tenant by
+// default, since resolving the caller is the first thing each one does.
+// Only the routes an unactivated tenant genuinely needs pass
+// { allowUnactivatedTenant: true }: GET /api/me (to learn that it's
+// gated, and show its own name/branding while it is) and
+// POST /api/billing/checkout-session (to pay). ctx.activation carries the
+// gate's verdict either way.
+async function getCallerContext(client, userId, { allowUnactivatedTenant = false } = {}) {
   const { rows } = await client.query(
     `select
        u.tenant_id, u.role = 'admin' as is_admin, u.email as user_email,
@@ -90,13 +103,22 @@ async function getCallerContext(client, userId) {
        t.billing_status, t.activation_fee_cents, t.activation_paid_at,
        t.platform_fee_cents, t.per_referral_charge_cents, t.per_card_rate_cents,
        t.monthly_spend_cap_cents, t.payment_method_type,
-       t.stripe_customer_id, t.stripe_payment_method_id
+       t.stripe_customer_id, t.stripe_payment_method_id,
+       t.billing_required, t.activation_livemode, t.activation_checkout_session_id,
+       t.referral_fee_bps
      from users u
      join tenants t on t.id = u.tenant_id
      where u.id = $1`,
     [userId]
   );
-  return rows[0];
+  const ctx = rows[0];
+  if (!ctx) return ctx;
+
+  ctx.activation = activationState(ctx);
+  if (ctx.activation.required && !allowUnactivatedTenant) {
+    throw activationRequiredError(ctx);
+  }
+  return ctx;
 }
 
 // Runs `fn` with the pool's own connecting role — no `SET LOCAL ROLE`

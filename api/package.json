@@ -9,7 +9,9 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "reward-issuance": "node src/workers/runRewardIssuance.js",
-    "reward-issuance:dry-run": "node src/workers/runRewardIssuance.js --dry-run"
+    "reward-issuance:dry-run": "node src/workers/runRewardIssuance.js --dry-run",
+    "e2e:activation-gate": "node scripts/e2e/activation-gate-e2e.js",
+    "e2e:activation-gate:stripe-test": "node scripts/e2e/activation-gate-e2e.js --stripe=test"
   },
   "dependencies": {
     "cors": "^2.8.5",
