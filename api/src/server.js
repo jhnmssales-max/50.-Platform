@@ -8,6 +8,7 @@ const meRouter = require('./routes/me');
 const tenantSettingsRouter = require('./routes/tenantSettings');
 const billingRouter = require('./routes/billing');
 const webhooksRouter = require('./routes/webhooks');
+const sharePreviewRouter = require('./routes/sharePreview');
 const { describeStripeConfig } = require('./lib/stripe');
 
 const app = express();
@@ -41,6 +42,9 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 // happen to be hosted, so they need no extra deployment config or
 // coordination with FRONTEND_BASE_URL.
 app.use('/billing', express.static(path.join(__dirname, '..', 'public', 'billing')));
+
+// Link-preview (Open Graph) pages for share links; see routes/sharePreview.js.
+app.use(sharePreviewRouter);
 
 app.use('/api', customersRouter);
 app.use('/api', referralsRouter);

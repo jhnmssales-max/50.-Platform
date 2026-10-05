@@ -219,7 +219,7 @@ document.getElementById('shareBtn').addEventListener('click', async ()=>{
   btn.disabled = true;
   try{
     const share = await apiFetch('/links/' + encodeURIComponent(currentCode) + '/share', { method: 'POST' });
-    const fullLink = window.location.origin + '/fifty-template-lead.html?ref=' + encodeURIComponent(share.code);
+    const fullLink = window.location.origin + '/r/' + encodeURIComponent(share.code);
 
     document.getElementById('shareLinkOut').textContent = fullLink;
     document.getElementById('shareResult').classList.add('show');

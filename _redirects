@@ -10,3 +10,8 @@
 # raw .html filename. Kept as a 200 rewrite (not a redirect) so
 # go.referwith50.com/login is the URL people actually see and bookmark.
 /login  /fifty-template-dealer.html  200
+
+# Share links (/r/<code>) are served by the API so link-preview crawlers
+# (Facebook, iMessage, ...) get tenant-specific Open Graph tags; visitors
+# are redirected on to the lead page. See api/src/routes/sharePreview.js.
+/r/*  https://five0-platform.onrender.com/r/:splat  200
