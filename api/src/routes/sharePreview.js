@@ -95,8 +95,13 @@ router.get('/r/:code', resolveLinkLimiter, async (req, res, next) => {
     const description = first
       ? `${first} thought you'd like ${name} and wanted to pass along a personal recommendation. Tap to learn more.`
       : `A friend thought you'd like ${name} and wanted to pass along a personal recommendation. Tap to learn more.`;
+    // ogImageUrl (optional, in tenants.branding) is a share-card image sized for
+    // link previews (Facebook wants at least 200x200, ideally 1200x630); small
+    // square logos get rejected, so it takes priority over logoUrl.
     const image =
-      absolute(branding.logoUrl, base) || absolute('assets/50-platform-logo.png', base);
+      absolute(branding.ogImageUrl, base) ||
+      absolute(branding.logoUrl, base) ||
+      absolute('assets/50-platform-logo.png', base);
 
     res
       .set('Cache-Control', 'public, max-age=300')
