@@ -11,7 +11,10 @@ const router = express.Router();
 // load, so a crawler only ever saw the generic "50." tags. This route
 // returns a tiny page with the tenant's own name/logo/wording in the head
 // (what crawlers read) and immediately sends real visitors on to the
-// lead page. Share links point here (via go.referwith50.com/r/<code>,
+// lead page. Deliberately NO <meta http-equiv="refresh">: Facebook follows
+// it and then reads the generic lead page's tags instead of these. The
+// redirect is JS-only, which real browsers run and crawlers don't.
+// Share links point here (via go.referwith50.com/r/<code>,
 // see ../../_redirects) instead of straight at the static lead page.
 
 const codeSchema = z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/);
@@ -60,7 +63,6 @@ ${imageTags}
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="${esc(title)}">
 <meta name="twitter:description" content="${esc(description)}">
-<meta http-equiv="refresh" content="0;url=${esc(redirectUrl)}">
 <link rel="canonical" href="${esc(pageUrl)}">
 </head>
 <body>
