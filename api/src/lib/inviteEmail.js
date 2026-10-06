@@ -3,41 +3,43 @@
 // inline-styled HTML (email clients don't reliably support much more)
 // plus a text fallback.
 //
-// Copy is fixed, not templated off a tenant's own reward_amount_cents —
-// it says "$50 Amazon gift card" literally, matching the exact wording
-// asked for. routes/customers.js's caller still passes
-// rewardAmountCents/rewardCurrency alongside these three; they're simply
-// ignored here now rather than removed from the call site, since neither
-// is otherwise reused.
+// Copy is the program message Joseph wrote ("When you recommend ... to a
+// friend ..."). The reward amount comes from the tenant's own
+// reward_amount_cents (falls back to $50 if it isn't passed).
 // buttonColor is the tenant's own branding.primaryColor, so each business's
 // invite button is in its own color rather than one tenant's green.
-function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor }) {
+function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency }) {
   const btnColor = /^#[0-9a-fA-F]{3,8}$/.test(buttonColor || '') ? buttonColor : '#1C2B33';
   const firstName = (customerName || '').trim().split(' ')[0] || 'there';
 
+  const amount = formatAmount(rewardAmountCents, rewardCurrency);
+
   const subject = `${tenantName} wants to say thank you.`;
 
-  const textBody = `Hi ${firstName}, ${tenantName} wants to say thank you.
+  const textBody = `Hi ${firstName},
 
-If you know a friend or family member who's in need of our services, we'd appreciate your recommendation. Share your personal link below. When your friend places an order, you'll both get a $50 Amazon gift card emailed to you — no strings attached.
+When you recommend ${tenantName} to a friend, you're trusting us to take good care of someone you know. That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.
 
-Your link never expires and can be shared as many times as you like. Text it, post it, or hand it out to as many friends and family as you'd like.
+Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building through that link, you each receive a ${amount} Amazon E-Gift Card.
 
+Thank you for supporting our business and giving us the opportunity to serve the people you care about.
+
+Your personal referral link (it never expires, share it as often as you like):
 ${inviteUrl}`;
 
   const htmlBody = `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;color:#1B1B1B;">
+  <p style="font-size:15px;line-height:1.6;">Hi ${escapeHtml(firstName)},</p>
   <p style="font-size:15px;line-height:1.6;">
-    Hi ${escapeHtml(firstName)}, <strong>${escapeHtml(tenantName)}</strong> wants to say thank you.
+    When you recommend <strong>${escapeHtml(tenantName)}</strong> to a friend, you're trusting us to take good care of someone you know.
+    That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.
   </p>
   <p style="font-size:15px;line-height:1.6;">
-    If you know a friend or family member who's in need of our services, we'd appreciate your recommendation.
-    Share your personal link below. When your friend places an order, you'll both get a
-    <strong>$50 Amazon gift card</strong> emailed to you — no strings attached.
+    Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building
+    through that link, you each receive a <strong>${escapeHtml(amount)} Amazon E-Gift Card</strong>.
   </p>
   <p style="font-size:15px;line-height:1.6;">
-    Your link never expires and can be shared as many times as you like. Text it, post it, or hand it
-    out to as many friends and family as you'd like.
+    Thank you for supporting our business and giving us the opportunity to serve the people you care about.
   </p>
   <p style="margin:28px 0;">
     <a href="${inviteUrl}" style="background:${btnColor};color:#FFFFFF;text-decoration:none;
@@ -51,6 +53,14 @@ ${inviteUrl}`;
 </div>`;
 
   return { subject, htmlBody, textBody };
+}
+
+function formatAmount(cents, currency) {
+  const n = Number(cents);
+  if (!Number.isFinite(n) || n <= 0) return '$50';
+  const whole = n % 100 === 0;
+  const v = whole ? String(n / 100) : (n / 100).toFixed(2);
+  return (currency || 'USD').toUpperCase() === 'USD' ? `$${v}` : `${v} ${currency}`;
 }
 
 function escapeHtml(s) {
