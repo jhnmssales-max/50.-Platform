@@ -21,6 +21,18 @@ function buildInviteUrl(code, tenantDomain) {
   return tenantDomain ? `https://${tenantDomain}/50/${code}` : null;
 }
 
+// Email clients need an absolute https image URL. A root-relative logoUrl
+// (the branding shape allows one) is resolved against FRONTEND_BASE_URL.
+function resolveLogoUrl(url) {
+  if (!url) return null;
+  try {
+    const base = process.env.FRONTEND_BASE_URL;
+    return new URL(url, base ? base.replace(/\/$/, '') + '/' : undefined).toString();
+  } catch (_) {
+    return null;
+  }
+}
+
 // Auth here is a bearer token the calling page must already possess and
 // attach itself — never a cookie the browser sends automatically — so an
 // open CORS policy doesn't add a CSRF-style risk. It's what lets a
@@ -126,6 +138,7 @@ router.post('/customers', requireAuth, async (req, res, next) => {
         customerName: result.customer.name,
         inviteUrl,
         buttonColor: (result.ctx.tenant_branding || {}).primaryColor,
+        logoUrl: resolveLogoUrl((result.ctx.tenant_branding || {}).logoUrl),
       });
 
       // Replies go to the staff member who sent the invite (their own
