@@ -8,11 +8,18 @@
 // reward_amount_cents (falls back to $50 if it isn't passed).
 // buttonColor is the tenant's own branding.primaryColor, so each business's
 // invite button is in its own color rather than one tenant's green.
-function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency }) {
+function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency, logoUrl }) {
   const btnColor = /^#[0-9a-fA-F]{3,8}$/.test(buttonColor || '') ? buttonColor : '#1C2B33';
   const firstName = (customerName || '').trim().split(' ')[0] || 'there';
 
   const amount = formatAmount(rewardAmountCents, rewardCurrency);
+
+  // Only an absolute https URL is used: email clients can't resolve a
+  // relative path, and http images get blocked or flagged.
+  const logo = /^https:\/\/[^\s"'<>]+$/i.test(logoUrl || '') ? logoUrl : null;
+  const logoHtml = logo
+    ? `<p style="margin:0 0 20px;"><img src="${escapeHtml(logo)}" alt="${escapeHtml(tenantName)}" width="160" style="display:block;width:160px;max-width:60%;height:auto;border:0;"></p>`
+    : '';
 
   const subject = `${tenantName} wants to say thank you.`;
 
@@ -29,6 +36,7 @@ ${inviteUrl}`;
 
   const htmlBody = `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;color:#1B1B1B;">
+  ${logoHtml}
   <p style="font-size:15px;line-height:1.6;">Hi ${escapeHtml(firstName)},</p>
   <p style="font-size:15px;line-height:1.6;">
     When you recommend <strong>${escapeHtml(tenantName)}</strong> to a friend, you're trusting us to take good care of someone you know.
