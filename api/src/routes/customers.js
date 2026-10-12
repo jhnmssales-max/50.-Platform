@@ -139,6 +139,7 @@ router.post('/customers', requireAuth, async (req, res, next) => {
         inviteUrl,
         buttonColor: (result.ctx.tenant_branding || {}).primaryColor,
         logoUrl: resolveLogoUrl((result.ctx.tenant_branding || {}).logoUrl),
+        offerHow: ((result.ctx.tenant_branding || {}).copy || {}).offerHow,
       });
 
       // Replies go to the staff member who sent the invite (their own

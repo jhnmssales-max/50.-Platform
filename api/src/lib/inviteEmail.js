@@ -8,7 +8,13 @@
 // reward_amount_cents (falls back to $50 if it isn't passed).
 // buttonColor is the tenant's own branding.primaryColor, so each business's
 // invite button is in its own color rather than one tenant's green.
-function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency, logoUrl }) {
+// Shed-dealer wording, used unless the tenant sets branding.copy.offerHow
+// ({reward} = the reward amount; **...** = bold in the HTML version). Keep this
+// identical to DEFAULT_COPY.offerHow in tenant-branding.js.
+const DEFAULT_OFFER_HOW =
+  "Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building through that link, you each receive a **{reward} Amazon E-Gift Card**.";
+
+function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency, logoUrl, offerHow }) {
   const btnColor = /^#[0-9a-fA-F]{3,8}$/.test(buttonColor || '') ? buttonColor : '#1C2B33';
   const firstName = (customerName || '').trim().split(' ')[0] || 'there';
 
@@ -23,11 +29,16 @@ function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, re
 
   const subject = `${tenantName} wants to say thank you.`;
 
+  const offerTemplate = typeof offerHow === 'string' && offerHow.trim() ? offerHow.trim() : DEFAULT_OFFER_HOW;
+  const withAmount = offerTemplate.replace(/\{reward\}/g, amount).replace(/\{name\}/g, tenantName);
+  const offerText = withAmount.replace(/\*\*/g, '');
+  const offerHtml = escapeHtml(withAmount).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
   const textBody = `Hi ${firstName},
 
 When you recommend ${tenantName} to a friend, you're trusting us to take good care of someone you know. That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.
 
-Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building through that link, you each receive a ${amount} Amazon E-Gift Card.
+${offerText}
 
 Thank you for supporting our business and giving us the opportunity to serve the people you care about.
 
@@ -43,8 +54,7 @@ ${inviteUrl}`;
     That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.
   </p>
   <p style="font-size:15px;line-height:1.6;">
-    Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building
-    through that link, you each receive a <strong>${escapeHtml(amount)} Amazon E-Gift Card</strong>.
+    ${offerHtml}
   </p>
   <p style="font-size:15px;line-height:1.6;">
     Thank you for supporting our business and giving us the opportunity to serve the people you care about.

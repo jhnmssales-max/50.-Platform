@@ -24,8 +24,27 @@
     logoUrl: "assets/50-platform-logo.png",
     rewardAmountCents: 5000,
     rewardCurrency: "USD",
-    contactEmail: null
+    contactEmail: null,
+    copy: null // filled in just below, once DEFAULT_COPY is defined
   };
+
+  // Industry wording shown to customers and referred friends. Every key can
+  // be overridden per tenant in tenants.branding.copy (strings only; {reward}
+  // and {name} are filled in; **bold** is honored in the invite email). The
+  // defaults below are the original shed-dealer wording, so a tenant that sets
+  // nothing looks exactly as it always did.
+  var DEFAULT_COPY = {
+    offerHow: "Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building through that link, you each receive a {reward} Amazon E-Gift Card.",
+    shareTitle: "Get {reward} when you make a purchase from {name}",
+    shareText: "I referred you \u2014 make your purchase through my link and we both get {reward}.",
+    friendAction: "place your order",
+    afterPurchase: "made your purchase",
+    eligibility: "have placed an order with us",
+    qualifyingEvent: "places and completes an order for a building",
+    rewardCondition: "confirms the referred order has actually been placed and a qualifying deposit received. Cancelled, refunded, or unfulfilled orders do not qualify for a reward.",
+    inquiryNoun: "building inquiry"
+  };
+  DEFAULT.copy = DEFAULT_COPY;
 
   var current = DEFAULT;
 
@@ -33,6 +52,14 @@
     var whole = cents % 100 === 0;
     var n = whole ? String(cents / 100) : (cents / 100).toFixed(2);
     return (currency || "USD").toUpperCase() === "USD" ? "$" + n : n + " " + currency;
+  }
+
+  function mergeCopy(over){
+    var out = {};
+    Object.keys(DEFAULT_COPY).forEach(function(k){
+      out[k] = (over && typeof over[k] === 'string' && over[k].trim()) ? over[k].trim() : DEFAULT_COPY[k];
+    });
+    return out;
   }
 
   function fromLinkTenant(tenant){
@@ -51,8 +78,16 @@
       logoUrl: t.logoUrl || DEFAULT.logoUrl,
       rewardAmountCents: (tenant && tenant.reward_amount_cents) || DEFAULT.rewardAmountCents,
       rewardCurrency: (tenant && tenant.reward_currency) || DEFAULT.rewardCurrency,
-      contactEmail: t.contactEmail || null
+      contactEmail: t.contactEmail || null,
+      copy: mergeCopy(t.copy)
     };
+  }
+
+  function fill(text, b){
+    return String(text)
+      .replace(/\*\*/g, '')
+      .replace(/\{reward\}/g, formatAmount(b.rewardAmountCents, b.rewardCurrency))
+      .replace(/\{name\}/g, b.name);
   }
 
   function apply(b){
@@ -66,6 +101,11 @@
     r.setProperty('--bg', b.colors.bg);
     document.querySelectorAll('[data-tenant-logo]').forEach(function(el){ el.src = b.logoUrl; el.alt = b.name; });
     document.querySelectorAll('[data-tenant-name],[data-tenant-name-inline]').forEach(function(el){ el.textContent = b.name; });
+    document.querySelectorAll('[data-copy]').forEach(function(el){
+      var key = el.getAttribute('data-copy');
+      var text = b.copy && b.copy[key];
+      if(text) el.textContent = fill(text, b);
+    });
     var amount = formatAmount(b.rewardAmountCents, b.rewardCurrency);
     document.querySelectorAll('[data-reward-amount]').forEach(function(el){ el.textContent = amount; });
     document.querySelectorAll('[data-contact-email]').forEach(function(el){
@@ -105,6 +145,7 @@
         .then(function(link){ TenantBranding.applyFromLink(link); return link; });
     },
     name: function(){ return current.name; },
+    copy: function(key){ return fill(current.copy[key], current); },
     rewardText: function(){ return formatAmount(current.rewardAmountCents, current.rewardCurrency); }
   };
 
