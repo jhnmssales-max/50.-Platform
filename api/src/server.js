@@ -10,6 +10,7 @@ const billingRouter = require('./routes/billing');
 const webhooksRouter = require('./routes/webhooks');
 const sharePreviewRouter = require('./routes/sharePreview');
 const { describeStripeConfig } = require('./lib/stripe');
+const { startRenewalScheduler } = require('./workers/renewalScheduler');
 
 const app = express();
 
@@ -81,4 +82,6 @@ app.listen(port, () => {
   // assertRealStripeConfigured(). Not a startup refusal: billing-exempt
   // tenants must keep working even while Stripe isn't usable.
   console.log(describeStripeConfig());
+  // The yearly 50. fee — see workers/renewalScheduler.js.
+  startRenewalScheduler();
 });
