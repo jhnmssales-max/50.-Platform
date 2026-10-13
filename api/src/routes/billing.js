@@ -204,6 +204,7 @@ router.post('/billing/checkout-session', requireAuth, async (req, res, next) => 
       currency: ctx.reward_currency,
       paymentMethodType: ctx.payment_method_type,
       existingCustomerId,
+      annualFeeCents: ctx.annual_fee_cents,
       successUrl,
       cancelUrl,
     };

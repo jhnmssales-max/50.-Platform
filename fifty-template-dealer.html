@@ -551,7 +551,11 @@ function showGate(state, options={}){
     if(state === 'processing_slow'){ btnText = 'Check again'; btnAction = recheckActivation; }
   } else { // 'pay' — an admin, before or between checkout attempts
     title.textContent = 'Activate your account';
-    lede.innerHTML = tenant + ' needs a one-time ' + escapeHtmlLite(activationPrice()) + ' activation with 50. before you can start sending referrals. You\'ll pay securely through Stripe, and this page opens as soon as your payment is confirmed.';
+    const a = currentUser.activation || {};
+    const yearly = a.annual_fee_cents
+      ? ' It includes your first year; after that, ' + escapeHtmlLite(fmtMoney(a.annual_fee_cents, a.currency)) + ' per year is charged to the same card (we email you first).'
+      : '';
+    lede.innerHTML = tenant + ' needs a one-time ' + escapeHtmlLite(activationPrice()) + ' activation with 50. before you can start sending referrals.' + yearly + ' You\'ll pay securely through Stripe, and this page opens as soon as your payment is confirmed.';
     btnText = 'Continue to secure checkout'; btnAction = startCheckout;
   }
 

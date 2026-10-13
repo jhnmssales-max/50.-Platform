@@ -84,8 +84,17 @@ router.get('/me', requireAuth, async (req, res, next) => {
       activation: {
         required: ctx.activation.required,
         fee_cents: ctx.activation.required ? ctx.activation_fee_cents : null,
+        // What the dealer page tells an admin before checkout: the
+        // activation covers year one, then this per year. 0/null = no
+        // yearly fee to mention.
+        annual_fee_cents: ctx.activation.required && ctx.annual_fee_cents > 0 ? ctx.annual_fee_cents : null,
         currency: ctx.reward_currency,
       },
+      // When the next yearly fee is charged — shown to admins as "Renews
+      // on …". Null for a billing-exempt or not-yet-activated tenant.
+      annual_renewal: billingRequired && ctx.renewal_due_at && ctx.annual_fee_cents > 0
+        ? { fee_cents: ctx.annual_fee_cents, due_at: ctx.renewal_due_at, currency: ctx.reward_currency }
+        : null,
       referral_fee: fee
         ? {
             rate_bps: ctx.referral_fee_bps,

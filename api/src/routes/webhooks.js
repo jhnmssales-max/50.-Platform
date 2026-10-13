@@ -170,7 +170,13 @@ async function activateTenant({ tenantId, eventId, paymentIntentId, paymentMetho
            stripe_payment_method_id = $2,
            billing_status = 'active',
            activation_paid_at = now(),
-           activation_livemode = $4
+           activation_livemode = $4,
+           -- The activation covers the first 12 months; the annual fee
+           -- (workers/annualRenewal.js) is first due then. Only real money
+           -- starts that clock — a test-mode activation leaves it null —
+           -- and only for a billable tenant (an exempt one can't carry a
+           -- renewal date: tenants_exempt_has_no_renewal).
+           renewal_due_at = case when $4 and billing_required then now() + interval '12 months' else renewal_due_at end
        where id = $3
          and (activation_paid_at is null or ($4 and activation_livemode is distinct from true))`,
       [customerId, paymentMethodId, tenantId, livemode === true]
@@ -421,6 +427,15 @@ async function handlePaymentIntentPaymentFailed(paymentIntent, eventId) {
     // error: once this is a real Stripe account, PaymentIntents unrelated
     // to this integration could exist on it for other reasons.
     console.log(`payment_intent.payment_failed with no tenant_id metadata (${paymentIntent.id}) — ignored`);
+    return;
+  }
+  // A declined annual renewal is handled by its own worker
+  // (workers/annualRenewal.js): the attempt is recorded on its own
+  // 'annual_renewal' row, the dealer is emailed, and it's retried a few
+  // times before anyone is shut off. Suspending the tenant on the first
+  // decline would skip all of that.
+  if (paymentIntent.metadata && paymentIntent.metadata.kind === 'annual_renewal') {
+    console.log(`payment_intent.payment_failed for annual renewal ${paymentIntent.id} (tenant ${tenantId}) — handled by the renewal worker, billing_status left alone`);
     return;
   }
   // Stage 4's per-referral reward PaymentIntents and the referral usage
