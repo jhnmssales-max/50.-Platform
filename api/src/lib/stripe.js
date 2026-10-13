@@ -239,18 +239,30 @@ async function createCheckoutSession({
   currency,
   paymentMethodType,
   existingCustomerId,
+  annualFeeCents,
   successUrl,
   cancelUrl,
   idempotencyKey,
 }) {
+  const cur = (currency || 'usd').toLowerCase();
+  const hasAnnualFee = Number.isInteger(annualFeeCents) && annualFeeCents > 0;
+  // Said on the payment page itself, right above the Pay button, so the
+  // yearly fee is never a surprise: the activation covers year one, and
+  // the same card is charged each year after.
+  const annualFeeNotice = hasAnnualFee
+    ? `Includes your first year of 50. After that, ${new Intl.NumberFormat('en-US', { style: 'currency', currency: cur.toUpperCase() }).format(annualFeeCents / 100)} per year is charged to this ${paymentMethodType === 'us_bank_account' ? 'bank account' : 'card'}, starting 12 months from today. We email you before each renewal.`
+    : undefined;
   return stripeRequest('/checkout/sessions', {
     mode: 'payment',
     payment_method_types: [paymentMethodType],
     line_items: [
       {
         price_data: {
-          currency: (currency || 'usd').toLowerCase(),
-          product_data: { name: `${tenantName} — 50. Platform activation` },
+          currency: cur,
+          product_data: {
+            name: `${tenantName} — 50. Platform activation`,
+            description: hasAnnualFee ? 'One-time activation. Includes your first year.' : undefined,
+          },
           unit_amount: amountCents,
         },
         quantity: 1,
@@ -268,6 +280,7 @@ async function createCheckoutSession({
     client_reference_id: tenantId,
     customer: existingCustomerId || undefined,
     customer_creation: existingCustomerId ? undefined : 'always',
+    custom_text: annualFeeNotice ? { submit: { message: annualFeeNotice } } : undefined,
     success_url: successUrl,
     cancel_url: cancelUrl,
   }, idempotencyKey);

@@ -105,7 +105,7 @@ async function getCallerContext(client, userId, { allowUnactivatedTenant = false
        t.monthly_spend_cap_cents, t.payment_method_type,
        t.stripe_customer_id, t.stripe_payment_method_id,
        t.billing_required, t.activation_livemode, t.activation_checkout_session_id,
-       t.referral_fee_bps
+       t.referral_fee_bps, t.annual_fee_cents, t.renewal_due_at
      from users u
      join tenants t on t.id = u.tenant_id
      where u.id = $1`,

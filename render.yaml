@@ -10,7 +10,11 @@
 #     creating a duplicate.
 #   - reward-issuance-worker (cron): Stage 4's reward-issuance worker
 #     (api/src/workers/runRewardIssuance.js), run on a schedule instead of
-#     on request. See api/README.md's "How the reward-issuance worker
+#     on request. The same hourly job also runs the annual-renewal worker
+#     (api/src/workers/runAnnualRenewal.js — the yearly 50. fee, see
+#     api/README.md's "Annual renewal fee") right after it, via
+#     `npm run scheduled-jobs`, so it needs no service or environment
+#     variables of its own. See api/README.md's "How the reward-issuance worker
 #     actually works" for what it does, and the operational safety rails
 #     built in before this cron job existed — --dry-run, the required
 #     REWARD_CYCLE_MAX_CENTS ceiling, the advisory-lock concurrency guard,
@@ -48,7 +52,7 @@ services:
     branch: main
     rootDir: api
     buildCommand: npm install
-    startCommand: npm run reward-issuance
+    startCommand: npm run scheduled-jobs
     # Hourly, on the hour — a starting point, not a fixed requirement.
     # The 7-day reward hold means nothing here is time-critical to the
     # minute; adjust once real spend volume makes a different cadence

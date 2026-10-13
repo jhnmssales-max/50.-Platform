@@ -153,7 +153,7 @@ async function bootstrapDatabase(name, seedSql) {
   await withClient(dbUrl(name), async (c) => {
     await c.query(fs.readFileSync(path.join(__dirname, 'supabase-stand-in.sql'), 'utf8'));
     for (const file of migrationFiles()) {
-      if (file === NEW_MIGRATION) continue;
+      if (file >= NEW_MIGRATION) continue; // the new one, and anything built on top of it
       await c.query(fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8'));
     }
     if (seedSql) await c.query(seedSql);
@@ -164,6 +164,11 @@ async function applyNewMigration(name) {
   return withClient(dbUrl(name), async (c, notices) => {
     try {
       await c.query(fs.readFileSync(path.join(MIGRATIONS_DIR, NEW_MIGRATION), 'utf8'));
+      // Migrations written after it (the annual-renewal one, ...) apply on
+      // top, in order, exactly as they would in production.
+      for (const file of migrationFiles()) {
+        if (file > NEW_MIGRATION) await c.query(fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8'));
+      }
       return { ok: true, notices };
     } catch (err) {
       await c.query('rollback').catch(() => {});
@@ -417,7 +422,8 @@ function tokenFor(user) {
 async function tenantRow(slug) {
   const [row] = await sql(
     `select id, billing_required, billing_status, activation_paid_at, activation_livemode, stripe_customer_id,
-            stripe_payment_method_id, activation_checkout_session_id, referral_fee_bps, reward_amount_cents
+            stripe_payment_method_id, activation_checkout_session_id, referral_fee_bps, reward_amount_cents,
+            renewal_due_at, annual_fee_cents
      from tenants where slug = $1`,
     [slug]
   );
@@ -833,6 +839,11 @@ async function main() {
       }
       return `activation_paid_at=${activated.activation_paid_at.toISOString()} customer=${activated.stripe_customer_id} payment_method=${activated.stripe_payment_method_id}; billing_events: activation_charge 50000 succeeded livemode=false (${events[0].stripe_payment_intent_id}, ${events[0].stripe_event_id})`;
     });
+    await check('Annual renewal: a test-mode activation does not start the 12-month clock (renewal_due_at stays null); annual fee defaults to $100', async () => {
+      eq(activated.renewal_due_at, null, 'renewal_due_at after a test-mode activation');
+      eq(activated.annual_fee_cents, 10000, 'annual_fee_cents default');
+      return 'renewal_due_at null; annual_fee_cents 10000';
+    });
     await check('Unlocked for every user of the tenant: API 200s for admin and staff; staff page opens on "Check again"', async () => {
       for (const user of [USERS.newAdmin, USERS.newStaff]) {
         const r = await api('GET', '/api/referrals', { token: tokenFor(user) });
@@ -930,6 +941,27 @@ async function main() {
         eq(row.activation_livemode, true, 'activation_livemode');
         eq(row.stripe_customer_id, pi.customer, 'stripe_customer_id replaced with the live one');
         return `activation_livemode false -> true; customer now ${row.stripe_customer_id}`;
+      });
+      await check('Annual renewal: that live payment starts the clock — renewal_due_at = payment + 12 months; a failed renewal charge never suspends billing', async () => {
+        const legacy = tenants['e2e-legacy-session-dealer'].id;
+        const row = await tenantRow('e2e-legacy-session-dealer');
+        assert(row.renewal_due_at, 'renewal_due_at not set by the live activation');
+        const [{ months }] = await sql(
+          `select round(extract(epoch from (renewal_due_at - activation_paid_at)) / 86400 / 30.4375)::int as months from tenants where id = $1`,
+          [legacy]
+        );
+        eq(months, 12, 'months between activation and first renewal');
+        const [{ ok }] = await sql(`select (renewal_due_at = activation_paid_at + interval '12 months') as ok from tenants where id = $1`, [legacy]);
+        assert(ok, 'renewal_due_at is not exactly activation_paid_at + 12 months');
+        const r = await standIn('POST', '/__control/send-event', {
+          type: 'payment_intent.payment_failed',
+          object: { id: 'pi_test_renewal_declined', object: 'payment_intent', amount: 10000, metadata: { tenant_id: legacy, kind: 'annual_renewal' }, last_payment_error: { message: 'declined' }, livemode: false },
+        });
+        eq(r.status, 200, 'webhook status');
+        eq((await tenantRow('e2e-legacy-session-dealer')).billing_status, 'active', 'billing_status after a declined renewal');
+        const failedRows = await sql(`select count(*)::int as n from billing_events where tenant_id = $1 and event_type = 'payment_failed'`, [legacy]);
+        eq(failedRows[0].n, 0, 'payment_failed rows for the renewal decline');
+        return 'renewal_due_at = activation_paid_at + 12 months exactly; declined renewal PaymentIntent -> 200, billing_status still active, no payment_failed row';
       });
       await check('A second, different activation payment is flagged loudly for refund', async () => {
         const pi = await standIn('POST', '/__control/payment-intent', { with_customer: true, metadata: { kind: 'activation', tenant_id: newTenantId } });
