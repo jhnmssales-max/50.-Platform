@@ -14,6 +14,7 @@
 // RENEWAL_SCHEDULER=on forces it on, RENEWAL_SCHEDULER=off forces it off.
 const { runAnnualRenewalCycle } = require('./annualRenewal');
 const { runBillingEmailCycle } = require('./billingEmails');
+const { runRepEarningsCycle } = require('./repEarnings');
 
 const INTERVAL_MS = 60 * 60 * 1000;
 const FIRST_RUN_DELAY_MS = 2 * 60 * 1000;
@@ -37,6 +38,12 @@ async function tick() {
     await runBillingEmailCycle();
   } catch (err) {
     console.error('BILLING_EMAILS scheduled cycle failed:', err.message);
+  }
+  // Sales-rep earnings from the payments that cleared (workers/repEarnings.js).
+  try {
+    await runRepEarningsCycle();
+  } catch (err) {
+    console.error('REP_EARNINGS scheduled cycle failed:', err.message);
   }
 }
 

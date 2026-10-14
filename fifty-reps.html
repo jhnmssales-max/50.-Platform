@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>50. Reps</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1F4D36; --primary-dark:#2D6A4F; --secondary:#40916C;
+    --accent:#8B5E3C; --bg:#F8F5F0; --charcoal:#1B1B1B; --muted:#6B6A63;
+    --line:#E4DED3; --card:#FFFFFF; --danger:#A12B2B; --ok:#1F6B45; --warn-bg:#FFF4D6;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:'Inter',system-ui,sans-serif;color:var(--charcoal);background:var(--bg);font-size:15px;line-height:1.45;}
+  h1,h2,h3{font-family:'Fraunces',serif;font-weight:600;color:var(--primary);margin:0;}
+  h2{font-size:21px;} h3{font-size:17px;}
+  button,input,select,textarea{font:inherit;color:inherit;}
+  .hide{display:none!important;}
+  .muted{color:var(--muted);font-size:13px;}
+  .num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;}
+
+  /* sign-in */
+  #loginBox{max-width:380px;margin:12vh auto 0;padding:0 16px;}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;}
+  .brand{display:flex;align-items:baseline;gap:10px;margin-bottom:14px;}
+  .brand .mark{font-family:'Fraunces',serif;font-size:30px;font-weight:600;color:var(--primary);}
+  .brand .tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:700;}
+  label{display:block;font-size:13px;font-weight:600;margin:12px 0 4px;}
+  input,select,textarea{width:100%;padding:9px 11px;border:1px solid #CFC8BA;border-radius:8px;background:#fff;}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--secondary);outline-offset:1px;}
+  .btn{display:inline-block;border:0;border-radius:8px;padding:9px 16px;font-weight:600;cursor:pointer;background:var(--primary);color:#fff;}
+  .btn:hover{background:var(--primary-dark);}
+  .btn.secondary{background:#fff;color:var(--primary);border:1px solid var(--primary);}
+  .btn.small{padding:5px 10px;font-size:13px;}
+  .btn.danger{background:#fff;color:var(--danger);border:1px solid var(--danger);}
+  .btn:disabled{opacity:.55;cursor:default;}
+  .msg{margin-top:12px;padding:9px 12px;border-radius:8px;font-size:14px;display:none;}
+  .msg.show{display:block;} .msg.err{background:#FBE4E4;color:var(--danger);} .msg.okmsg{background:#E3F3EA;color:var(--ok);}
+
+  /* app */
+  header.top{background:var(--primary);color:#fff;padding:12px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
+  header.top .mark{font-family:'Fraunces',serif;font-size:24px;font-weight:600;}
+  header.top .who{margin-left:auto;font-size:13px;opacity:.92;}
+  header.top button{background:transparent;border:1px solid rgba(255,255,255,.55);color:#fff;border-radius:8px;padding:5px 10px;cursor:pointer;}
+  nav.tabs{display:flex;gap:4px;padding:10px 16px 0;border-bottom:1px solid var(--line);background:var(--card);overflow-x:auto;}
+  nav.tabs button{border:0;background:none;padding:10px 16px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;}
+  nav.tabs button.on{color:var(--primary);border-bottom-color:var(--primary);}
+  main{max-width:1080px;margin:0 auto;padding:18px 16px 60px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row > *{flex:1 1 180px;min-width:0;}
+  .head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:6px 0 12px;}
+  .tablewrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;}
+  table{border-collapse:collapse;width:100%;min-width:640px;}
+  th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  td{padding:10px 12px;border-bottom:1px solid #F0EBE1;vertical-align:middle;}
+  tr:last-child td{border-bottom:0;}
+  td select{padding:6px 8px;min-width:140px;}
+  .pill{display:inline-block;font-size:12px;font-weight:600;border-radius:99px;padding:2px 9px;background:#EDE8DD;}
+  .pill.open{background:#E6F0FA;color:#1F4E7A;} .pill.closed{background:#E3F3EA;color:var(--ok);} .pill.lost{background:#F1E6E6;color:var(--danger);}
+  .pill.off{background:#EEE;color:#777;}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:16px;}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;}
+  .stat b{display:block;font-size:24px;font-family:'Fraunces',serif;color:var(--primary);font-variant-numeric:tabular-nums;}
+  .stat span{font-size:12px;color:var(--muted);}
+  .notice{background:var(--warn-bg);border:1px solid #E8D79C;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:14px;}
+  .neg{color:var(--danger);}
+  dialog{border:0;border-radius:14px;padding:22px;max-width:560px;width:calc(100% - 32px);box-shadow:0 20px 60px rgba(0,0,0,.35);}
+  dialog::backdrop{background:rgba(0,0,0,.45);}
+  .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap;}
+  .inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  details.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-bottom:14px;}
+  details.card summary{cursor:pointer;font-weight:600;color:var(--primary);}
+  @media print{ header.top,nav.tabs,.noprint{display:none!important;} body{background:#fff;} }
+</style>
+</head>
+<body>
+
+<section id="loginBox">
+  <div class="panel">
+    <div class="brand"><span class="mark">50.</span><span class="tag">Reps</span></div>
+    <form id="loginForm">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <div style="margin-top:16px"><button class="btn" type="submit" id="loginBtn">Sign in</button></div>
+      <div id="loginMsg" class="msg"></div>
+    </form>
+  </div>
+</section>
+
+<div id="app" class="hide">
+  <header class="top">
+    <span class="mark">50.</span><span>Reps</span>
+    <span class="who" id="who"></span>
+    <button id="signOutBtn" type="button">Sign out</button>
+  </header>
+  <nav class="tabs" id="tabs"></nav>
+  <main>
+    <div id="appMsg" class="msg"></div>
+    <section id="tab-leads" class="hide"></section>
+    <section id="tab-reps" class="hide"></section>
+    <section id="tab-dealers" class="hide"></section>
+    <section id="tab-money" class="hide"></section>
+  </main>
+</div>
+
+<dialog id="dlg"></dialog>
+
+<script>
+// The lines to change per deployment: where the API is served, and the
+// Supabase project the sign-in goes to. The anon key is meant to be public.
+const API_BASE = "https://five0-platform.onrender.com/api";
+const SUPABASE_URL = "https://jzjmuttqbtandwjmwwfn.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_RE92j36ZEVFvSBwV-Rl8hg_JyfxRT6a";
+
+const TZ = 'America/New_York';
+const state = { me: null, isAdmin: false, reps: [], leads: [], dealers: [], money: null, month: null, tab: 'leads', settings: null };
+
+/* ---------- helpers ---------- */
+const $ = (id) => document.getElementById(id);
+function esc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function dollars(cents){
+  const n = (Number(cents) || 0) / 100;
+  const s = Math.abs(n).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+  return n < 0 ? '−' + s : s;
+}
+function dollarCell(cents){ return '<span class="' + (cents < 0 ? 'neg' : '') + '">' + dollars(cents) + '</span>'; }
+function dateOnly(d){ return d ? new Date(d).toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric', timeZone: TZ }) : ''; }
+function plainDate(ymd){ if(!ymd) return ''; const [y,m,d] = String(ymd).slice(0,10).split('-').map(Number); return new Date(Date.UTC(y, m-1, d)).toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric', timeZone:'UTC' }); }
+function monthLabel(ym){ const [y,m] = ym.split('-').map(Number); return new Date(Date.UTC(y, m-1, 1)).toLocaleDateString('en-US', { month:'long', year:'numeric', timeZone:'UTC' }); }
+function flash(text, ok){ const el = $('appMsg'); el.textContent = text; el.className = 'msg show ' + (ok ? 'okmsg' : 'err'); if(ok) setTimeout(() => { el.className = 'msg'; }, 3500); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+function clearFlash(){ $('appMsg').className = 'msg'; }
+function repName(id){ const r = state.reps.find((x) => x.id === id); return r ? r.name : ''; }
+function repOptions(selected, { blank = '— none —', activeOnly = false } = {}){
+  const list = state.reps.filter((r) => !activeOnly || r.active || r.id === selected);
+  return '<option value="">' + esc(blank) + '</option>' + list.map((r) => '<option value="' + r.id + '"' + (r.id === selected ? ' selected' : '') + '>' + esc(r.name) + (r.active ? '' : ' (inactive)') + '</option>').join('');
+}
+
+/* ---------- auth (same Supabase sign-in as the dealer page) ---------- */
+function getSession(){ try{ return JSON.parse(localStorage.getItem('fifty:reps-session') || 'null'); }catch(e){ return null; } }
+function setSession(s){ try{ if(s) localStorage.setItem('fifty:reps-session', JSON.stringify(s)); else localStorage.removeItem('fifty:reps-session'); }catch(e){} }
+async function authRequest(grant, body){
+  const res = await fetch(SUPABASE_URL + '/auth/v1/token?grant_type=' + grant, { method:'POST', headers:{ 'Content-Type':'application/json', apikey: SUPABASE_ANON_KEY }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok) throw new Error(data.error_description || data.msg || 'Sign-in failed.');
+  return data;
+}
+async function refreshSession(){
+  const s = getSession();
+  if(!s || !s.refresh_token) return false;
+  try{ const d = await authRequest('refresh_token', { refresh_token: s.refresh_token }); setSession({ access_token: d.access_token, refresh_token: d.refresh_token }); return true; }catch(e){ return false; }
+}
+async function api(path, options = {}, retried){
+  const s = getSession();
+  const res = await fetch(API_BASE + path, { ...options, headers: { 'Content-Type':'application/json', ...(s ? { Authorization: 'Bearer ' + s.access_token } : {}), ...(options.headers || {}) } });
+  if(res.status === 401 && !retried && await refreshSession()) return api(path, options, true);
+  let body = null; try{ body = await res.json(); }catch(e){}
+  if(!res.ok){
+    const err = new Error((body && body.error) || ('Request failed (' + res.status + ')'));
+    err.status = res.status; err.code = body && body.code; err.body = body;
+    throw err;
+  }
+  return body;
+}
+function post(path, data){ return api(path, { method:'POST', body: JSON.stringify(data || {}) }); }
+function patch(path, data){ return api(path, { method:'PATCH', body: JSON.stringify(data || {}) }); }
+function put(path, data){ return api(path, { method:'PUT', body: JSON.stringify(data || {}) }); }
+
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = $('loginBtn'), msg = $('loginMsg');
+  btn.disabled = true; msg.className = 'msg';
+  try{
+    const d = await authRequest('password', { email: $('email').value.trim(), password: $('password').value });
+    setSession({ access_token: d.access_token, refresh_token: d.refresh_token });
+    await start();
+  }catch(err){ msg.textContent = err.message; msg.className = 'msg show err'; }
+  btn.disabled = false;
+});
+$('signOutBtn').addEventListener('click', () => { setSession(null); location.reload(); });
+
+/* ---------- start ---------- */
+async function start(){
+  try{
+    state.me = await api('/me');
+    // /reps is for 50. staff only; anyone else (a dealer's login) gets a 403.
+    await loadReps();
+  }catch(err){
+    if(err.status === 403){ setSession(null); const m = $('loginMsg'); m.textContent = 'This page is only for 50. staff. Sign in with your 50. login.'; m.className = 'msg show err'; return showLogin(); }
+    if(err.status === 401){ setSession(null); return showLogin(); }
+    const m = $('loginMsg'); m.textContent = err.message; m.className = 'msg show err'; return showLogin();
+  }
+  state.isAdmin = state.me.role === 'admin';
+  $('who').textContent = state.me.name + ' · ' + (state.isAdmin ? 'admin' : 'helper');
+  $('loginBox').classList.add('hide'); $('app').classList.remove('hide');
+  const tabs = [['leads','Leads'],['reps','Reps'],['dealers','Dealers']];
+  if(state.isAdmin) tabs.push(['money','Money']);
+  $('tabs').innerHTML = tabs.map(([k,l]) => '<button type="button" data-tab="' + k + '">' + l + '</button>').join('');
+  $('tabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
+  showTab(state.tab);
+}
+function showLogin(){ $('loginBox').classList.remove('hide'); $('app').classList.add('hide'); }
+
+async function loadReps(){ const d = await api('/reps'); state.reps = d.reps; state.month = d.month || state.month; }
+
+async function showTab(tab){
+  state.tab = tab; clearFlash();
+  $('tabs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+  for(const k of ['leads','reps','dealers','money']) $('tab-' + k).classList.toggle('hide', k !== tab);
+  try{
+    if(tab === 'leads') await renderLeads();
+    if(tab === 'reps') await renderReps();
+    if(tab === 'dealers') await renderDealers();
+    if(tab === 'money') await renderMoney();
+  }catch(err){ flash(err.message); }
+}
+
+/* ---------- dialog ---------- */
+function openDialog(html){ const d = $('dlg'); d.innerHTML = html; if(!d.open) d.showModal(); return d; }
+function closeDialog(){ const d = $('dlg'); if(d.open) d.close(); }
+
+/* ---------- Leads ---------- */
+async function renderLeads(){
+  const [l, dl] = await Promise.all([api('/rep-leads'), api('/rep-dealers')]);
+  state.leads = l.leads; state.dealers = dl.dealers;
+  const open = state.leads.filter((x) => x.status === 'open').length;
+  $('tab-leads').innerHTML =
+    '<div class="head"><h2>Leads</h2><span class="muted">' + open + ' open · ' + state.leads.length + ' total</span></div>' +
+    '<details class="card" ' + (state.leads.length ? '' : 'open') + '><summary>Add a lead</summary>' +
+      '<form id="leadForm"><div class="row">' +
+        '<div><label>Company</label><input name="company_name" required maxlength="200"></div>' +
+        '<div><label>Contact name</label><input name="contact_name" maxlength="120"></div></div>' +
+      '<div class="row"><div><label>Phone</label><input name="phone" maxlength="50"></div>' +
+        '<div><label>Email</label><input name="email" type="email" maxlength="200"></div></div>' +
+      '<div class="row"><div><label>Brought in by</label><select name="brought_in_by_rep_id">' + repOptions('', { blank: '— nobody / me —', activeOnly: true }) + '</select></div>' +
+        '<div><label>Date</label><input name="found_on" type="date" value="' + todayYmd() + '"></div></div>' +
+      '<div class="actions"><button class="btn" type="submit">Add lead</button></div></form>' +
+      '<div id="dupBox"></div></details>' +
+    '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th><th>Brought in by</th><th>Found</th><th>Status</th><th>Closed by / onboarded by</th><th></th></tr></thead><tbody>' +
+    (state.leads.map((x) =>
+      '<tr><td><b>' + esc(x.company_name) + '</b></td>' +
+      '<td>' + esc(x.contact_name || '') + '<div class="muted">' + esc([x.phone, x.email].filter(Boolean).join(' · ')) + '</div></td>' +
+      '<td>' + esc(repName(x.brought_in_by_rep_id) || '—') + '</td>' +
+      '<td>' + esc(plainDate(x.found_on)) + '</td>' +
+      '<td><span class="pill ' + x.status + '">' + x.status + '</span></td>' +
+      '<td>' + (x.status === 'closed' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>' +
+      '<td class="num">' + (x.status === 'closed' ? '' :
+        '<button class="btn small" data-close="' + x.id + '">Close</button> ' +
+        (x.status === 'open' ? '<button class="btn small secondary" data-lost="' + x.id + '">Lost</button>' : '<button class="btn small secondary" data-reopen="' + x.id + '">Reopen</button>')) + '</td></tr>'
+    ).join('') || '<tr><td colspan="7" class="muted" style="padding:18px">No leads yet.</td></tr>') +
+    '</tbody></table></div>';
+
+  const form = $('leadForm');
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitLead(form, false); });
+  $('tab-leads').querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => closeLeadDialog(b.dataset.close)));
+  $('tab-leads').querySelectorAll('[data-lost]').forEach((b) => b.addEventListener('click', () => leadStatus(b.dataset.lost, 'lost')));
+  $('tab-leads').querySelectorAll('[data-reopen]').forEach((b) => b.addEventListener('click', () => leadStatus(b.dataset.reopen, 'open')));
+}
+function todayYmd(){ return new Date().toLocaleDateString('en-CA', { timeZone: TZ }); }
+function formData(form){ const o = {}; new FormData(form).forEach((v, k) => { o[k] = typeof v === 'string' ? v.trim() : v; }); return o; }
+
+async function submitLead(form, confirmDuplicate){
+  const d = formData(form);
+  const body = { company_name: d.company_name, contact_name: d.contact_name, phone: d.phone, email: d.email, found_on: d.found_on || undefined, brought_in_by_rep_id: d.brought_in_by_rep_id || null };
+  if(confirmDuplicate) body.confirm_duplicate = true;
+  try{
+    await post('/rep-leads', body);
+    flash('Lead added.', true);
+    await renderLeads();
+  }catch(err){
+    if(err.code === 'possible_duplicate'){
+      const m = (err.body.matches || []).map((x) => '<li><b>' + esc(x.company_name) + '</b> ' + esc([x.contact_name, x.phone, x.email].filter(Boolean).join(' · ')) + ' — found ' + esc(plainDate(x.found_on)) + (x.brought_in_by_rep_id ? ' by ' + esc(repName(x.brought_in_by_rep_id)) : '') + ' (' + x.status + ')</li>').join('');
+      $('dupBox').innerHTML = '<div class="notice"><b>This looks like a lead that is already in the list:</b><ul>' + m + '</ul>If it is a different company, add it anyway. <div class="actions"><button class="btn small" id="addAnyway" type="button">Add anyway</button></div></div>';
+      $('addAnyway').addEventListener('click', () => submitLead(form, true));
+    } else flash(err.message);
+  }
+}
+async function leadStatus(id, status){ try{ await patch('/rep-leads/' + id, { status }); await renderLeads(); }catch(err){ flash(err.message); } }
+
+function closeLeadDialog(id){
+  const lead = state.leads.find((x) => x.id === id);
+  const openDealers = state.dealers.filter((d) => !d.closer_rep_id && !d.onboarder_rep_id);
+  openDialog(
+    '<h3>Close ' + esc(lead.company_name) + '</h3>' +
+    '<p class="muted">Whoever closes the lead gets the sign-up credit. The rep who only found it is not paid.</p>' +
+    '<form id="closeForm"><label>Closed by</label><select name="closed_by_rep_id" required>' + repOptions(lead.brought_in_by_rep_id, { blank: 'Choose a rep…', activeOnly: true }) + '</select>' +
+    '<label>Onboarded by</label><select name="onboarded_by_rep_id">' + repOptions('', { blank: '— nobody yet —', activeOnly: true }) + '</select>' +
+    '<label>Their 50. account</label><select name="tenant_id"><option value="">Not set up yet — I will pick it on the Dealers tab</option>' +
+      state.dealers.map((d) => '<option value="' + d.tenant_id + '"' + ((d.closer_rep_id || d.onboarder_rep_id) ? ' disabled' : '') + '>' + esc(d.name) + ((d.closer_rep_id || d.onboarder_rep_id) ? ' (already has reps)' : '') + '</option>').join('') + '</select>' +
+    '<div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Cancel</button><button class="btn" type="submit">Close lead</button></div></form>'
+  );
+  void openDealers;
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('closeForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const d = formData(e.target);
+    try{
+      await post('/rep-leads/' + id + '/close', { closed_by_rep_id: d.closed_by_rep_id, onboarded_by_rep_id: d.onboarded_by_rep_id || null, tenant_id: d.tenant_id || null });
+      closeDialog(); flash('Lead closed.', true); await loadReps(); await renderLeads();
+    }catch(err){ flash(err.message); closeDialog(); }
+  });
+}
+
+/* ---------- Reps ---------- */
+async function renderReps(){
+  await loadReps();
+  const adminCols = state.isAdmin;
+  $('tab-reps').innerHTML =
+    '<div class="head"><h2>Reps</h2><button class="btn" id="addRepBtn" type="button">Add a rep</button></div>' +
+    '<div class="tablewrap"><table><thead><tr><th>Name</th><th>Contact</th><th class="num">Companies closed</th><th class="num">Onboarded</th><th class="num">Leads found</th>' +
+    (adminCols ? '<th class="num">Earned this month</th><th class="num">You owe</th>' : '') + '<th></th></tr></thead><tbody>' +
+    (state.reps.map((r) =>
+      '<tr><td><b>' + esc(r.name) + '</b> ' + (r.active ? '' : '<span class="pill off">inactive</span>') + '</td>' +
+      '<td>' + esc(r.phone || '') + '<div class="muted">' + esc(r.email || '') + '</div></td>' +
+      '<td class="num">' + r.companies_closed + '</td><td class="num">' + r.companies_onboarded + '</td><td class="num">' + r.leads_brought_in + '</td>' +
+      (adminCols ? '<td class="num">' + dollarCell(r.earned_this_month_cents) + '</td><td class="num"><b>' + dollarCell(r.owed_cents) + '</b></td>' : '') +
+      '<td class="num"><button class="btn small secondary" data-edit="' + r.id + '">Edit</button></td></tr>'
+    ).join('') || '<tr><td colspan="8" class="muted" style="padding:18px">No reps yet.</td></tr>') + '</tbody></table></div>';
+  $('addRepBtn').addEventListener('click', () => repDialog(null));
+  $('tab-reps').querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => repDialog(b.dataset.edit)));
+}
+function repDialog(id){
+  const r = id ? state.reps.find((x) => x.id === id) : { name:'', email:'', phone:'', notes:'', active:true };
+  openDialog(
+    '<h3>' + (id ? 'Edit ' + esc(r.name) : 'Add a rep') + '</h3>' +
+    '<form id="repForm"><label>Name</label><input name="name" required maxlength="120" value="' + esc(r.name) + '">' +
+    '<div class="row"><div><label>Phone</label><input name="phone" maxlength="50" value="' + esc(r.phone || '') + '"></div><div><label>Email</label><input name="email" type="email" maxlength="200" value="' + esc(r.email || '') + '"></div></div>' +
+    '<label>Notes</label><textarea name="notes" rows="2" maxlength="2000">' + esc(r.notes || '') + '</textarea>' +
+    '<div class="actions">' + (id ? '<button type="button" class="btn ' + (r.active ? 'danger' : 'secondary') + '" id="toggleActive">' + (r.active ? 'Mark inactive' : 'Mark active again') + '</button>' : '') +
+    '<button type="button" class="btn secondary" id="cancelDlg">Cancel</button><button class="btn" type="submit">Save</button></div></form>'
+  );
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('repForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const d = formData(e.target);
+    try{
+      if(id) await patch('/reps/' + id, { name: d.name, phone: d.phone, email: d.email, notes: d.notes });
+      else await post('/reps', { name: d.name, phone: d.phone, email: d.email, notes: d.notes });
+      closeDialog(); flash('Saved.', true); await renderReps();
+    }catch(err){ flash(err.message); closeDialog(); }
+  });
+  if(id) $('toggleActive').addEventListener('click', async () => {
+    try{
+      const out = await patch('/reps/' + id, { active: !r.active });
+      closeDialog(); await renderReps();
+      const list = out.dealers_needing_a_decision || [];
+      if(list.length){
+        openDialog('<h3>' + esc(r.name) + ' is now inactive</h3><p>Nothing has moved: they are still on these dealers and still earn royalties on them until you change that on the Dealers tab.</p><ul>' +
+          list.map((d) => '<li>' + esc(d.name) + ' <span class="muted">(' + esc(d.role) + ')</span></li>').join('') + '</ul><div class="actions"><button class="btn secondary" id="cancelDlg">Stay here</button><button class="btn" id="goDealers">Go to Dealers</button></div>');
+        $('cancelDlg').addEventListener('click', closeDialog);
+        $('goDealers').addEventListener('click', () => { closeDialog(); showTab('dealers'); });
+      } else flash(r.active ? 'Marked inactive.' : 'Marked active.', true);
+    }catch(err){ flash(err.message); closeDialog(); }
+  });
+}
+
+/* ---------- Dealers ---------- */
+async function renderDealers(){
+  const d = await api('/rep-dealers');
+  state.dealers = d.dealers;
+  await loadReps();
+  $('tab-dealers').innerHTML =
+    '<div class="head"><h2>Dealers</h2><span class="muted">Who closed and who onboarded each 50. dealer</span></div>' +
+    '<div class="notice">A change counts from now on: payments that cleared before it stay with whoever was on the dealer then. Dealers with nobody on them are house accounts and pay no one.' +
+      (state.isAdmin ? ' As admin you can also pick a start date to credit a payment that cleared earlier.' : '') + '</div>' +
+    '<div class="tablewrap"><table><thead><tr><th>Dealer</th><th>Activated</th><th>Closed by</th><th>Onboarded by</th>' + (state.isAdmin ? '<th>Start date</th>' : '') + '<th></th></tr></thead><tbody>' +
+    (state.dealers.map((x) =>
+      '<tr data-tenant="' + x.tenant_id + '"><td><b>' + esc(x.name) + '</b></td>' +
+      '<td>' + (x.activated ? esc(plainDate(x.activated_on)) : '<span class="muted">not yet</span>') + '</td>' +
+      '<td><select data-field="closer">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
+      '<td><select data-field="onboarder">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
+      (state.isAdmin ? '<td><input type="date" data-field="from" style="min-width:140px" title="Leave blank to start now"></td>' : '') +
+      '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button></td></tr>'
+    ).join('') || '<tr><td colspan="6" class="muted" style="padding:18px">No dealers yet.</td></tr>') + '</tbody></table></div>';
+  $('tab-dealers').querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', async () => {
+    const tr = b.closest('tr');
+    const closer = tr.querySelector('[data-field=closer]').value || null;
+    const onboarder = tr.querySelector('[data-field=onboarder]').value || null;
+    const fromEl = tr.querySelector('[data-field=from]');
+    const body = { closer_rep_id: closer, onboarder_rep_id: onboarder };
+    if(fromEl && fromEl.value) body.effective_from = new Date(fromEl.value + 'T00:00:00').toISOString();
+    try{ await put('/rep-dealers/' + b.dataset.save + '/assignment', body); flash('Saved.', true); await renderDealers(); }catch(err){ flash(err.message); }
+  }));
+}
+
+/* ---------- Money (admin only) ---------- */
+async function renderMoney(){
+  const q = state.month ? '?month=' + state.month : '';
+  const [ov, settings] = await Promise.all([api('/rep-money/overview' + q), api('/rep-settings')]);
+  state.money = ov; state.month = ov.month; state.settings = settings;
+  await loadReps();
+  const t = ov.totals;
+  $('tab-money').innerHTML =
+    '<div class="head"><h2>Money</h2><div class="inline"><label style="margin:0">Month</label><input type="month" id="monthPick" value="' + ov.month + '" style="width:auto"></div></div>' +
+    '<div class="cards"><div class="stat"><b>' + dollars(t.owed_cents) + '</b><span>You owe reps right now</span></div>' +
+    '<div class="stat"><b>' + dollars(t.earned_cents) + '</b><span>Earned in ' + esc(monthLabel(ov.month)) + '</span></div>' +
+    '<div class="stat"><b>' + dollars(t.paid_cents) + '</b><span>Paid in ' + esc(monthLabel(ov.month)) + '</span></div></div>' +
+    '<div class="tablewrap"><table><thead><tr><th>Rep</th><th class="num">Sign-up bonuses</th><th class="num">Referral royalties</th><th class="num">Reversals</th><th class="num">Earned</th><th class="num">Paid</th><th class="num">You owe</th><th></th></tr></thead><tbody>' +
+    (ov.reps.map((r) =>
+      '<tr><td><b>' + esc(r.name) + '</b> ' + (r.active ? '' : '<span class="pill off">inactive</span>') + '</td>' +
+      '<td class="num">' + dollarCell(r.activation_cents) + '</td><td class="num">' + dollarCell(r.royalty_cents) + '</td><td class="num">' + dollarCell(r.reversal_cents) + '</td>' +
+      '<td class="num"><b>' + dollarCell(r.earned_cents) + '</b></td><td class="num">' + dollarCell(r.paid_cents) + '</td><td class="num"><b>' + dollarCell(r.owed_cents) + '</b></td>' +
+      '<td class="num"><button class="btn small secondary" data-stmt="' + r.id + '">Statement</button> <button class="btn small" data-pay="' + r.id + '">Record payment</button></td></tr>'
+    ).join('') || '<tr><td colspan="8" class="muted" style="padding:18px">No reps yet.</td></tr>') + '</tbody></table></div>' +
+    '<details class="card" style="margin-top:18px"><summary>Pay rates</summary><form id="rateForm">' +
+      '<div class="row"><div><label>Sign-up bonus, each for the closer and the onboarder ($)</label><input name="activation_cents" type="number" min="0" step="0.01" value="' + (settings.activation_cents / 100) + '"></div>' +
+      '<div><label>Per referral, each ($)</label><input name="referral_cents" type="number" min="0" step="0.01" value="' + (settings.referral_cents / 100) + '"></div></div>' +
+      '<div class="row"><div><label>Per referral after the threshold ($)</label><input name="referral_cents_after_threshold" type="number" min="0" step="0.01" value="' + (settings.referral_cents_after_threshold / 100) + '"></div>' +
+      '<div><label>Threshold: a rep\'s company number</label><input name="threshold_companies" type="number" min="1" step="1" value="' + settings.threshold_companies + '"></div></div>' +
+      '<div class="row"><div><label>Full rate at a gift card of ($)</label><input name="full_rate_card_cents" type="number" min="0.01" step="0.01" value="' + (settings.full_rate_card_cents / 100) + '"></div><div></div></div>' +
+      '<p class="muted">The per-referral amount is paid in full at a gift card of this size or more, and scaled down in proportion for smaller cards. Changes apply to payments from now on; what is already earned does not change.</p>' +
+      '<div class="actions"><button class="btn" type="submit">Save rates</button></div></form></details>';
+  $('monthPick').addEventListener('change', (e) => { if(e.target.value){ state.month = e.target.value; renderMoney().catch((err) => flash(err.message)); } });
+  $('tab-money').querySelectorAll('[data-stmt]').forEach((b) => b.addEventListener('click', () => statementDialog(b.dataset.stmt)));
+  $('tab-money').querySelectorAll('[data-pay]').forEach((b) => b.addEventListener('click', () => payDialog(b.dataset.pay, 0)));
+  $('rateForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const d = formData(e.target);
+    const cents = (v) => Math.round(Number(v) * 100);
+    try{
+      await put('/rep-settings', { activation_cents: cents(d.activation_cents), referral_cents: cents(d.referral_cents), referral_cents_after_threshold: cents(d.referral_cents_after_threshold), threshold_companies: parseInt(d.threshold_companies, 10), full_rate_card_cents: cents(d.full_rate_card_cents) });
+      flash('Rates saved.', true); await renderMoney();
+    }catch(err){ flash(err.message); }
+  });
+}
+
+function payDialog(repId, suggestedCents){
+  const r = state.money.reps.find((x) => x.id === repId);
+  const owed = Math.max(0, r.owed_cents);
+  openDialog('<h3>Record a payment to ' + esc(r.name) + '</h3><p class="muted">You owe ' + dollars(r.owed_cents) + ' right now. This records that you paid them — it does not send money.</p>' +
+    '<form id="payForm"><div class="row"><div><label>Amount ($)</label><input name="amount" type="number" min="0.01" step="0.01" required value="' + ((suggestedCents || owed) / 100).toFixed(2) + '"></div>' +
+    '<div><label>Date paid</label><input name="paid_on" type="date" required value="' + todayYmd() + '"></div></div>' +
+    '<div class="row"><div><label>How (Zelle, check…)</label><input name="method" maxlength="60"></div><div><label>For statement month</label><input name="period" type="month" value="' + esc(state.month) + '"></div></div>' +
+    '<label>Note</label><input name="note" maxlength="500"><div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Cancel</button><button class="btn" type="submit">Record payment</button></div></form>');
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('payForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const d = formData(e.target);
+    try{
+      await post('/reps/' + repId + '/payouts', { amount_cents: Math.round(Number(d.amount) * 100), paid_on: d.paid_on, period: d.period || null, method: d.method || null, note: d.note || null });
+      closeDialog(); flash('Payment recorded.', true); await renderMoney();
+    }catch(err){ flash(err.message); closeDialog(); }
+  });
+}
+
+async function statementDialog(repId){
+  const s = await api('/reps/' + repId + '/statement?month=' + state.month);
+  const label = { activation: 'Sign-up bonus', referral: 'Referral royalty', reversal: 'Reversal' };
+  const lineDetail = (l) => {
+    const d = l.detail || {};
+    if(l.kind === 'referral'){
+      const per = d.reward_per_card_cents != null ? ' · ' + dollars(d.reward_per_card_cents) + ' cards' : '';
+      const late = d.after_threshold ? ' · company #' + d.company_number + ' (reduced rate)' : '';
+      return per + late;
+    }
+    if(l.kind === 'reversal') return d.reason === 'manual' ? (d.note ? ' · ' + esc(d.note) : ' · reversed by hand') : ' · ' + esc(String(d.reason || '').replace(/_/g, ' '));
+    return '';
+  };
+  const reversible = new Set(s.lines.filter((l) => l.reversal_of).map((l) => l.reversal_of));
+  openDialog(
+    '<div class="noprint actions" style="justify-content:space-between;margin:0 0 6px"><span></span><button class="btn small secondary" id="printStmt" type="button">Print</button></div>' +
+    '<h3>' + esc(s.rep.name) + ' — ' + esc(monthLabel(s.month)) + '</h3>' +
+    '<p class="muted">Statement from 50. · ' + esc(s.rep.email || '') + '</p>' +
+    '<div class="tablewrap" style="margin:10px 0"><table style="min-width:0"><tbody>' +
+      '<tr><td>Owed at the start of the month</td><td class="num">' + dollarCell(s.opening_cents) + '</td></tr>' +
+      '<tr><td>Sign-up bonuses</td><td class="num">' + dollarCell(s.activation_cents) + '</td></tr>' +
+      '<tr><td>Referral royalties</td><td class="num">' + dollarCell(s.royalty_cents) + '</td></tr>' +
+      (s.reversal_cents ? '<tr><td>Reversals</td><td class="num">' + dollarCell(s.reversal_cents) + '</td></tr>' : '') +
+      '<tr><td>Paid this month</td><td class="num">' + dollarCell(-s.paid_cents) + '</td></tr>' +
+      '<tr><td><b>Owed at the end of the month</b></td><td class="num"><b>' + dollarCell(s.closing_cents) + '</b></td></tr></tbody></table></div>' +
+    '<h3 style="font-size:15px;margin-top:14px">Earnings</h3>' +
+    '<div class="tablewrap"><table style="min-width:0"><tbody>' +
+      (s.lines.map((l) => '<tr><td>' + esc(dateOnly(l.at)) + '</td><td>' + esc(label[l.kind] || l.kind) + ' <span class="muted">· ' + esc(l.role) + ' · ' + esc(l.dealer || '') + lineDetail(l) + '</span></td><td class="num">' + dollarCell(l.amount_cents) + '</td>' +
+        '<td class="noprint num">' + (l.kind !== 'reversal' && !reversible.has(l.id) ? '<button class="btn small danger" data-rev="' + l.id + '">Reverse</button>' : '') + '</td></tr>').join('') || '<tr><td class="muted" style="padding:14px">Nothing earned this month.</td></tr>') +
+    '</tbody></table></div>' +
+    (s.payouts.length ? '<h3 style="font-size:15px;margin-top:14px">Payments</h3><div class="tablewrap"><table style="min-width:0"><tbody>' +
+      s.payouts.map((p) => '<tr><td>' + esc(plainDate(p.paid_on)) + '</td><td>' + esc([p.method, p.note].filter(Boolean).join(' · ')) + '</td><td class="num">' + dollars(p.amount_cents) + '</td><td class="noprint num"><button class="btn small danger" data-delpay="' + p.id + '">Delete</button></td></tr>').join('') + '</tbody></table></div>' : '') +
+    '<div class="actions noprint"><button class="btn secondary" id="cancelDlg" type="button">Close</button><button class="btn" id="payFromStmt" type="button">Record payment</button></div>'
+  );
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('printStmt').addEventListener('click', () => window.print());
+  $('payFromStmt').addEventListener('click', () => { closeDialog(); payDialog(repId, s.closing_cents > 0 ? s.closing_cents : 0); });
+  $('dlg').querySelectorAll('[data-rev]').forEach((b) => b.addEventListener('click', async () => {
+    const note = window.prompt('Reverse this earning? Add a short reason (for example "refunded in Stripe"):', '');
+    if(note === null) return;
+    try{ await post('/rep-earnings/' + b.dataset.rev + '/reverse', { note }); closeDialog(); flash('Reversed.', true); await renderMoney(); statementDialog(repId); }catch(err){ flash(err.message); }
+  }));
+  $('dlg').querySelectorAll('[data-delpay]').forEach((b) => b.addEventListener('click', async () => {
+    if(!window.confirm('Delete this payment record? What you owe goes back up by that amount.')) return;
+    try{ await api('/rep-payouts/' + b.dataset.delpay, { method:'DELETE' }); closeDialog(); flash('Payment deleted.', true); await renderMoney(); statementDialog(repId); }catch(err){ flash(err.message); }
+  }));
+}
+
+/* ---------- boot ---------- */
+(async function(){
+  if(getSession()) { const ok = await start().then(() => true).catch(() => false); void ok; }
+})();
+</script>
+</body>
+</html>
