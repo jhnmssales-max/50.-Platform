@@ -2,17 +2,21 @@
 // earnings (the rep_earnings ledger; see the rep_program migration).
 //
 // The rules, from rep_settings (defaults in brackets):
-//   - When a dealer's $500 activation clears, the dealer's closer earns
-//     activation_cents [$50] and its onboarder earns activation_cents [$50].
-//     One person who is both earns both. Only the dealer's FIRST cleared live
-//     activation counts (a duplicate payment is a refund, not a second bonus).
-//   - When a referral fee (the 30%) clears, the closer and the onboarder each
-//     earn referral_cents [$1] for that referral — scaled down in proportion
+//   - When a dealer's $500 activation clears, its closer earns
+//     activation_cents [$50] and its onboarder earns
+//     onboarder_activation_cents [0 — the closer earns everything by
+//     default; set it from the Money tab to pay an onboarder again]. A rate
+//     of 0 earns no row at all, not a row worth nothing. One person who is
+//     both earns both rates. Only the dealer's FIRST cleared live activation
+//     counts (a duplicate payment is a refund, not a second bonus).
+//   - When a referral fee (the 30%) clears, the closer earns referral_cents
+//     [$1] and the onboarder onboarder_referral_cents [0, as above] for that
+//     referral — each scaled down in proportion
 //     when the per-card reward is under full_rate_card_cents [$50] (a $25 card
 //     pays 50 cents, a $10 card 20 cents) and never scaled up. Referrals from
-//     a rep's companies beyond their threshold_companies-th [2,000] pay
-//     referral_cents_after_threshold [50 cents] instead, with the same
-//     scaling. A rep's companies are the dealers they were ever assigned to
+//     a rep's companies beyond their threshold_companies-th [2,000] pay that
+//     role's after-threshold rate instead [50 cents for the closer], with the
+//     same scaling. A rep's companies are the dealers they were ever assigned to
 //     (closer or onboarder) that activated for real, counted in the order those
 //     dealers activated.
 //   - If a charge that earned something is later refunded or disputed (its
@@ -45,8 +49,8 @@ function log(event, data) {
 // join. `roles` pairs each side of the assignment with its role name.
 const ACTIVATION_SQL = `
   insert into rep_earnings (rep_id, tenant_id, role, kind, amount_cents, source_billing_event_id, earned_at, detail)
-  select r.rep_id, be.tenant_id, r.role, 'activation', s.activation_cents, be.id, be.created_at,
-         jsonb_build_object('rate_cents', s.activation_cents, 'assignment_id', a.id)
+  select r.rep_id, be.tenant_id, r.role, 'activation', r.rate, be.id, be.created_at,
+         jsonb_build_object('rate_cents', r.rate, 'assignment_id', a.id)
   from billing_events be
   join tenants t on t.id = be.tenant_id and t.billing_required is true
   join rep_assignments a
@@ -54,12 +58,18 @@ const ACTIVATION_SQL = `
    and be.created_at >= a.effective_from
    and (a.effective_to is null or be.created_at < a.effective_to)
   cross join rep_settings s
-  cross join lateral (values ('closer', a.closer_rep_id), ('onboarder', a.onboarder_rep_id)) r(role, rep_id)
+  -- Each side of the assignment with its own rate. The onboarder's is 0 by
+  -- default, which the "r.rate > 0" below turns into no row at all rather
+  -- than a row worth nothing.
+  cross join lateral (values
+    ('closer', a.closer_rep_id, s.activation_cents),
+    ('onboarder', a.onboarder_rep_id, s.onboarder_activation_cents)
+  ) r(role, rep_id, rate)
   where be.event_type = 'activation_charge'
     and be.status = 'succeeded'
     and be.livemode is true
     and r.rep_id is not null
-    and s.activation_cents > 0
+    and r.rate > 0
     and be.id = (
       select f.id from billing_events f
       where f.tenant_id = be.tenant_id and f.event_type = 'activation_charge'
@@ -79,9 +89,9 @@ const REFERRAL_SQL = `
            be.reward_amount_cents as reward, s.full_rate_card_cents as full_card,
            n.company_number,
            (n.company_number > s.threshold_companies) as after_threshold,
-           case when n.company_number > s.threshold_companies then s.referral_cents_after_threshold else s.referral_cents end as rate,
+           case when n.company_number > s.threshold_companies then r.rate_after else r.rate_base end as rate,
            round(
-             (case when n.company_number > s.threshold_companies then s.referral_cents_after_threshold else s.referral_cents end)::numeric
+             (case when n.company_number > s.threshold_companies then r.rate_after else r.rate_base end)::numeric
              * least(be.reward_amount_cents, s.full_rate_card_cents)::numeric / s.full_rate_card_cents
            )::int as amount
     from billing_events be
@@ -91,7 +101,13 @@ const REFERRAL_SQL = `
      and be.created_at >= a.effective_from
      and (a.effective_to is null or be.created_at < a.effective_to)
     cross join rep_settings s
-    cross join lateral (values ('closer', a.closer_rep_id), ('onboarder', a.onboarder_rep_id)) r(role, rep_id)
+    -- Each side of the assignment with its own pair of rates (normal, and
+    -- past the threshold). The onboarder's are 0 by default, so by default
+    -- only the closer earns; "x.amount > 0" below drops the rest.
+    cross join lateral (values
+      ('closer', a.closer_rep_id, s.referral_cents, s.referral_cents_after_threshold),
+      ('onboarder', a.onboarder_rep_id, s.onboarder_referral_cents, s.onboarder_referral_cents_after_threshold)
+    ) r(role, rep_id, rate_base, rate_after)
     cross join lateral (
       -- This rep's company number for this dealer: how many of their
       -- companies (ever assigned as closer or onboarder, activated for real)

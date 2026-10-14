@@ -2,7 +2,10 @@ const express = require('express');
 const cors = require('cors');
 const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
-const { withUserTransaction, getCallerContext } = require('../db');
+const { withUserTransaction, withServiceRole, assertRowsAffected, getCallerContext } = require('../db');
+const supabaseAdmin = require('../lib/supabaseAdmin');
+const repInviteEmail = require('../lib/repInviteEmail');
+const { sendEmail } = require('../lib/postmark');
 
 // The sales-rep program (see the rep_program migration and workers/repEarnings.js).
 //
@@ -11,7 +14,12 @@ const { withUserTransaction, getCallerContext } = require('../db');
 // turn a refusal into a clear 403 instead of an empty result:
 //   - Staff of the 50. tenant itself (slug 50-platform) manage reps, leads and
 //     which rep is on which dealer. No other tenant's login gets past
-//     requirePlatformStaff, and RLS gives them no rows anyway.
+//     requirePlatform, and RLS gives them no rows anyway.
+//   - A REP signs in to the same tenant with role 'rep' and sees only what is
+//     theirs: their own leads, the dealers they are on, and their own earnings
+//     and payouts. Routes they may not touch at all refuse with 'staff_only';
+//     the rest narrow themselves to current_rep_id(). RLS enforces the same
+//     thing underneath, so a mistake here leaks nothing.
 //   - Everything about money (what reps earned, what they are owed, payouts,
 //     the pay rates) is for the 50. tenant's ADMIN only. The helper (a staff,
 //     not admin, user) gets responses with no dollar amounts in them at all.
@@ -29,13 +37,26 @@ function httpError(status, message, publicCode) {
   return err;
 }
 
-async function requirePlatform(client, userId, { admin = false } = {}) {
+// Resolves who is calling and refuses early. `admin` is Joseph only; `rep`
+// lets a sales rep through, in which case the returned ctx.rep_id is the only
+// rep whose rows they may see and every handler below narrows to it.
+async function requirePlatform(client, userId, { admin = false, rep = false } = {}) {
   const ctx = await getCallerContext(client, userId);
-  if (!ctx) throw httpError(403, 'No staff account found for this user');
+  if (!ctx) throw httpError(403, 'No account found for this user');
   const { rows: [t] } = await client.query('select slug from tenants where id = $1', [ctx.tenant_id]);
   if (!t || t.slug !== '50-platform') throw httpError(403, 'The reps area is only for 50. staff');
+
+  const { rows: [u] } = await client.query('select role from users where id = $1', [userId]);
+  const isRep = Boolean(u && u.role === 'rep');
+  const { rows: [r] } = await client.query('select current_rep_id() as rep_id');
+  const repId = (r && r.rep_id) || null;
+
+  // A rep whose rep record was switched off: current_rep_id() goes null, so
+  // they would otherwise see an empty page with no explanation.
+  if (isRep && !repId) throw httpError(403, 'This rep account has been switched off. Ask Joseph to turn it back on.', 'rep_inactive');
+  if (isRep && !rep) throw httpError(403, 'That part of the reps area is not for reps', 'staff_only');
   if (admin && !ctx.is_admin) throw httpError(403, 'Only the 50. admin can see or change rep money', 'admin_only');
-  return ctx;
+  return { ...ctx, rep_id: repId, is_rep: isRep };
 }
 
 // Postgres errors raised by the migration's own functions carry a SQLSTATE
@@ -107,14 +128,20 @@ function repRow(r) {
     leads_brought_in: r.leads_brought_in,
     companies_closed: r.companies_closed,
     companies_onboarded: r.companies_onboarded,
+    // Whether this rep can sign in yet — drives the Invite / Resend button.
+    // Never the login itself, and never anything about a password.
+    has_login: r.user_id !== undefined ? Boolean(r.user_id) : undefined,
   };
 }
 
+// Joseph and the helper get every rep (money only for Joseph). A rep gets
+// exactly one row — themselves — WITH their own money, because their own
+// earnings are the one set of figures they are allowed to see.
 router.get('/reps', requireAuth, wrap(async (req, res) => {
   const out = await withUserTransaction(req.userId, async (client) => {
-    const ctx = await requirePlatform(client, req.userId);
+    const ctx = await requirePlatform(client, req.userId, { rep: true });
     const { rows } = await client.query(
-      `select r.id, r.name, r.email, r.phone, r.active, r.notes, r.created_at,
+      `select r.id, r.name, r.email, r.phone, r.active, r.notes, r.created_at, r.user_id,
               (select count(*)::int from rep_leads l where l.brought_in_by_rep_id = r.id) as leads_brought_in,
               (select count(*)::int from rep_assignments a where a.closer_rep_id = r.id and a.effective_to is null) as companies_closed,
               (select count(*)::int from rep_assignments a where a.onboarder_rep_id = r.id and a.effective_to is null) as companies_onboarded
@@ -122,7 +149,7 @@ router.get('/reps', requireAuth, wrap(async (req, res) => {
        order by r.active desc, lower(r.name)`
     );
     const reps = rows.map(repRow);
-    if (!ctx.is_admin) return { reps };
+    if (!ctx.is_admin && !ctx.is_rep) return { reps };
 
     const month = await currentMonth(client);
     const { rows: money } = await client.query(
@@ -137,7 +164,11 @@ router.get('/reps', requireAuth, wrap(async (req, res) => {
     const byId = Object.fromEntries(money.map((m) => [m.id, m]));
     return {
       month,
-      reps: reps.map((r) => ({ ...r, owed_cents: byId[r.id].owed_cents, earned_this_month_cents: byId[r.id].earned_this_month_cents })),
+      // RLS has already limited both queries to this rep's own row when a rep
+      // is calling, so byId may simply not have a rep the list mentions.
+      reps: reps
+        .filter((r) => byId[r.id])
+        .map((r) => ({ ...r, owed_cents: byId[r.id].owed_cents, earned_this_month_cents: byId[r.id].earned_this_month_cents })),
     };
   });
   res.json(out);
@@ -196,6 +227,111 @@ router.patch('/reps/:id', requireAuth, wrap(async (req, res) => {
   res.json({ ...out.rep, dealers_needing_a_decision: out.dealers_needing_a_decision });
 }));
 
+// Giving a rep their own login. Admin only: creating a sign-in account is a
+// different kind of act from typing someone's phone number in, so the helper
+// cannot do it.
+//
+// No password is ever created, sent or shown. The account is made with none at
+// all and the rep follows a one-time link to choose their own (see
+// lib/supabaseAdmin.js). Re-running this on a rep who already has a login is a
+// RESEND, not an error: the same route covers "they lost the email" and "the
+// link expired".
+router.post('/reps/:id/invite', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  if (!supabaseAdmin.isConfigured()) {
+    throw httpError(
+      503,
+      'This platform cannot create logins yet: SUPABASE_SERVICE_ROLE_KEY is not set on the API service.',
+      'logins_not_configured'
+    );
+  }
+
+  // Everything the database needs to say first, in its own transaction, so a
+  // slow Supabase or Postmark call is not holding a row lock open.
+  const repRecord = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+    const { rows: [r] } = await client.query('select id, name, email, active, user_id from reps where id = $1', [id]);
+    if (!r) throw httpError(404, 'No such rep');
+    if (!r.email) throw httpError(400, 'Add an email address for this rep first — that is where the link goes.');
+    if (!r.active) throw httpError(409, 'This rep is switched off. Turn them back on before giving them a login.');
+    return r;
+  });
+
+  const signInUrl = `${String(process.env.FRONTEND_BASE_URL || '').replace(/\/+$/, '')}/reps`;
+  let authUserId;
+  let link;
+  try {
+    // Creating the account and minting the link are two calls on purpose: an
+    // account that already exists is a resend, not a failure, and this way
+    // both paths end with exactly one fresh link.
+    ({ userId: authUserId } = await supabaseAdmin.createPasswordlessUser(repRecord.email));
+    link = await supabaseAdmin.setPasswordLink(repRecord.email, signInUrl);
+  } catch (err) {
+    throw httpError(502, `Supabase would not set up that login: ${err.message}`);
+  }
+
+  // Attach the login to the 50. tenant as a 'rep', and to this rep row. Done
+  // after Supabase succeeds so a failed account never leaves a dangling users
+  // row, and written so re-inviting the same person changes nothing.
+  //
+  // Service role, because this writes the users row that decides who someone
+  // IS — exactly the row RLS consults — so no signed-in role may write it,
+  // the admin's included. The admin check happened above, under RLS, before
+  // anything was created.
+  const resend = await withServiceRole(async (client) => {
+    const { rows: [platform] } = await client.query(`select id from tenants where slug = '50-platform'`);
+    if (!platform) throw httpError(500, 'The 50. tenant is missing');
+
+    const { rows: [existing] } = await client.query('select id, tenant_id, role from users where id = $1', [authUserId]);
+    if (existing && existing.tenant_id !== platform.id) {
+      throw httpError(409, 'That email already signs in to a different account on this platform.');
+    }
+    if (existing && existing.role === 'admin') {
+      throw httpError(409, 'That email is already the 50. admin — give the rep their own address.');
+    }
+    if (!existing) {
+      await client.query(
+        `insert into users (id, tenant_id, email, name, role) values ($1, $2, $3, $4, 'rep')`,
+        [authUserId, platform.id, repRecord.email, repRecord.name]
+      );
+    }
+    const { rows: [taken] } = await client.query('select id from reps where user_id = $1 and id <> $2', [authUserId, id]);
+    if (taken) throw httpError(409, 'That login already belongs to another rep.');
+    await assertRowsAffected(
+      client,
+      await client.query('update reps set user_id = $2 where id = $1', [id, authUserId]),
+      { table: 'reps', id }
+    );
+    return Boolean(repRecord.user_id);
+  });
+
+  const from = process.env.EMAIL_FROM_ADDRESS;
+  if (!from) throw httpError(500, 'EMAIL_FROM_ADDRESS is not set, so the invite cannot be emailed.');
+  const mail = repInviteEmail.build({
+    repName: repRecord.name,
+    link,
+    signInUrl,
+    logoUrl: `${String(process.env.FRONTEND_BASE_URL || '').replace(/\/+$/, '')}/assets/50-platform-logo.png`,
+    resend,
+  });
+  try {
+    await sendEmail({
+      from: `Joseph at 50. <${from}>`,
+      to: repRecord.email,
+      replyTo: process.env.BILLING_SUPPORT_EMAIL || 'joseph@referwith50.com',
+      subject: mail.subject,
+      htmlBody: mail.htmlBody,
+      textBody: mail.textBody,
+    });
+  } catch (err) {
+    // The login exists and works; only the email failed. Say so plainly rather
+    // than implying nothing happened — re-inviting is safe and is the fix.
+    throw httpError(502, `The login is ready, but the email could not be sent: ${err.message}. Try Resend.`);
+  }
+
+  res.json({ ok: true, resent: resend, emailed_to: repRecord.email });
+}));
+
 // ---------------------------------------------------------------------------
 // Leads
 // ---------------------------------------------------------------------------
@@ -204,24 +340,27 @@ const leadFields = {
   contact_name: optText(120),
   phone: optText(50),
   email: optText(200),
+  website: optText(300),
+  notes: optText(2000),
   brought_in_by_rep_id: uuid.nullable().optional(),
   found_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 };
 const leadCreate = z.object({ ...leadFields, confirm_duplicate: z.boolean().optional() });
+// Won is deliberately absent: it goes through POST /rep-leads/:id/win, which
+// is the one place that decides who gets the credit.
 const leadPatch = z.object({ ...leadFields, status: z.enum(['open', 'lost']).optional() }).partial();
 
-const LEAD_COLUMNS = `l.id, l.company_name, l.contact_name, l.phone, l.email, l.brought_in_by_rep_id, l.found_on, l.status,
+const LEAD_COLUMNS = `l.id, l.company_name, l.contact_name, l.phone, l.email, l.website, l.notes,
+  l.brought_in_by_rep_id, l.found_on, l.status,
   l.closed_by_rep_id, l.onboarded_by_rep_id, l.closed_on, l.tenant_id, l.created_at`;
 
-function digits(s) {
-  return String(s || '').replace(/\D/g, '');
-}
-
+// A rep calling this gets only their own leads — not because of anything
+// here, but because RLS gives them no other rows.
 router.get('/rep-leads', requireAuth, wrap(async (req, res) => {
   const status = req.query.status;
-  if (status !== undefined && !['open', 'closed', 'lost'].includes(status)) throw httpError(400, 'status must be open, closed or lost');
+  if (status !== undefined && !['open', 'won', 'lost'].includes(status)) throw httpError(400, 'status must be open, won or lost');
   const rows = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId);
+    await requirePlatform(client, req.userId, { rep: true });
     const { rows } = await client.query(
       `select ${LEAD_COLUMNS} from rep_leads l ${status ? 'where l.status = $1' : ''} order by l.found_on desc, l.created_at desc limit 500`,
       status ? [status] : []
@@ -232,40 +371,69 @@ router.get('/rep-leads', requireAuth, wrap(async (req, res) => {
 }));
 
 // Leads that look like the same company: the same name (ignoring case and
-// spacing), the same phone digits, or the same email.
+// spacing), the same phone digits, or the same email — across EVERY rep's
+// leads, which is the whole point, since two reps working one company is the
+// thing worth catching.
+//
+// A rep may not read another rep's leads, so this goes through
+// rep_lead_duplicates() (security definer, see the rep_pipeline migration),
+// which decides per row how much the caller may see. A row that comes back
+// with visible = false is somebody else's: the rep is told the company is
+// already being worked and nothing more — not the contact, not whose it is.
 async function findDuplicateLeads(client, { company_name, phone, email }, excludeId) {
   const { rows } = await client.query(
-    `select ${LEAD_COLUMNS}
-     from rep_leads l
-     where ($4::uuid is null or l.id <> $4::uuid)
-       and (
-         regexp_replace(lower(l.company_name), '\\s+', '', 'g') = regexp_replace(lower($1), '\\s+', '', 'g')
-         or ($2 <> '' and length($2) >= 7 and regexp_replace(coalesce(l.phone, ''), '\\D', '', 'g') = $2)
-         or ($3 <> '' and lower(l.email) = $3)
-       )
-     order by l.created_at limit 10`,
-    [company_name, digits(phone), String(email || '').trim().toLowerCase(), excludeId || null]
+    'select * from rep_lead_duplicates($1, $2, $3, $4)',
+    [company_name, phone || null, email || null, excludeId || null]
   );
-  return rows;
+  return rows.map((r) =>
+    r.visible
+      ? {
+          id: r.id,
+          company_name: r.company_name,
+          contact_name: r.contact_name,
+          phone: r.phone,
+          email: r.email,
+          found_on: r.found_on,
+          status: r.status,
+          brought_in_by_rep_id: r.brought_in_by_rep_id,
+          mine: r.mine,
+          visible: true,
+        }
+      : { id: r.id, company_name: r.company_name, mine: false, visible: false }
+  );
 }
 
 router.post('/rep-leads', requireAuth, wrap(async (req, res) => {
   const body = parseOr400(leadCreate, req.body || {});
   const out = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId);
-    if (!body.confirm_duplicate) {
+    const ctx = await requirePlatform(client, req.userId, { rep: true });
+    // A rep's lead is always their own: whatever the form sent, it is filed
+    // under them. (RLS would refuse anything else anyway — this just turns a
+    // confusing refusal into the obvious behaviour.)
+    const broughtIn = ctx.is_rep ? ctx.rep_id : body.brought_in_by_rep_id || null;
+
+    // Checked even when the form says "add anyway": confirming past your own
+    // near-duplicate is yours to decide, confirming past another rep's company
+    // is not, so the second case is refused no matter what was sent.
+    {
       const dupes = await findDuplicateLeads(client, body);
-      if (dupes.length) {
-        const err = httpError(409, 'This looks like a lead that is already in the list. Check it, then add it anyway if it is a different company.', 'possible_duplicate');
+      const someoneElses = dupes.some((d) => !d.visible);
+      if (dupes.length && (someoneElses || !body.confirm_duplicate)) {
+        const message = someoneElses
+          ? 'This company is already being worked. Check with Joseph before you spend time on it.'
+          : 'This looks like a lead that is already in the list. Check it, then add it anyway if it is a different company.';
+        const err = httpError(409, message, 'possible_duplicate');
         err.matches = dupes;
+        err.can_add_anyway = !someoneElses;
         throw err;
       }
     }
     const { rows: [lead] } = await client.query(
-      `insert into rep_leads (company_name, contact_name, phone, email, brought_in_by_rep_id, found_on)
-       values ($1, $2, $3, $4, $5, coalesce($6::date, current_date))
+      `insert into rep_leads (company_name, contact_name, phone, email, website, notes, brought_in_by_rep_id, found_on)
+       values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::date, current_date))
        returning ${LEAD_COLUMNS.replace(/l\./g, '')}`,
-      [body.company_name, body.contact_name || null, body.phone || null, body.email || null, body.brought_in_by_rep_id || null, body.found_on || null]
+      [body.company_name, body.contact_name || null, body.phone || null, body.email || null,
+       body.website || null, body.notes || null, broughtIn, body.found_on || null]
     );
     return lead;
   });
@@ -276,57 +444,75 @@ router.patch('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
   const id = parseOr400(uuid, req.params.id);
   const body = parseOr400(leadPatch, req.body || {});
   const lead = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId);
+    const ctx = await requirePlatform(client, req.userId, { rep: true });
+    // A rep cannot hand their lead to another rep, or take one.
+    if (ctx.is_rep && body.brought_in_by_rep_id !== undefined && body.brought_in_by_rep_id !== ctx.rep_id) {
+      throw httpError(403, 'A lead stays with the rep who brought it in.');
+    }
     const sets = [];
     const vals = [id];
-    for (const key of ['company_name', 'contact_name', 'phone', 'email', 'brought_in_by_rep_id', 'found_on', 'status']) {
+    for (const key of ['company_name', 'contact_name', 'phone', 'email', 'website', 'notes', 'brought_in_by_rep_id', 'found_on', 'status']) {
       if (body[key] !== undefined) {
         vals.push(body[key] === '' ? null : body[key]);
         sets.push(`${key} = $${vals.length}`);
       }
     }
     if (!sets.length) throw httpError(400, 'Nothing to change');
-    // A closed lead stays closed: closing is the one step that assigns reps
-    // to a dealer, and undoing it is a reassignment, not a status flip.
+    // A won lead stays won: winning is the one step that fixes who gets the
+    // credit, and undoing it is a reassignment, not a status flip.
     const { rows: [cur] } = await client.query('select status from rep_leads where id = $1', [id]);
     if (!cur) throw httpError(404, 'No such lead');
-    if (cur.status === 'closed' && body.status !== undefined) throw httpError(409, 'This lead is already closed');
+    if (cur.status === 'won' && body.status !== undefined) throw httpError(409, 'This lead is already won');
     const { rows: [l] } = await client.query(`update rep_leads set ${sets.join(', ')} where id = $1 returning ${LEAD_COLUMNS.replace(/l\./g, '')}`, vals);
     return l;
   });
   res.json(lead);
 }));
 
-const closeBody = z.object({
-  closed_by_rep_id: uuid,
+const winBody = z.object({
+  closed_by_rep_id: uuid.optional(),
   onboarded_by_rep_id: uuid.nullable().optional(),
   tenant_id: uuid.nullable().optional(),
   effective_from: z.string().datetime({ offset: true }).optional(),
 });
 
-// Closing a lead: whoever closed it gets the sign-up credit. When the signed
-// company is already a 50. dealer (tenant_id), the closer and onboarder are
-// put on it in the same step — that assignment is what earns money.
-router.post('/rep-leads/:id/close', requireAuth, wrap(async (req, res) => {
+// Winning a lead: the company said yes. Whoever closed it gets the credit, and
+// that is fixed here.
+//
+// A REP marking their own lead won is the ordinary case and does exactly that
+// and no more — no dealer is created and no money is assigned, because the
+// build happens after Joseph has approved it. Staff may additionally point the
+// lead at an existing 50. dealer (tenant_id), which puts the reps on it; that
+// assignment is what actually earns.
+router.post('/rep-leads/:id/win', requireAuth, wrap(async (req, res) => {
   const id = parseOr400(uuid, req.params.id);
-  const body = parseOr400(closeBody, req.body || {});
+  const body = parseOr400(winBody, req.body || {});
   const lead = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId);
+    const ctx = await requirePlatform(client, req.userId, { rep: true });
     const { rows: [cur] } = await client.query('select status from rep_leads where id = $1 for update', [id]);
     if (!cur) throw httpError(404, 'No such lead');
-    if (cur.status === 'closed') throw httpError(409, 'This lead is already closed');
+    if (cur.status === 'won') throw httpError(409, 'This lead is already won');
+
+    // A rep wins it for themselves; only staff may name someone else, attach
+    // a dealer, or backdate.
+    const closer = ctx.is_rep ? ctx.rep_id : body.closed_by_rep_id;
+    if (!closer) throw httpError(400, 'Say which rep closed it');
+    if (ctx.is_rep && (body.tenant_id || body.onboarded_by_rep_id || body.effective_from)) {
+      throw httpError(403, 'A rep marks the lead won; Joseph sets up the dealer.', 'staff_only');
+    }
     if (body.tenant_id) {
       await client.query('select assign_rep($1, $2, $3, $4)', [
-        body.tenant_id, body.closed_by_rep_id, body.onboarded_by_rep_id || null, body.effective_from || null,
+        body.tenant_id, closer, body.onboarded_by_rep_id || null, body.effective_from || null,
       ]);
     } else if (body.effective_from) {
       throw httpError(400, 'effective_from only applies together with a dealer (tenant_id)');
     }
     const { rows: [l] } = await client.query(
-      `update rep_leads set status = 'closed', closed_by_rep_id = $2, onboarded_by_rep_id = $3, closed_on = current_date, tenant_id = $4
+      `update rep_leads set status = 'won', closed_by_rep_id = $2, onboarded_by_rep_id = $3, closed_on = current_date, tenant_id = $4
        where id = $1 returning ${LEAD_COLUMNS.replace(/l\./g, '')}`,
-      [id, body.closed_by_rep_id, body.onboarded_by_rep_id || null, body.tenant_id || null]
+      [id, closer, body.onboarded_by_rep_id || null, body.tenant_id || null]
     );
+    if (!l) throw httpError(404, 'No such lead');
     return l;
   });
   res.json(lead);
@@ -335,9 +521,11 @@ router.post('/rep-leads/:id/close', requireAuth, wrap(async (req, res) => {
 // ---------------------------------------------------------------------------
 // Dealers and who is on them
 // ---------------------------------------------------------------------------
+// Joseph and the helper see every dealer; a rep sees only the ones they are
+// on. rep_dealer_list() decides that, not this handler.
 router.get('/rep-dealers', requireAuth, wrap(async (req, res) => {
   const rows = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId);
+    await requirePlatform(client, req.userId, { rep: true });
     const { rows } = await client.query('select * from rep_dealer_list()');
     return rows;
   });
@@ -405,10 +593,14 @@ router.get('/rep-money/overview', requireAuth, wrap(async (req, res) => {
   res.json(out);
 }));
 
+// Joseph can open any rep's statement; a rep can open their own and no other.
 router.get('/reps/:id/statement', requireAuth, wrap(async (req, res) => {
   const id = parseOr400(uuid, req.params.id);
   const out = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId, { admin: true });
+    const ctx = await requirePlatform(client, req.userId, { rep: true });
+    if (!ctx.is_admin && ctx.rep_id !== id) {
+      throw httpError(403, 'You can only open your own statement', 'own_statement_only');
+    }
     const month = monthParam(req.query.month, await currentMonth(client));
     const { rows: [rep] } = await client.query('select id, name, email, phone from reps where id = $1', [id]);
     if (!rep) throw httpError(404, 'No such rep');
@@ -501,15 +693,23 @@ router.post('/rep-earnings/:id/reverse', requireAuth, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// The closer's rates and the onboarder's, side by side. The onboarder's are 0
+// out of the box (the closer earns everything); setting them above 0 starts
+// paying an onboarder again, with no code change.
 const settingsBody = z.object({
   activation_cents: money,
   referral_cents: money,
   referral_cents_after_threshold: money,
+  onboarder_activation_cents: money,
+  onboarder_referral_cents: money,
+  onboarder_referral_cents_after_threshold: money,
   threshold_companies: z.number().int().min(1).max(10000000),
   full_rate_card_cents: z.number().int().min(1).max(100000000),
 }).partial();
 
-const SETTINGS_COLUMNS = 'activation_cents, referral_cents, referral_cents_after_threshold, threshold_companies, full_rate_card_cents';
+const SETTINGS_COLUMNS = `activation_cents, referral_cents, referral_cents_after_threshold,
+  onboarder_activation_cents, onboarder_referral_cents, onboarder_referral_cents_after_threshold,
+  threshold_companies, full_rate_card_cents`;
 
 router.get('/rep-settings', requireAuth, wrap(async (req, res) => {
   const row = await withUserTransaction(req.userId, async (client) => {
