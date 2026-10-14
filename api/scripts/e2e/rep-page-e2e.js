@@ -113,6 +113,7 @@ async function main() {
     if (html === before) return res.status(500).send('could not point the page at the local servers');
     res.type('html').send(html);
   });
+  pageApp.use('/assets', express.static(path.join(REPO_ROOT, 'assets')));
   const pageServer = pageApp.listen(PORTS.page, '127.0.0.1');
 
   process.env.DATABASE_URL = dbUrl(DB);
@@ -270,7 +271,7 @@ async function main() {
       await page.waitForSelector('#dlg[open] [data-rev]');
       const t = (await page.textContent('#dlg')).replace(/\s+/g, ' ');
       assert(t.includes('Sign-up bonus') && (t.match(/Referral royalty/g) || []).length === 3 && t.includes('Owed at the end of the month$53.00'), t);
-      await page.screenshot({ path: path.join(__dirname, '..', '..', 'rep-page-statement.png') }).catch(() => {});
+      await page.screenshot({ path: process.env.E2E_SHOT || path.join(require('os').tmpdir(), 'rep-page-statement.png') }).catch(() => {});
       return 'ok';
     });
     await check('Reverse one royalty by hand from the statement: balance drops to $52.00', async () => {

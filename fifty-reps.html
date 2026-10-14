@@ -9,9 +9,9 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --primary:#1F4D36; --primary-dark:#2D6A4F; --secondary:#40916C;
-    --accent:#8B5E3C; --bg:#F8F5F0; --charcoal:#1B1B1B; --muted:#6B6A63;
-    --line:#E4DED3; --card:#FFFFFF; --danger:#A12B2B; --ok:#1F6B45; --warn-bg:#FFF4D6;
+    --primary:#1C2B33; --primary-dark:#33475A; --secondary:#7C9FBB;
+    --accent:#C9974B; --accent-dark:#8B6B2E; --bg:#F7F4EE; --charcoal:#1B1B1B; --muted:#6B6A63;
+    --line:#E4DED3; --card:#FFFFFF; --danger:#A12B2B; --ok:#2B6B5A; --warn-bg:#FFF4D6;
   }
   *{box-sizing:border-box;}
   body{margin:0;font-family:'Inter',system-ui,sans-serif;color:var(--charcoal);background:var(--bg);font-size:15px;line-height:1.45;}
@@ -27,7 +27,9 @@
   .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;}
   .brand{display:flex;align-items:baseline;gap:10px;margin-bottom:14px;}
   .brand .mark{font-family:'Fraunces',serif;font-size:30px;font-weight:600;color:var(--primary);}
-  .brand .tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:700;}
+  .brand img,header.top img{height:44px;width:auto;display:block;}
+  header.top img{height:38px;background:#fff;border-radius:50%;padding:2px;}
+  .brand .tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-dark);font-weight:700;}
   label{display:block;font-size:13px;font-weight:600;margin:12px 0 4px;}
   input,select,textarea{width:100%;padding:9px 11px;border:1px solid #CFC8BA;border-radius:8px;background:#fff;}
   input:focus,select:focus,textarea:focus{outline:2px solid var(--secondary);outline-offset:1px;}
@@ -42,8 +44,7 @@
 
   /* app */
   header.top{background:var(--primary);color:#fff;padding:12px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
-  header.top .mark{font-family:'Fraunces',serif;font-size:24px;font-weight:600;}
-  header.top .who{margin-left:auto;font-size:13px;opacity:.92;}
+    header.top .who{margin-left:auto;font-size:13px;opacity:.92;}
   header.top button{background:transparent;border:1px solid rgba(255,255,255,.55);color:#fff;border-radius:8px;padding:5px 10px;cursor:pointer;}
   nav.tabs{display:flex;gap:4px;padding:10px 16px 0;border-bottom:1px solid var(--line);background:var(--card);overflow-x:auto;}
   nav.tabs button{border:0;background:none;padding:10px 16px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;}
@@ -80,7 +81,7 @@
 
 <section id="loginBox">
   <div class="panel">
-    <div class="brand"><span class="mark">50.</span><span class="tag">Reps</span></div>
+    <div class="brand"><img src="assets/50-platform-logo.png" alt="50."><span class="tag">Reps</span></div>
     <form id="loginForm">
       <label for="email">Email</label>
       <input id="email" type="email" autocomplete="username" required>
@@ -94,7 +95,7 @@
 
 <div id="app" class="hide">
   <header class="top">
-    <span class="mark">50.</span><span>Reps</span>
+    <img src="assets/50-platform-logo.png" alt="50."><span>Reps</span>
     <span class="who" id="who"></span>
     <button id="signOutBtn" type="button">Sign out</button>
   </header>
