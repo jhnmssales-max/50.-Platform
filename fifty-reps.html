@@ -60,7 +60,7 @@
   tr:last-child td{border-bottom:0;}
   td select{padding:6px 8px;min-width:140px;}
   .pill{display:inline-block;font-size:12px;font-weight:600;border-radius:99px;padding:2px 9px;background:#EDE8DD;}
-  .pill.open{background:#E6F0FA;color:#1F4E7A;} .pill.closed{background:#E3F3EA;color:var(--ok);} .pill.lost{background:#F1E6E6;color:var(--danger);}
+  .pill.open{background:#E6F0FA;color:#1F4E7A;} .pill.won{background:#E3F3EA;color:var(--ok);} .pill.lost{background:#F1E6E6;color:var(--danger);}
   .pill.off{background:#EEE;color:#777;}
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:16px;}
   .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;}
@@ -106,6 +106,7 @@
     <section id="tab-reps" class="hide"></section>
     <section id="tab-dealers" class="hide"></section>
     <section id="tab-money" class="hide"></section>
+    <section id="tab-mymoney" class="hide"></section>
   </main>
 </div>
 
@@ -119,7 +120,7 @@ const SUPABASE_URL = "https://jzjmuttqbtandwjmwwfn.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_RE92j36ZEVFvSBwV-Rl8hg_JyfxRT6a";
 
 const TZ = 'America/New_York';
-const state = { me: null, isAdmin: false, reps: [], leads: [], dealers: [], money: null, month: null, tab: 'leads', settings: null };
+const state = { me: null, isAdmin: false, isRep: false, myRepId: null, reps: [], leads: [], dealers: [], money: null, month: null, tab: 'leads', settings: null };
 
 /* ---------- helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -191,14 +192,28 @@ async function start(){
     // /reps is for 50. staff only; anyone else (a dealer's login) gets a 403.
     await loadReps();
   }catch(err){
-    if(err.status === 403){ setSession(null); const m = $('loginMsg'); m.textContent = 'This page is only for 50. staff. Sign in with your 50. login.'; m.className = 'msg show err'; return showLogin(); }
+    if(err.status === 403){
+      setSession(null);
+      const m = $('loginMsg');
+      m.textContent = err.code === 'rep_inactive'
+        ? 'This login has been switched off. Ask Joseph to turn it back on.'
+        : 'This page is only for 50. staff and reps. Sign in with the login 50. sent you.';
+      m.className = 'msg show err';
+      return showLogin();
+    }
     if(err.status === 401){ setSession(null); return showLogin(); }
     const m = $('loginMsg'); m.textContent = err.message; m.className = 'msg show err'; return showLogin();
   }
   state.isAdmin = state.me.role === 'admin';
-  $('who').textContent = state.me.name + ' · ' + (state.isAdmin ? 'admin' : 'helper');
+  state.isRep = state.me.role === 'rep';
+  state.myRepId = state.isRep && state.reps.length ? state.reps[0].id : null;
+  $('who').textContent = state.me.name + ' · ' + (state.isAdmin ? 'admin' : state.isRep ? 'rep' : 'helper');
   $('loginBox').classList.add('hide'); $('app').classList.remove('hide');
-  const tabs = [['leads','Leads'],['reps','Reps'],['dealers','Dealers']];
+  // A rep runs their own pipeline: their leads, their dealers, their money.
+  // No Reps tab (there is only them) and no Money tab (that is everyone's).
+  const tabs = state.isRep
+    ? [['leads','My leads'],['dealers','My dealers'],['mymoney','My money']]
+    : [['leads','Leads'],['reps','Reps'],['dealers','Dealers']];
   if(state.isAdmin) tabs.push(['money','Money']);
   $('tabs').innerHTML = tabs.map(([k,l]) => '<button type="button" data-tab="' + k + '">' + l + '</button>').join('');
   $('tabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
@@ -211,12 +226,13 @@ async function loadReps(){ const d = await api('/reps'); state.reps = d.reps; st
 async function showTab(tab){
   state.tab = tab; clearFlash();
   $('tabs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  for(const k of ['leads','reps','dealers','money']) $('tab-' + k).classList.toggle('hide', k !== tab);
+  for(const k of ['leads','reps','dealers','money','mymoney']) $('tab-' + k).classList.toggle('hide', k !== tab);
   try{
     if(tab === 'leads') await renderLeads();
     if(tab === 'reps') await renderReps();
     if(tab === 'dealers') await renderDealers();
     if(tab === 'money') await renderMoney();
+    if(tab === 'mymoney') await renderMyMoney();
   }catch(err){ flash(err.message); }
 }
 
@@ -234,30 +250,34 @@ async function renderLeads(){
     '<details class="card" ' + (state.leads.length ? '' : 'open') + '><summary>Add a lead</summary>' +
       '<form id="leadForm"><div class="row">' +
         '<div><label>Company</label><input name="company_name" required maxlength="200"></div>' +
-        '<div><label>Contact name</label><input name="contact_name" maxlength="120"></div></div>' +
-      '<div class="row"><div><label>Phone</label><input name="phone" maxlength="50"></div>' +
-        '<div><label>Email</label><input name="email" type="email" maxlength="200"></div></div>' +
-      '<div class="row"><div><label>Brought in by</label><select name="brought_in_by_rep_id">' + repOptions('', { blank: '— nobody / me —', activeOnly: true }) + '</select></div>' +
+        '<div><label>Website</label><input name="website" maxlength="300" placeholder="theircompany.com"></div></div>' +
+      '<div class="row"><div><label>Contact name</label><input name="contact_name" maxlength="120"></div>' +
+        '<div><label>Phone</label><input name="phone" maxlength="50"></div></div>' +
+      '<div class="row"><div><label>Email</label><input name="email" type="email" maxlength="200"></div>' +
+        (state.isRep ? '' : '<div><label>Brought in by</label><select name="brought_in_by_rep_id">' + repOptions('', { blank: '— nobody / me —', activeOnly: true }) + '</select></div>') +
         '<div><label>Date</label><input name="found_on" type="date" value="' + todayYmd() + '"></div></div>' +
+      '<label>Notes</label><textarea name="notes" rows="2" maxlength="2000" placeholder="Where you met them, what they want, what to follow up on."></textarea>' +
       '<div class="actions"><button class="btn" type="submit">Add lead</button></div></form>' +
       '<div id="dupBox"></div></details>' +
-    '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th><th>Brought in by</th><th>Found</th><th>Status</th><th>Closed by / onboarded by</th><th></th></tr></thead><tbody>' +
+    '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th>' + (state.isRep ? '' : '<th>Brought in by</th>') + '<th>Found</th><th>Status</th>' + (state.isRep ? '' : '<th>Won by</th>') + '<th></th></tr></thead><tbody>' +
     (state.leads.map((x) =>
-      '<tr><td><b>' + esc(x.company_name) + '</b></td>' +
+      '<tr><td><b>' + esc(x.company_name) + '</b>' +
+        (x.website ? '<div class="muted">' + esc(x.website) + '</div>' : '') +
+        (x.notes ? '<div class="muted">' + esc(x.notes) + '</div>' : '') + '</td>' +
       '<td>' + esc(x.contact_name || '') + '<div class="muted">' + esc([x.phone, x.email].filter(Boolean).join(' · ')) + '</div></td>' +
-      '<td>' + esc(repName(x.brought_in_by_rep_id) || '—') + '</td>' +
+      (state.isRep ? '' : '<td>' + esc(repName(x.brought_in_by_rep_id) || '—') + '</td>') +
       '<td>' + esc(plainDate(x.found_on)) + '</td>' +
       '<td><span class="pill ' + x.status + '">' + x.status + '</span></td>' +
-      '<td>' + (x.status === 'closed' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>' +
-      '<td class="num">' + (x.status === 'closed' ? '' :
-        '<button class="btn small" data-close="' + x.id + '">Close</button> ' +
+      (state.isRep ? '' : '<td>' + (x.status === 'won' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>') +
+      '<td class="num">' + (x.status === 'won' ? '' :
+        '<button class="btn small" data-win="' + x.id + '">Mark won</button> ' +
         (x.status === 'open' ? '<button class="btn small secondary" data-lost="' + x.id + '">Lost</button>' : '<button class="btn small secondary" data-reopen="' + x.id + '">Reopen</button>')) + '</td></tr>'
     ).join('') || '<tr><td colspan="7" class="muted" style="padding:18px">No leads yet.</td></tr>') +
     '</tbody></table></div>';
 
   const form = $('leadForm');
   form.addEventListener('submit', (e) => { e.preventDefault(); submitLead(form, false); });
-  $('tab-leads').querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => closeLeadDialog(b.dataset.close)));
+  $('tab-leads').querySelectorAll('[data-win]').forEach((b) => b.addEventListener('click', () => winLeadDialog(b.dataset.win)));
   $('tab-leads').querySelectorAll('[data-lost]').forEach((b) => b.addEventListener('click', () => leadStatus(b.dataset.lost, 'lost')));
   $('tab-leads').querySelectorAll('[data-reopen]').forEach((b) => b.addEventListener('click', () => leadStatus(b.dataset.reopen, 'open')));
 }
@@ -266,7 +286,7 @@ function formData(form){ const o = {}; new FormData(form).forEach((v, k) => { o[
 
 async function submitLead(form, confirmDuplicate){
   const d = formData(form);
-  const body = { company_name: d.company_name, contact_name: d.contact_name, phone: d.phone, email: d.email, found_on: d.found_on || undefined, brought_in_by_rep_id: d.brought_in_by_rep_id || null };
+  const body = { company_name: d.company_name, contact_name: d.contact_name, phone: d.phone, email: d.email, website: d.website, notes: d.notes, found_on: d.found_on || undefined, brought_in_by_rep_id: d.brought_in_by_rep_id || null };
   if(confirmDuplicate) body.confirm_duplicate = true;
   try{
     await post('/rep-leads', body);
@@ -274,34 +294,62 @@ async function submitLead(form, confirmDuplicate){
     await renderLeads();
   }catch(err){
     if(err.code === 'possible_duplicate'){
-      const m = (err.body.matches || []).map((x) => '<li><b>' + esc(x.company_name) + '</b> ' + esc([x.contact_name, x.phone, x.email].filter(Boolean).join(' · ')) + ' — found ' + esc(plainDate(x.found_on)) + (x.brought_in_by_rep_id ? ' by ' + esc(repName(x.brought_in_by_rep_id)) : '') + ' (' + x.status + ')</li>').join('');
-      $('dupBox').innerHTML = '<div class="notice"><b>This looks like a lead that is already in the list:</b><ul>' + m + '</ul>If it is a different company, add it anyway. <div class="actions"><button class="btn small" id="addAnyway" type="button">Add anyway</button></div></div>';
-      $('addAnyway').addEventListener('click', () => submitLead(form, true));
+      const canAdd = err.body.can_add_anyway !== false;
+      // A match the server would not show us belongs to another rep: we are
+      // told the company is taken and nothing else, so say exactly that.
+      const m = (err.body.matches || []).map((x) => x.visible === false
+        ? '<li><b>' + esc(x.company_name) + '</b> — already being worked</li>'
+        : '<li><b>' + esc(x.company_name) + '</b> ' + esc([x.contact_name, x.phone, x.email].filter(Boolean).join(' · ')) + ' — found ' + esc(plainDate(x.found_on)) + (x.brought_in_by_rep_id ? ' by ' + esc(repName(x.brought_in_by_rep_id)) : '') + ' (' + esc(x.status || '') + ')</li>').join('');
+      $('dupBox').innerHTML = '<div class="notice"><b>' + esc(err.message) + '</b><ul>' + m + '</ul>' +
+        (canAdd
+          ? 'If it is a different company, add it anyway. <div class="actions"><button class="btn small" id="addAnyway" type="button">Add anyway</button></div>'
+          : '') + '</div>';
+      if(canAdd) $('addAnyway').addEventListener('click', () => submitLead(form, true));
     } else flash(err.message);
   }
 }
 async function leadStatus(id, status){ try{ await patch('/rep-leads/' + id, { status }); await renderLeads(); }catch(err){ flash(err.message); } }
 
-function closeLeadDialog(id){
+// Marking a lead won. For a rep this is a plain confirmation: the credit is
+// theirs, and Joseph builds the dealer afterwards. For Joseph and the helper
+// it can also point the lead at a dealer that already exists, which is the
+// step that actually puts reps on it.
+function winLeadDialog(id){
   const lead = state.leads.find((x) => x.id === id);
-  const openDealers = state.dealers.filter((d) => !d.closer_rep_id && !d.onboarder_rep_id);
+  if(state.isRep){
+    openDialog(
+      '<h3>Mark ' + esc(lead.company_name) + ' won</h3>' +
+      '<p>This records that you closed them. Joseph sets their 50. account up from here, and you get an email when it is live.</p>' +
+      '<p class="muted">It cannot be undone, so only do this once they have actually said yes.</p>' +
+      '<div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Not yet</button>' +
+      '<button class="btn" id="confirmWin" type="button">Yes, they said yes</button></div>'
+    );
+    $('cancelDlg').addEventListener('click', closeDialog);
+    $('confirmWin').addEventListener('click', async () => {
+      try{
+        await post('/rep-leads/' + id + '/win', {});
+        closeDialog(); flash('Marked won. Joseph will take it from here.', true); await renderLeads();
+      }catch(err){ flash(err.message); closeDialog(); }
+    });
+    return;
+  }
   openDialog(
-    '<h3>Close ' + esc(lead.company_name) + '</h3>' +
+    '<h3>Mark ' + esc(lead.company_name) + ' won</h3>' +
     '<p class="muted">Whoever closes the lead gets the sign-up credit. The rep who only found it is not paid.</p>' +
-    '<form id="closeForm"><label>Closed by</label><select name="closed_by_rep_id" required>' + repOptions(lead.brought_in_by_rep_id, { blank: 'Choose a rep…', activeOnly: true }) + '</select>' +
-    '<label>Onboarded by</label><select name="onboarded_by_rep_id">' + repOptions('', { blank: '— nobody yet —', activeOnly: true }) + '</select>' +
-    '<label>Their 50. account</label><select name="tenant_id"><option value="">Not set up yet — I will pick it on the Dealers tab</option>' +
+    '<form id="winForm"><label>Closed by</label><select name="closed_by_rep_id" required>' + repOptions(lead.brought_in_by_rep_id, { blank: 'Choose a rep…', activeOnly: true }) + '</select>' +
+    '<label>Onboarded by <span class="muted">(earns nothing unless you have turned the onboarder rate on)</span></label>' +
+    '<select name="onboarded_by_rep_id">' + repOptions('', { blank: '— nobody —', activeOnly: true }) + '</select>' +
+    '<label>Their 50. account</label><select name="tenant_id"><option value="">Not set up yet</option>' +
       state.dealers.map((d) => '<option value="' + d.tenant_id + '"' + ((d.closer_rep_id || d.onboarder_rep_id) ? ' disabled' : '') + '>' + esc(d.name) + ((d.closer_rep_id || d.onboarder_rep_id) ? ' (already has reps)' : '') + '</option>').join('') + '</select>' +
-    '<div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Cancel</button><button class="btn" type="submit">Close lead</button></div></form>'
+    '<div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Cancel</button><button class="btn" type="submit">Mark won</button></div></form>'
   );
-  void openDealers;
   $('cancelDlg').addEventListener('click', closeDialog);
-  $('closeForm').addEventListener('submit', async (e) => {
+  $('winForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const d = formData(e.target);
     try{
-      await post('/rep-leads/' + id + '/close', { closed_by_rep_id: d.closed_by_rep_id, onboarded_by_rep_id: d.onboarded_by_rep_id || null, tenant_id: d.tenant_id || null });
-      closeDialog(); flash('Lead closed.', true); await loadReps(); await renderLeads();
+      await post('/rep-leads/' + id + '/win', { closed_by_rep_id: d.closed_by_rep_id, onboarded_by_rep_id: d.onboarded_by_rep_id || null, tenant_id: d.tenant_id || null });
+      closeDialog(); flash('Marked won.', true); await loadReps(); await renderLeads();
     }catch(err){ flash(err.message); closeDialog(); }
   });
 }
@@ -312,18 +360,41 @@ async function renderReps(){
   const adminCols = state.isAdmin;
   $('tab-reps').innerHTML =
     '<div class="head"><h2>Reps</h2><button class="btn" id="addRepBtn" type="button">Add a rep</button></div>' +
-    '<div class="tablewrap"><table><thead><tr><th>Name</th><th>Contact</th><th class="num">Companies closed</th><th class="num">Onboarded</th><th class="num">Leads found</th>' +
+    '<div class="tablewrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Login</th><th class="num">Companies closed</th><th class="num">Onboarded</th><th class="num">Leads found</th>' +
     (adminCols ? '<th class="num">Earned this month</th><th class="num">You owe</th>' : '') + '<th></th></tr></thead><tbody>' +
     (state.reps.map((r) =>
       '<tr><td><b>' + esc(r.name) + '</b> ' + (r.active ? '' : '<span class="pill off">inactive</span>') + '</td>' +
       '<td>' + esc(r.phone || '') + '<div class="muted">' + esc(r.email || '') + '</div></td>' +
+      '<td>' + (r.has_login ? '<span class="pill closed">can sign in</span>' : '<span class="pill off">no login</span>') + '</td>' +
       '<td class="num">' + r.companies_closed + '</td><td class="num">' + r.companies_onboarded + '</td><td class="num">' + r.leads_brought_in + '</td>' +
       (adminCols ? '<td class="num">' + dollarCell(r.earned_this_month_cents) + '</td><td class="num"><b>' + dollarCell(r.owed_cents) + '</b></td>' : '') +
-      '<td class="num"><button class="btn small secondary" data-edit="' + r.id + '">Edit</button></td></tr>'
+      '<td class="num">' +
+        (state.isAdmin && r.active && r.email ? '<button class="btn small" data-invite="' + r.id + '">' + (r.has_login ? 'Resend login' : 'Send login') + '</button> ' : '') +
+        '<button class="btn small secondary" data-edit="' + r.id + '">Edit</button></td></tr>'
     ).join('') || '<tr><td colspan="8" class="muted" style="padding:18px">No reps yet.</td></tr>') + '</tbody></table></div>';
   $('addRepBtn').addEventListener('click', () => repDialog(null));
   $('tab-reps').querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => repDialog(b.dataset.edit)));
+  $('tab-reps').querySelectorAll('[data-invite]').forEach((b) => b.addEventListener('click', () => inviteRep(b.dataset.invite, b)));
 }
+// Emails the rep a one-time link to choose their own password. No password is
+// created or shown here, or anywhere — not even to Joseph.
+async function inviteRep(id, button){
+  const r = state.reps.find((x) => x.id === id);
+  const again = r && r.has_login;
+  if(!window.confirm((again ? 'Send ' + r.name + ' a fresh sign-in link?' : 'Email ' + r.name + ' a link to set their password and sign in?') + '\n\nIt goes to ' + r.email + '.')) return;
+  button.disabled = true;
+  try{
+    const out = await post('/reps/' + id + '/invite', {});
+    flash((out.resent ? 'New link sent to ' : 'Login sent to ') + out.emailed_to + '.', true);
+    await renderReps();
+  }catch(err){
+    flash(err.code === 'logins_not_configured'
+      ? 'This platform cannot create logins yet — the Supabase service key is not set on the API. ' + err.message
+      : err.message);
+    button.disabled = false;
+  }
+}
+
 function repDialog(id){
   const r = id ? state.reps.find((x) => x.id === id) : { name:'', email:'', phone:'', notes:'', active:true };
   openDialog(
@@ -363,20 +434,27 @@ function repDialog(id){
 async function renderDealers(){
   const d = await api('/rep-dealers');
   state.dealers = d.dealers;
-  await loadReps();
+  if(!state.isRep) await loadReps();
   $('tab-dealers').innerHTML =
-    '<div class="head"><h2>Dealers</h2><span class="muted">Who closed and who onboarded each 50. dealer</span></div>' +
-    '<div class="notice">A change counts from now on: payments that cleared before it stay with whoever was on the dealer then. Dealers with nobody on them are house accounts and pay no one.' +
-      (state.isAdmin ? ' As admin you can also pick a start date to credit a payment that cleared earlier.' : '') + '</div>' +
-    '<div class="tablewrap"><table><thead><tr><th>Dealer</th><th>Activated</th><th>Closed by</th><th>Onboarded by</th>' + (state.isAdmin ? '<th>Start date</th>' : '') + '<th></th></tr></thead><tbody>' +
+    '<div class="head"><h2>' + (state.isRep ? 'My dealers' : 'Dealers') + '</h2><span class="muted">' + (state.isRep ? 'The companies you signed' : 'Who closed and who onboarded each 50. dealer') + '</span></div>' +
+    (state.isRep
+      ? '<div class="notice">These are the companies you are on. A dealer only starts earning you royalties once they have paid and their customers start referring.</div>'
+      : '<div class="notice">A change counts from now on: payments that cleared before it stay with whoever was on the dealer then. Dealers with nobody on them are house accounts and pay no one.' +
+        (state.isAdmin ? ' As admin you can also pick a start date to credit a payment that cleared earlier.' : '') + '</div>') +
+    '<div class="tablewrap"><table><thead><tr><th>Dealer</th><th>Activated</th>' +
+      (state.isRep ? '<th>My role</th>' : '<th>Closed by</th><th>Onboarded by</th>' + (state.isAdmin ? '<th>Start date</th>' : '') + '<th></th>') +
+      '</tr></thead><tbody>' +
     (state.dealers.map((x) =>
       '<tr data-tenant="' + x.tenant_id + '"><td><b>' + esc(x.name) + '</b></td>' +
       '<td>' + (x.activated ? esc(plainDate(x.activated_on)) : '<span class="muted">not yet</span>') + '</td>' +
-      '<td><select data-field="closer">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
-      '<td><select data-field="onboarder">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
-      (state.isAdmin ? '<td><input type="date" data-field="from" style="min-width:140px" title="Leave blank to start now"></td>' : '') +
-      '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button></td></tr>'
-    ).join('') || '<tr><td colspan="6" class="muted" style="padding:18px">No dealers yet.</td></tr>') + '</tbody></table></div>';
+      (state.isRep
+        ? '<td>' + [x.closer_rep_id === state.myRepId ? 'closed' : null, x.onboarder_rep_id === state.myRepId ? 'onboarded' : null].filter(Boolean).join(' and ') + '</td>'
+        : '<td><select data-field="closer">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
+          '<td><select data-field="onboarder">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
+          (state.isAdmin ? '<td><input type="date" data-field="from" style="min-width:140px" title="Leave blank to start now"></td>' : '') +
+          '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button></td>')  +
+      '</tr>'
+    ).join('') || '<tr><td colspan="6" class="muted" style="padding:18px">' + (state.isRep ? 'None yet. They show up here once Joseph has built them.' : 'No dealers yet.') + '</td></tr>') + '</tbody></table></div>';
   $('tab-dealers').querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', async () => {
     const tr = b.closest('tr');
     const closer = tr.querySelector('[data-field=closer]').value || null;
@@ -408,12 +486,19 @@ async function renderMoney(){
       '<td class="num"><button class="btn small secondary" data-stmt="' + r.id + '">Statement</button> <button class="btn small" data-pay="' + r.id + '">Record payment</button></td></tr>'
     ).join('') || '<tr><td colspan="8" class="muted" style="padding:18px">No reps yet.</td></tr>') + '</tbody></table></div>' +
     '<details class="card" style="margin-top:18px"><summary>Pay rates</summary><form id="rateForm">' +
-      '<div class="row"><div><label>Sign-up bonus, each for the closer and the onboarder ($)</label><input name="activation_cents" type="number" min="0" step="0.01" value="' + (settings.activation_cents / 100) + '"></div>' +
-      '<div><label>Per referral, each ($)</label><input name="referral_cents" type="number" min="0" step="0.01" value="' + (settings.referral_cents / 100) + '"></div></div>' +
-      '<div class="row"><div><label>Per referral after the threshold ($)</label><input name="referral_cents_after_threshold" type="number" min="0" step="0.01" value="' + (settings.referral_cents_after_threshold / 100) + '"></div>' +
-      '<div><label>Threshold: a rep\'s company number</label><input name="threshold_companies" type="number" min="1" step="1" value="' + settings.threshold_companies + '"></div></div>' +
-      '<div class="row"><div><label>Full rate at a gift card of ($)</label><input name="full_rate_card_cents" type="number" min="0.01" step="0.01" value="' + (settings.full_rate_card_cents / 100) + '"></div><div></div></div>' +
-      '<p class="muted">The per-referral amount is paid in full at a gift card of this size or more, and scaled down in proportion for smaller cards. Changes apply to payments from now on; what is already earned does not change.</p>' +
+      '<h3 style="font-size:15px;margin:6px 0 2px">The closer</h3>' +
+      '<div class="row"><div><label>Sign-up bonus ($)</label><input name="activation_cents" type="number" min="0" step="0.01" value="' + (settings.activation_cents / 100) + '"></div>' +
+      '<div><label>Per referral ($)</label><input name="referral_cents" type="number" min="0" step="0.01" value="' + (settings.referral_cents / 100) + '"></div>' +
+      '<div><label>Per referral past the threshold ($)</label><input name="referral_cents_after_threshold" type="number" min="0" step="0.01" value="' + (settings.referral_cents_after_threshold / 100) + '"></div></div>' +
+      '<h3 style="font-size:15px;margin:16px 0 2px">The onboarder</h3>' +
+      '<p class="muted" style="margin:0 0 6px">Zero, so the closer earns everything. Put numbers in to start paying a second person.</p>' +
+      '<div class="row"><div><label>Sign-up bonus ($)</label><input name="onboarder_activation_cents" type="number" min="0" step="0.01" value="' + (settings.onboarder_activation_cents / 100) + '"></div>' +
+      '<div><label>Per referral ($)</label><input name="onboarder_referral_cents" type="number" min="0" step="0.01" value="' + (settings.onboarder_referral_cents / 100) + '"></div>' +
+      '<div><label>Per referral past the threshold ($)</label><input name="onboarder_referral_cents_after_threshold" type="number" min="0" step="0.01" value="' + (settings.onboarder_referral_cents_after_threshold / 100) + '"></div></div>' +
+      '<h3 style="font-size:15px;margin:16px 0 2px">Both</h3>' +
+      '<div class="row"><div><label>Threshold: a rep\'s company number</label><input name="threshold_companies" type="number" min="1" step="1" value="' + settings.threshold_companies + '"></div>' +
+      '<div><label>Full rate at a gift card of ($)</label><input name="full_rate_card_cents" type="number" min="0.01" step="0.01" value="' + (settings.full_rate_card_cents / 100) + '"></div></div>' +
+      '<p class="muted">The per-referral amount is paid in full at a gift card of this size or more, and scaled down in proportion for smaller cards. What is already earned never changes — but raising a rate from zero pays that side on every payment it has not earned on yet, including ones that cleared earlier.</p>' +
       '<div class="actions"><button class="btn" type="submit">Save rates</button></div></form></details>';
   $('monthPick').addEventListener('change', (e) => { if(e.target.value){ state.month = e.target.value; renderMoney().catch((err) => flash(err.message)); } });
   $('tab-money').querySelectorAll('[data-stmt]').forEach((b) => b.addEventListener('click', () => statementDialog(b.dataset.stmt)));
@@ -423,10 +508,51 @@ async function renderMoney(){
     const d = formData(e.target);
     const cents = (v) => Math.round(Number(v) * 100);
     try{
-      await put('/rep-settings', { activation_cents: cents(d.activation_cents), referral_cents: cents(d.referral_cents), referral_cents_after_threshold: cents(d.referral_cents_after_threshold), threshold_companies: parseInt(d.threshold_companies, 10), full_rate_card_cents: cents(d.full_rate_card_cents) });
+      await put('/rep-settings', {
+        activation_cents: cents(d.activation_cents),
+        referral_cents: cents(d.referral_cents),
+        referral_cents_after_threshold: cents(d.referral_cents_after_threshold),
+        onboarder_activation_cents: cents(d.onboarder_activation_cents),
+        onboarder_referral_cents: cents(d.onboarder_referral_cents),
+        onboarder_referral_cents_after_threshold: cents(d.onboarder_referral_cents_after_threshold),
+        threshold_companies: parseInt(d.threshold_companies, 10),
+        full_rate_card_cents: cents(d.full_rate_card_cents),
+      });
       flash('Rates saved.', true); await renderMoney();
     }catch(err){ flash(err.message); }
   });
+}
+
+// What a rep sees of their own money: this month's statement and the running
+// balance. Nothing about any other rep, no pay rates, no way to record a
+// payment — Joseph does that, and the server refuses it from here anyway.
+async function renderMyMoney(){
+  await loadReps();
+  const me = state.reps[0];
+  if(!me){ $('tab-mymoney').innerHTML = '<div class="notice">No earnings yet.</div>'; return; }
+  const month = state.month || todayYmd().slice(0, 7);
+  const s = await api('/reps/' + me.id + '/statement?month=' + month);
+  const label = { activation: 'Sign-up bonus', referral: 'Referral royalty', reversal: 'Adjustment' };
+  $('tab-mymoney').innerHTML =
+    '<div class="head"><h2>My money</h2><div class="inline"><label style="margin:0">Month</label><input type="month" id="myMonth" value="' + esc(month) + '" style="width:auto"></div></div>' +
+    '<div class="cards">' +
+      '<div class="stat"><b>' + dollars(me.owed_cents) + '</b><span>Owed to you right now</span></div>' +
+      '<div class="stat"><b>' + dollars(s.activation_cents + s.royalty_cents + s.reversal_cents) + '</b><span>Earned in ' + esc(monthLabel(s.month)) + '</span></div>' +
+      '<div class="stat"><b>' + dollars(s.paid_cents) + '</b><span>Paid to you in ' + esc(monthLabel(s.month)) + '</span></div></div>' +
+    '<div class="tablewrap"><table><thead><tr><th>When</th><th>What</th><th class="num">Amount</th></tr></thead><tbody>' +
+    (s.lines.map((l) =>
+      '<tr><td>' + esc(dateOnly(l.at)) + '</td>' +
+      '<td>' + esc(label[l.kind] || l.kind) + ' <span class="muted">· ' + esc(l.dealer || '') + '</span></td>' +
+      '<td class="num">' + dollarCell(l.amount_cents) + '</td></tr>'
+    ).join('') || '<tr><td colspan="3" class="muted" style="padding:18px">Nothing earned this month yet.</td></tr>') +
+    '</tbody></table></div>' +
+    (s.payouts.length
+      ? '<h3 style="font-size:15px;margin:18px 0 8px">Payments from 50.</h3><div class="tablewrap"><table><tbody>' +
+        s.payouts.map((p) => '<tr><td>' + esc(plainDate(p.paid_on)) + '</td><td>' + esc([p.method, p.note].filter(Boolean).join(' · ')) + '</td><td class="num">' + dollars(p.amount_cents) + '</td></tr>').join('') +
+        '</tbody></table></div>'
+      : '') +
+    '<p class="muted" style="margin-top:14px">A sign-up bonus lands once the company has actually paid 50. Royalties land as their customers\' referrals are rewarded. Both can take up to an hour to show here.</p>';
+  $('myMonth').addEventListener('change', (e) => { if(e.target.value){ state.month = e.target.value; renderMyMoney().catch((err) => flash(err.message)); } });
 }
 
 function payDialog(repId, suggestedCents){

@@ -80,6 +80,7 @@ app.use((err, req, res, next) => {
     // 400, the matching leads for a possible-duplicate 409.
     ...(err.details ? { details: err.details } : {}),
     ...(err.matches ? { matches: err.matches } : {}),
+    ...(err.can_add_anyway !== undefined ? { can_add_anyway: err.can_add_anyway } : {}),
   });
 });
 

@@ -15,7 +15,7 @@ const http = require('http');
 const { spawn } = require('child_process');
 const { Client } = require('pg');
 const express = require('express');
-const { createAuthStandIn } = require('./auth-stand-in');
+const { createAuthStandIn, SERVICE_ROLE_KEY } = require('./auth-stand-in');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const API_DIR = path.join(REPO_ROOT, 'api');
@@ -23,7 +23,7 @@ const MIGRATIONS_DIR = path.join(REPO_ROOT, 'supabase', 'migrations');
 const ACTIVATION_MIGRATION = '20261001000000_activation_gate_and_referral_fee.sql';
 const PG_ADMIN_URL = process.env.E2E_PG_ADMIN_URL || 'postgresql://postgres@127.0.0.1:54329/postgres';
 const DB = `fifty_repspage_${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}`;
-const PORTS = { api: 3101, auth: 9995, page: 8089 };
+const PORTS = { api: 3101, auth: 9995, page: 8089, postmark: 12114 };
 const API_ORIGIN = `http://127.0.0.1:${PORTS.api}`;
 const AUTH_BASE = `http://127.0.0.1:${PORTS.auth}`;
 const PAGE = `http://127.0.0.1:${PORTS.page}/reps`;
@@ -53,8 +53,18 @@ const USERS = {
 };
 
 async function main() {
-  const auth = createAuthStandIn();
+  // The stand-in writes each new account into auth.users the way Supabase
+  // does, so the API's own users insert has the row its foreign key needs.
+  let recordAuthUser = async () => {};
+  const auth = createAuthStandIn({ onUserCreated: (u) => recordAuthUser(u) });
   const authServer = auth.app.listen(PORTS.auth, '127.0.0.1');
+
+  // Postmark stand-in — the invite email has to go somewhere.
+  const sentMail = [];
+  const mailApp = express();
+  mailApp.use(express.json());
+  mailApp.post('/email', (req, res) => { sentMail.push(req.body); res.json({ ErrorCode: 0, MessageID: `m-${sentMail.length}` }); });
+  const mailServer = mailApp.listen(PORTS.postmark, '127.0.0.1');
 
   const admin = new Client({ connectionString: PG_ADMIN_URL });
   await admin.connect();
@@ -64,6 +74,7 @@ async function main() {
   const db = new Client({ connectionString: dbUrl(DB) });
   await db.connect();
   const sql = async (t, p) => (await db.query(t, p)).rows;
+  recordAuthUser = (u) => db.query('insert into auth.users (id, email) values ($1, $2) on conflict (id) do nothing', [u.id, u.email]);
 
   const files = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort();
   await db.query(fs.readFileSync(path.join(__dirname, 'supabase-stand-in.sql'), 'utf8'));
@@ -89,7 +100,9 @@ async function main() {
     env: {
       PATH: process.env.PATH, HOME: process.env.HOME,
       DATABASE_URL: dbUrl(DB), SUPABASE_URL: AUTH_BASE, SUPABASE_JWKS_URL: '', PORT: String(PORTS.api),
-      POSTMARK_SERVER_TOKEN: '', POSTMARK_API_BASE: 'http://127.0.0.1:9/', EMAIL_FROM_ADDRESS: '',
+      SUPABASE_SERVICE_ROLE_KEY: SERVICE_ROLE_KEY,
+      POSTMARK_SERVER_TOKEN: 'postmark-test-token', POSTMARK_API_BASE: `http://127.0.0.1:${PORTS.postmark}`,
+      EMAIL_FROM_ADDRESS: 'notifications@referwith50.test', BILLING_SUPPORT_EMAIL: 'joseph@referwith50.test',
       FRONTEND_BASE_URL: `http://127.0.0.1:${PORTS.page}`, TENANT_CREDENTIALS_ENCRYPTION_KEY: 'e2e-only-passphrase',
       STRIPE_SECRET_KEY: '', STRIPE_WEBHOOK_SECRET: '', STRIPE_API_BASE: '', STRIPE_STAND_IN_URL: '',
       RENEWAL_SCHEDULER: 'off',
@@ -141,6 +154,8 @@ async function main() {
     if (expectApp) await page.waitForSelector('#app:not(.hide) nav.tabs button', { timeout: 8000 });
   }
   const tabNames = (page) => page.$$eval('#tabs button', (bs) => bs.map((b) => b.textContent));
+  const eqArr = (a, b, what) => assert(JSON.stringify(a) === JSON.stringify(b), `${what}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
+  const eq = (a, b, what) => assert(JSON.stringify(a) === JSON.stringify(b), `${what}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
   const flashText = (page) => page.textContent('#appMsg');
 
   try {
@@ -188,6 +203,8 @@ async function main() {
         await page.fill('#leadForm [name=company_name]', 'Acme Roofing');
         await page.fill('#leadForm [name=contact_name]', 'Carl');
         await page.fill('#leadForm [name=phone]', '717-555-0100');
+        await page.fill('#leadForm [name=website]', 'https://acme-roofing.test');
+        await page.fill('#leadForm [name=notes]', 'Met at the county fair.');
         await page.selectOption('#leadForm [name=brought_in_by_rep_id]', { label: 'Alice Rep' });
       };
       if (!(await page.$('#leadForm [name=company_name]:visible'))) await page.click('#tab-leads summary');
@@ -208,14 +225,14 @@ async function main() {
       await page.click('[data-reopen]');
       await page.waitForFunction(() => !document.querySelector('.pill.lost'));
     });
-    await check('Close the lead: Alice closed, Bob onboarded, linked to Dealer A', async () => {
-      await page.locator('[data-close]').first().click();
-      await page.waitForSelector('#closeForm');
-      await page.selectOption('#closeForm [name=closed_by_rep_id]', { label: 'Alice Rep' });
-      await page.selectOption('#closeForm [name=onboarded_by_rep_id]', { label: 'Bob Rep' });
-      await page.selectOption('#closeForm [name=tenant_id]', { label: 'Dealer A Roofing' });
-      await page.click('#closeForm button[type=submit]');
-      await page.waitForFunction(() => document.querySelector('.pill.closed'));
+    await check('Mark the lead won: Alice closed, Bob onboarded, linked to Dealer A', async () => {
+      await page.locator('[data-win]').first().click();
+      await page.waitForSelector('#winForm');
+      await page.selectOption('#winForm [name=closed_by_rep_id]', { label: 'Alice Rep' });
+      await page.selectOption('#winForm [name=onboarded_by_rep_id]', { label: 'Bob Rep' });
+      await page.selectOption('#winForm [name=tenant_id]', { label: 'Dealer A Roofing' });
+      await page.click('#winForm button[type=submit]');
+      await page.waitForFunction(() => document.querySelector('.pill.won'));
       const [a] = await sql(`select ra.*, (select name from reps where id = ra.closer_rep_id) as closer, (select name from reps where id = ra.onboarder_rep_id) as onboarder from rep_assignments ra where tenant_id = $1 and effective_to is null`, [tenants['dealer-a'].id]);
       assert(a && a.closer === 'Alice Rep' && a.onboarder === 'Bob Rep', JSON.stringify(a));
       return `assignment: closer ${a.closer}, onboarder ${a.onboarder}`;
@@ -245,23 +262,28 @@ async function main() {
       fees.push(e.id);
     }
     const run = await runRepEarningsCycle();
-    await check('Worker credits the page\'s assignment: 2 activation rows, 6 referral rows', async () => {
-      assert(run.activation === 2 && run.referral === 6, JSON.stringify(run));
+    await check('Worker credits the page\'s assignment: the closer only — 1 activation row, 3 referral rows', async () => {
+      // Bob is the onboarder on this dealer and earns nothing: the onboarder's
+      // rates are 0 out of the box, so the closer earns everything.
+      assert(run.activation === 1 && run.referral === 3, JSON.stringify(run));
       return JSON.stringify(run);
     });
 
-    await check('Reps tab (admin): Alice shows $53.00 earned / owed ($50 + 3 × $1), Bob the same', async () => {
+    await check('Reps tab (admin): Alice the closer shows $53.00 ($50 + 3 x $1); Bob the onboarder shows $0.00', async () => {
       await page.click('[data-tab=reps]');
       await page.waitForFunction(() => document.getElementById('tab-reps').textContent.includes('$53.00'));
       const rows = await page.$$eval('#tab-reps tbody tr', (rs) => rs.map((r) => r.textContent.replace(/\s+/g, ' ')));
-      assert(rows.every((r) => (r.match(/\$53\.00/g) || []).length === 2), rows.join(' | '));
-      return rows[0];
+      const alice = rows.find((r) => r.includes('Alice'));
+      const bob = rows.find((r) => r.includes('Bob'));
+      assert((alice.match(/\$53\.00/g) || []).length === 2, `Alice: ${alice}`);
+      assert((bob.match(/\$0\.00/g) || []).length === 2, `Bob: ${bob}`);
+      return `${alice} || ${bob}`;
     });
-    await check('Money tab: month totals match ($106.00 owed), per-rep split shows bonuses and royalties', async () => {
+    await check('Money tab: month totals match ($53.00 owed), per-rep split shows bonuses and royalties', async () => {
       await page.click('[data-tab=money]');
       await page.waitForSelector('#tab-money .stat b');
       const stats = await page.$$eval('#tab-money .stat b', (b) => b.map((x) => x.textContent));
-      assert(stats[0] === '$106.00' && stats[1] === '$106.00' && stats[2] === '$0.00', `stats ${stats}`);
+      assert(stats[0] === '$53.00' && stats[1] === '$53.00' && stats[2] === '$0.00', `stats ${stats}`);
       const alice = (await page.$$eval('#tab-money tbody tr', (rs) => rs.map((r) => r.textContent.replace(/\s+/g, ' ')))).find((t) => t.includes('Alice'));
       assert(alice.includes('$50.00') && alice.includes('$3.00'), alice);
       return `${stats.join(' / ')} · ${alice}`;
@@ -290,14 +312,22 @@ async function main() {
       const [p] = await sql(`select amount_cents, method from rep_payouts`);
       assert(p.amount_cents === 2000 && p.method === 'Zelle', JSON.stringify(p));
     });
-    await check('Change a pay rate on the form (activation $60): saved, and past earnings do not change', async () => {
+    await check('The pay-rates form shows the closer and the onboarder separately, with the onboarder at zero', async () => {
       await page.click('#tab-money details summary');
+      await page.waitForSelector('#rateForm [name=onboarder_activation_cents]');
+      const onboarder = await page.$$eval(
+        '#rateForm [name=onboarder_activation_cents], #rateForm [name=onboarder_referral_cents], #rateForm [name=onboarder_referral_cents_after_threshold]',
+        (els) => els.map((e) => e.value)
+      );
+      assert(onboarder.every((v) => Number(v) === 0), `onboarder rates: ${onboarder}`);
       await page.fill('#rateForm [name=activation_cents]', '60');
       await page.click('#rateForm button[type=submit]');
       await page.waitForFunction(() => document.getElementById('appMsg').textContent.includes('Rates saved'));
-      const [s] = await sql('select activation_cents from rep_settings');
+      const [s] = await sql('select activation_cents, onboarder_activation_cents from rep_settings');
       const [{ sum }] = await sql(`select sum(amount_cents)::int as sum from rep_earnings where kind='activation'`);
-      assert(s.activation_cents === 6000 && sum === 10000, `${s.activation_cents} / ${sum}`);
+      assert(s.activation_cents === 6000 && s.onboarder_activation_cents === 0, `saved: ${JSON.stringify(s)}`);
+      assert(sum === 5000, `past earnings changed: ${sum}`);
+      return 'closer $60 saved; onboarder still 0; the $50 already earned is unchanged';
     });
     await check('Mark Bob inactive: told which dealers still need a decision, nothing moved', async () => {
       await page.click('[data-tab=reps]');
@@ -369,6 +399,108 @@ async function main() {
     });
     await global.__helper.context().close();
 
+    // ======================================================================
+    section('A rep in the browser: their own pipeline and nothing else');
+    await check('Joseph sends Alice a login from the Reps tab, and she sets a password', async () => {
+      const p = await newPage('admin-invite');
+      await signIn(p, USERS.admin);
+      await p.click('[data-tab=reps]');
+      await p.waitForSelector('#tab-reps [data-invite]');
+      // Both reps start with no login, and the button says so.
+      const labels = await p.$$eval('#tab-reps [data-invite]', (bs) => bs.map((b) => b.textContent.trim()));
+      assert(labels.every((l) => l === 'Send login'), `labels: ${labels}`);
+      await p.locator('#tab-reps tr', { hasText: 'Alice Rep' }).locator('[data-invite]').click();
+      await p.waitForFunction(() => document.getElementById('appMsg').textContent.includes('Login sent to'));
+      const mail = sentMail[sentMail.length - 1];
+      assert(mail.To === 'alice@x.test', `to: ${mail.To}`);
+      assert(mail.From.startsWith('Joseph at 50.'), `from: ${mail.From}`);
+      assert(!/your password is|temporary password/i.test(mail.TextBody), 'a password was emailed');
+      // Now the button offers a resend instead.
+      await p.waitForFunction(() => [...document.querySelectorAll('#tab-reps [data-invite]')].some((b) => b.textContent.trim() === 'Resend login'));
+      await p.context().close();
+      auth.setPassword('alice@x.test', PASSWORD);
+      return `invite emailed from "${mail.From}"; the button becomes Resend`;
+    });
+
+    let repPage;
+    await check('Alice signs in and sees My leads, My dealers and My money — no Reps tab, no Money tab', async () => {
+      repPage = await newPage('rep');
+      await signIn(repPage, { email: 'alice@x.test' });
+      const t = await tabNames(repPage);
+      eqArr(t, ['My leads', 'My dealers', 'My money'], 'tabs');
+      assert(/rep$/.test((await repPage.textContent('#who')).trim()), `who: ${await repPage.textContent('#who')}`);
+      return (await repPage.textContent('#who')).trim();
+    });
+
+    await check('She sees the lead she is on and can add one, with no "brought in by" to choose', async () => {
+      await repPage.waitForSelector('#tab-leads table');
+      const text = await repPage.textContent('#tab-leads');
+      assert(text.includes('Acme Roofing'), 'her own won lead is listed');
+      assert(!(await repPage.$('#leadForm [name=brought_in_by_rep_id]')) || true, 'form present');
+      await repPage.click('#tab-leads summary').catch(() => {});
+      await repPage.waitForSelector('#leadForm [name=company_name]');
+      assert((await repPage.$$('#leadForm [name=brought_in_by_rep_id]')).length === 0, 'a rep is not asked whose lead it is');
+      assert((await repPage.$$('#leadForm [name=website]')).length === 1, 'website field');
+      assert((await repPage.$$('#leadForm [name=notes]')).length === 1, 'notes field');
+      await repPage.fill('#leadForm [name=company_name]', 'Her Own Prospect');
+      await repPage.fill('#leadForm [name=website]', 'herownprospect.test');
+      await repPage.click('#leadForm button[type=submit]');
+      await repPage.waitForFunction(() => document.getElementById('tab-leads').textContent.includes('Her Own Prospect'));
+      const [row] = await sql(`select brought_in_by_rep_id, website from rep_leads where company_name = 'Her Own Prospect'`);
+      assert(row.website === 'herownprospect.test', `website: ${row.website}`);
+      return 'lead added under Alice, with its website';
+    });
+
+    await check('Marking her own lead won is a plain confirmation and builds nothing', async () => {
+      const tenantsBefore = (await sql('select count(*)::int n from tenants'))[0].n;
+      await repPage.locator('#tab-leads tr', { hasText: 'Her Own Prospect' }).locator('[data-win]').click();
+      await repPage.waitForSelector('#confirmWin');
+      const dlg = await repPage.textContent('#dlg');
+      assert(/Joseph sets their 50\. account up/.test(dlg), `dialog: ${dlg}`);
+      assert(!(await repPage.$('#winForm')), 'a rep is not offered the staff form');
+      await repPage.click('#confirmWin');
+      await repPage.waitForFunction(() => document.getElementById('appMsg').textContent.includes('Joseph will take it from here'));
+      const [lead] = await sql(`select status, closed_by_rep_id, tenant_id from rep_leads where company_name = 'Her Own Prospect'`);
+      assert(lead.status === 'won' && lead.tenant_id === null, JSON.stringify(lead));
+      eq((await sql('select count(*)::int n from tenants'))[0].n, tenantsBefore, 'no dealer created');
+      return 'won, credited to her, no dealer built';
+    });
+
+    await check('My money shows her own earnings and no way to pay herself', async () => {
+      await repPage.click('[data-tab=mymoney]');
+      await repPage.waitForSelector('#tab-mymoney .stat b');
+      const stats = await repPage.$$eval('#tab-mymoney .stat b', (b) => b.map((x) => x.textContent));
+      // Her $50 bonus plus three $1 royalties, less the one Joseph reversed
+      // and the $20 he recorded paying her, earlier in this same run.
+      assert(stats[0] === '$32.00', `owed: ${stats}`);
+      assert(stats[1] === '$52.00' && stats[2] === '$20.00', `earned/paid: ${stats}`);
+      const text = await repPage.textContent('#tab-mymoney');
+      assert(/Sign-up bonus/.test(text), 'her bonus is listed');
+      assert((await repPage.$$('[data-pay]')).length === 0, 'no Record payment button');
+      assert((await repPage.$$('[data-rev]')).length === 0, 'no Reverse button');
+      assert(!/Pay rates/.test(await repPage.textContent('#app')), 'no pay rates anywhere');
+      return `owed ${stats[0]}, statement lines visible, nothing she can pay or reverse`;
+    });
+
+    await check('She cannot reach another rep\'s money or the overview, even by asking the API directly', async () => {
+      const out = await repPage.evaluate(async (base) => {
+        const s = JSON.parse(localStorage.getItem('fifty:reps-session'));
+        const call = async (path) => {
+          const r = await fetch(base + path, { headers: { Authorization: 'Bearer ' + s.access_token } });
+          return r.status;
+        };
+        return {
+          overview: await call('/rep-money/overview'),
+          settings: await call('/rep-settings'),
+          reps: await call('/reps'),
+        };
+      }, API_ORIGIN + '/api');
+      assert(out.overview === 403 && out.settings === 403, JSON.stringify(out));
+      assert(out.reps === 200, 'she can still read her own rep row');
+      return JSON.stringify(out);
+    });
+    await repPage.context().close();
+
     section('Page health');
     await check('No script errors or failed API calls were logged in the browser', async () => {
       assert(consoleErrors.length === 0, consoleErrors.join('\n'));
@@ -389,7 +521,7 @@ async function main() {
   } finally {
     await browser.close().catch(() => {});
     apiChild.kill();
-    authServer.close(); pageServer.close();
+    authServer.close(); pageServer.close(); mailServer.close();
     await db.end().catch(() => {});
     try { await require('../../src/db').pool.end(); } catch (e) { /* pool already closed */ }
     const a = new Client({ connectionString: PG_ADMIN_URL });

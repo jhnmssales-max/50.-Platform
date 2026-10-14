@@ -204,7 +204,6 @@ async function main() {
       for (const [m, p] of [['GET', '/reps'], ['GET', '/rep-leads'], ['GET', '/rep-dealers']]) eq((await api(m, p, { as: USERS.helper })).status, 200, `${m} ${p}`);
       for (const [m, p, b] of [
         ['GET', '/rep-money/overview'], ['GET', '/rep-settings'], ['PUT', '/rep-settings', { activation_cents: 1 }],
-        ['GET', '/reps/00000000-0000-4000-8000-000000000000/statement'],
         ['POST', '/reps/00000000-0000-4000-8000-000000000000/payouts', { amount_cents: 100 }],
         ['POST', '/rep-earnings/00000000-0000-4000-8000-000000000000/reverse', {}],
       ]) {
@@ -212,7 +211,13 @@ async function main() {
         eq(r.status, 403, `${m} ${p} as the helper`);
         eq(r.body.code, 'admin_only', `${m} ${p} code`);
       }
-      return 'helper: reps/leads/dealers 200; overview, statement, payouts, reversal, settings -> 403 admin_only';
+      // A statement refuses the helper for the narrower reason that it is not
+      // their own — the same 403, just a more specific code since reps gained
+      // the right to open theirs.
+      const stmt = await api('GET', '/reps/00000000-0000-4000-8000-000000000000/statement', { as: USERS.helper });
+      eq(stmt.status, 403, 'statement as the helper');
+      eq(stmt.body.code, 'own_statement_only', 'statement code');
+      return 'helper: reps/leads/dealers 200; overview, payouts, reversal, settings -> 403 admin_only; statement -> 403 own_statement_only';
     });
 
     // ===========================================================================
@@ -264,14 +269,14 @@ async function main() {
     // ===========================================================================
     section('Putting reps on dealers');
     for (const slug of ['dealer-b', 'dealer-c', 'dealer-d', 'dealer-e', 'house-dealer']) await mkTenant(slug, { activatedAt: slug === 'dealer-e' ? '2026-08-20T15:00:00Z' : '2026-08-05T15:00:00Z' });
-    await check('Closing a lead puts the closer and onboarder on the dealer in one step (credit to whoever closes it); it can only be closed once', async () => {
-      const r = await api('POST', `/rep-leads/${leadId}/close`, { as: USERS.helper, body: { closed_by_rep_id: rep.Laura.id, onboarded_by_rep_id: rep.Sam.id, tenant_id: tenants['dealer-a'].id } });
-      eq(r.status, 200, 'close');
-      eq(r.body.status, 'closed', 'status'); eq(r.body.closed_by_rep_id, rep.Laura.id, 'closer is Laura, not Dana who found it');
+    await check('Winning a lead puts the closer and onboarder on the dealer in one step (credit to whoever closes it); it can only be won once', async () => {
+      const r = await api('POST', `/rep-leads/${leadId}/win`, { as: USERS.helper, body: { closed_by_rep_id: rep.Laura.id, onboarded_by_rep_id: rep.Sam.id, tenant_id: tenants['dealer-a'].id } });
+      eq(r.status, 200, 'win');
+      eq(r.body.status, 'won', 'status'); eq(r.body.closed_by_rep_id, rep.Laura.id, 'closer is Laura, not Dana who found it');
       const [a] = await sql('select closer_rep_id, onboarder_rep_id, effective_to from rep_assignments where tenant_id = $1', [tenants['dealer-a'].id]);
       eq([a.closer_rep_id, a.onboarder_rep_id, a.effective_to], [rep.Laura.id, rep.Sam.id, null], 'assignment');
-      eq((await api('POST', `/rep-leads/${leadId}/close`, { as: USERS.helper, body: { closed_by_rep_id: rep.Dana.id } })).status, 409, 'close twice');
-      return 'dealer-a: closer Laura (not the finder, Dana), onboarder Sam; second close -> 409';
+      eq((await api('POST', `/rep-leads/${leadId}/win`, { as: USERS.helper, body: { closed_by_rep_id: rep.Dana.id } })).status, 409, 'win twice');
+      return 'dealer-a: closer Laura (not the finder, Dana), onboarder Sam; second win -> 409';
     });
     await check('The helper can assign from now but cannot backdate; billing-exempt tenants cannot be assigned; the dealer list carries no money', async () => {
       const bd = await api('PUT', `/rep-dealers/${tenants['dealer-b'].id}/assignment`, { as: USERS.helper, body: { closer_rep_id: rep.Sam.id, onboarder_rep_id: rep.Sam.id, effective_from: '2026-01-01T00:00:00Z' } });
@@ -298,6 +303,19 @@ async function main() {
 
     // ===========================================================================
     section('Earnings: activation');
+    // Out of the box the onboarder earns nothing (the closer earns
+    // everything) — that rule and its default are proved in
+    // scripts/e2e/rep-pipeline-e2e.js. The checks below are about the two-role
+    // MECHANISM, so they turn the onboarder's rates on to the old $50/$1/50c
+    // and exercise both sides of an assignment.
+    await check('The onboarder\'s rates are 0 by default, and the admin can turn them back on', async () => {
+      const before = await api('GET', '/rep-settings', { as: USERS.admin });
+      eq([before.body.onboarder_activation_cents, before.body.onboarder_referral_cents, before.body.onboarder_referral_cents_after_threshold], [0, 0, 0], 'defaults');
+      const put = await api('PUT', '/rep-settings', { as: USERS.admin, body: { onboarder_activation_cents: 5000, onboarder_referral_cents: 100, onboarder_referral_cents_after_threshold: 50 } });
+      eq(put.status, 200, 'put');
+      eq([put.body.onboarder_activation_cents, put.body.onboarder_referral_cents], [5000, 100], 'after');
+      return 'onboarder 0/0/0 by default; set to 5000/100/50 for the two-role checks below';
+    });
     const actA = await activation('dealer-a', { at: '2026-08-01T15:00:00Z', pi: 'pi_act_a' });
     const actB = await activation('dealer-b', { at: '2026-08-05T15:00:00Z' });
     await check('A cleared live activation pays the closer $50 AND the onboarder $50; one person in both roles gets $100', async () => {
