@@ -1,4 +1,5 @@
-// Runs the annual-renewal worker (workers/annualRenewal.js) once an hour
+// Runs the annual-renewal worker (workers/annualRenewal.js), and then the
+// dealer billing-email worker (workers/billingEmails.js), once an hour
 // from inside the web service itself, so the yearly 50. fee needs no
 // separate Render cron job, service, or copy of the secrets.
 //
@@ -12,6 +13,7 @@
 // everywhere else, so running the API on a laptop never charges anyone.
 // RENEWAL_SCHEDULER=on forces it on, RENEWAL_SCHEDULER=off forces it off.
 const { runAnnualRenewalCycle } = require('./annualRenewal');
+const { runBillingEmailCycle } = require('./billingEmails');
 
 const INTERVAL_MS = 60 * 60 * 1000;
 const FIRST_RUN_DELAY_MS = 2 * 60 * 1000;
@@ -27,6 +29,14 @@ async function tick() {
     await runAnnualRenewalCycle();
   } catch (err) {
     console.error('RENEWAL_WORKER scheduled cycle failed:', err.message);
+  }
+  // The dealer receipt/summary emails ride the same hourly tick (their own
+  // advisory lock, their own try/catch — a failure in either cycle never
+  // touches the other).
+  try {
+    await runBillingEmailCycle();
+  } catch (err) {
+    console.error('BILLING_EMAILS scheduled cycle failed:', err.message);
   }
 }
 

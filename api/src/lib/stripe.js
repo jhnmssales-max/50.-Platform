@@ -232,6 +232,15 @@ async function stripeGet(path) {
 // session as an activation: anything else on this Stripe account that
 // happens to carry a tenant's id in client_reference_id — a Payment Link
 // lets a buyer set that field from the URL — is never mistaken for one.
+//
+// customerEmail is the dealer's own admin address (the signed-in admin
+// paying). Without it Checkout asks whoever is at the keyboard to type an
+// email, and when 50.'s owner pays on a dealer's behalf his own address
+// became the Stripe Customer — so the dealer's receipts went to him. With
+// it, the email is pre-filled and locked on the payment page and becomes
+// the Customer's email. Not sent together with an existing Customer (Stripe
+// rejects the pair; that Customer already has an email), and dropped if it
+// isn't plausibly an email so a bad value can never block the checkout.
 async function createCheckoutSession({
   tenantId,
   tenantName,
@@ -239,11 +248,14 @@ async function createCheckoutSession({
   currency,
   paymentMethodType,
   existingCustomerId,
+  customerEmail,
   annualFeeCents,
   successUrl,
   cancelUrl,
   idempotencyKey,
 }) {
+  const email = typeof customerEmail === 'string' ? customerEmail.trim() : '';
+  const usableEmail = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/.test(email) ? email : undefined;
   const cur = (currency || 'usd').toLowerCase();
   const hasAnnualFee = Number.isInteger(annualFeeCents) && annualFeeCents > 0;
   // Said on the payment page itself, right above the Pay button, so the
@@ -280,6 +292,7 @@ async function createCheckoutSession({
     client_reference_id: tenantId,
     customer: existingCustomerId || undefined,
     customer_creation: existingCustomerId ? undefined : 'always',
+    customer_email: existingCustomerId ? undefined : usableEmail,
     custom_text: annualFeeNotice ? { submit: { message: annualFeeNotice } } : undefined,
     success_url: successUrl,
     cancel_url: cancelUrl,
@@ -349,6 +362,43 @@ async function retrievePaymentIntent(paymentIntentId) {
   return stripeGet(`/payment_intents/${encodeURIComponent(paymentIntentId)}`);
 }
 
+const CARD_BRANDS = {
+  visa: 'Visa',
+  mastercard: 'Mastercard',
+  amex: 'American Express',
+  discover: 'Discover',
+  diners: 'Diners Club',
+  jcb: 'JCB',
+  unionpay: 'UnionPay',
+};
+
+// Receipt details for a succeeded payment, for the emails 50. sends dealers:
+// the link to Stripe's own hosted receipt page and a "Visa ending 4242"
+// style label. Best effort and never throws — a receipt is worth sending
+// without them, so a Stripe hiccup, an older API shape, or a stand-in that
+// doesn't model charges just yields {}.
+async function retrievePaymentReceiptDetails(paymentIntentId) {
+  if (!paymentIntentId) return {};
+  try {
+    const paymentIntent = await stripeGet(`/payment_intents/${encodeURIComponent(paymentIntentId)}?expand[]=latest_charge`);
+    const charge = paymentIntent && typeof paymentIntent.latest_charge === 'object' ? paymentIntent.latest_charge : null;
+    if (!charge) return {};
+    const methodDetails = charge.payment_method_details || {};
+    let methodLabel = null;
+    if (methodDetails.card && methodDetails.card.last4) {
+      const brand = String(methodDetails.card.brand || '').toLowerCase();
+      methodLabel = `${CARD_BRANDS[brand] || 'Card'} ending ${methodDetails.card.last4}`;
+    } else if (methodDetails.us_bank_account && methodDetails.us_bank_account.last4) {
+      methodLabel = `${methodDetails.us_bank_account.bank_name || 'Bank account'} ending ${methodDetails.us_bank_account.last4}`;
+    }
+    const receiptUrl = typeof charge.receipt_url === 'string' && /^https:\/\/\S+$/.test(charge.receipt_url) ? charge.receipt_url : null;
+    return { receiptUrl, methodLabel };
+  } catch (err) {
+    console.error(`Could not read receipt details for PaymentIntent ${paymentIntentId}: ${err.message}`);
+    return {};
+  }
+}
+
 // Verifies a webhook request's Stripe-Signature header against the raw
 // request body, per Stripe's publicly documented scheme: the header is
 // `t=<unix seconds>,v1=<hex hmac>[,v0=...]`; the signed payload is
@@ -407,5 +457,6 @@ module.exports = {
   paymentIntentIdOf,
   chargeOffSession,
   retrievePaymentIntent,
+  retrievePaymentReceiptDetails,
   verifyWebhookSignature,
 };
