@@ -261,7 +261,7 @@ Everything 50. tells a dealer about money goes to **the dealer's own admins** (e
 
 ## Sales-rep program
 
-Reps sell 50. to dealers. The database keeps track of the reps, the leads, which rep closed and onboarded each dealer, what 50. owes each rep, and what was paid. Everything lives in the 50. platform database and is run from the **Reps page** (`fifty-reps.html`, served at `go.referwith50.com/reps`), which only a login on the `50-platform` tenant can use (a dealer's own login gets a 403 and the page says so).
+Reps sell 50. to dealers. The database keeps track of the reps, the leads, which rep closed and onboarded each dealer, what 50. owes each rep, and what was paid. Everything lives in the 50. platform database and is run from the **Reps page** (`fifty-reps.html`, at `go.referwith50.com/fifty-reps.html`, or `/reps` once that rewrite rule is added in the Render dashboard for the static site; Render does not read `_redirects`), which only a login on the `50-platform` tenant can use (a dealer's own login gets a 403 and the page says so).
 
 **Who sees what.** The tenant's `admin` (Joseph) sees everything, money included, and is the only one who can record or delete a payment, reverse an earning, change pay rates, or backdate an assignment. The tenant's `staff` (the helper) can add and edit reps, leads and dealer assignments but **never sees a dollar amount**: the API leaves the money fields out of `GET /api/reps` for staff, every money route answers 403, and the database itself (RLS on `rep_earnings`, `rep_payouts`, `rep_settings`) refuses them.
 

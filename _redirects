@@ -1,5 +1,8 @@
-# Render static site redirect/rewrite rules for go.referwith50.com.
-# Format (Netlify-compatible, what Render's static sites support):
+# Rewrite rules for go.referwith50.com, kept here as the written record.
+# NOTE: Render does NOT read this file. The live rules are set by hand in the
+# Render dashboard (fifty-platform-pages -> Redirects/Rewrites), so a change here
+# does nothing until the same rule is added there. Current dashboard rules:
+# /r/* , /login and /reps. Format (Netlify-style) used below:
 #   <source>  <destination>  <status>
 # Status 200 = rewrite (mask): the browser URL bar stays at <source>,
 # but the response body is <destination>'s content. Anything else
