@@ -241,6 +241,24 @@ The $500 activation covers a dealer's **first 12 months**. 12 months after that 
 - **Changing one dealer.** `update tenants set annual_fee_cents = 7500 where slug = '…'` changes what's charged at their next renewal; `0` waives it (the worker just starts the next year, charging nothing).
 - **Not built:** letting a dealer replace the card on file themselves (it would serve the usage fee as much as the renewal).
 
+## Dealer billing emails
+
+Everything 50. tells a dealer about money goes to **the dealer's own admins** (every `users` row with `role = 'admin'` on the tenant), from 50. (`EMAIL_FROM_ADDRESS`), with `BILLING_SUPPORT_EMAIL` (default `joseph@referwith50.com`) as Reply-To. Never to whoever happened to type an address on Stripe's payment page: the Checkout Session is created with `customer_email` = the signed-in admin's login email (`routes/billing.js`), so the Stripe customer is the dealer. Billing-exempt tenants (Good Steward Structures, North Mountain Structures, 50.) and test-mode activations on a live key are never emailed.
+
+| Email | When | Cc |
+|---|---|---|
+| Activation receipt | Right after the $500 (from the Stripe webhook), and swept up hourly if that send failed or the dealer activated before these emails existed | support |
+| Annual fee heads-up / receipt / declined | See "Annual renewal fee" above (the receipt now also says when it was charged and what it covers through) | support |
+| Referral summary | One per dealer per month, on or after 9 am Eastern on the 1st, listing every referral fee charged. **Months with no charged fees send nothing.** A fee that confirms late (a bank debit) goes on the next summary, flagged as earlier | none |
+| Yearly summary | One per dealer per calendar year, on or after Jan 2 for the year just ended (window closes end of March). Activation, renewals, fees by month, next renewal date | none |
+
+- **Code.** `src/lib/billingEmails.js` (text + HTML builders), `src/workers/billingEmails.js` (what to send and when), run hourly by `src/workers/renewalScheduler.js` right after the renewal cycle. `npm run billing-emails` runs one cycle by hand; **`npm run billing-emails:dry-run`** lists what would be sent without sending or writing anything.
+- **Exactly once.** `billing_emails` has one row per (tenant, kind, period) — `activation` / `YYYY-MM` / `YYYY`. A sender claims its row, sends, then stamps `sent_at`; a failed send deletes the claim (retried by a later hourly run, at most every 6 hours per process); a sender that died mid-send leaves a claim anyone may retake after 15 minutes. A Postgres advisory lock (5031982006) keeps overlapping runs apart. Referral fees carry `billing_events.statement_period` once listed, which is how none is missed or listed twice.
+- **Never breaks a charge.** Every send is best effort: a mail outage can't fail the Stripe webhook (the webhook waits at most 8 s for the receipt) or a renewal charge.
+- **Stripe's own receipts.** Turn off Stripe Dashboard → Settings → Customer emails → "Successful payments" so a dealer doesn't get both a Stripe receipt and ours (ours links to Stripe's hosted receipt).
+- **Verifying.** `npm run e2e:billing-emails` (needs the scratch Postgres, like the other e2e scripts).
+
+
 ## Stripe safety gate: `assertRealStripeConfigured()`
 
 The Stripe counterpart of the reward worker's `assertRealGiftCardProviderConfigured()` (`src/lib/stripe.js`), with the same stance: it throws — never returns a boolean — and it runs before every action on this path that could create a checkout, charge a card, or unlock a tenant (the checkout endpoint, the usage fee, and the webhook's activation, twice). It refuses:

@@ -56,6 +56,7 @@ function createStripeStandIn({ publicBaseUrl, webhookUrl, webhookSecret, webhook
     sessions: new Map(),
     paymentIntents: new Map(),
     customers: new Map(),
+    charges: new Map(),
     paymentMethods: new Map(),
     idempotency: new Map(),
     events: new Map(),
@@ -154,6 +155,14 @@ function createStripeStandIn({ publicBaseUrl, webhookUrl, webhookSecret, webhook
     if (b.customer && !state.customers.has(b.customer)) {
       return invalid(`No such customer: '${b.customer}'`, 'customer');
     }
+    // Real Stripe: customer_email is for prefilling a NEW customer's email;
+    // it can't be combined with an existing customer.
+    if (b.customer && b.customer_email) {
+      return invalid('You may only specify one of these parameters: customer, customer_email.', 'customer_email');
+    }
+    if (b.customer_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.customer_email)) {
+      return invalid('Invalid email address: ' + b.customer_email, 'customer_email');
+    }
     const types = b.payment_method_types || ['card'];
     if (!types.every((t) => ['card', 'us_bank_account'].includes(t))) return invalid('Invalid payment_method_types', 'payment_method_types');
     const pid = b.payment_intent_data || {};
@@ -188,6 +197,7 @@ function createStripeStandIn({ publicBaseUrl, webhookUrl, webhookSecret, webhook
       client_reference_id: b.client_reference_id || null,
       customer: b.customer || null,
       customer_creation: b.customer_creation || null,
+      customer_email: b.customer_email || null,
       metadata: b.metadata || {},
       payment_intent: null,
       payment_method_types: types,
@@ -221,6 +231,12 @@ function createStripeStandIn({ publicBaseUrl, webhookUrl, webhookSecret, webhook
     if (!pi) {
       return stripeError(res, 404, { type: 'invalid_request_error', code: 'resource_missing', message: `No such payment_intent: '${req.params.id}'` });
     }
+    // ?expand[]=latest_charge swaps the charge id for the charge object,
+    // like Stripe — what lib/stripe.js retrievePaymentReceiptDetails reads.
+    const expand = [].concat((req.query && req.query.expand) || []);
+    if (expand.includes('latest_charge') && pi.latest_charge && state.charges.has(pi.latest_charge)) {
+      return res.json({ ...pi, latest_charge: state.charges.get(pi.latest_charge) });
+    }
     res.json(pi);
   });
 
@@ -238,6 +254,24 @@ function createStripeStandIn({ publicBaseUrl, webhookUrl, webhookSecret, webhook
     }
     res.status(status).json(body);
   });
+
+  // A Charge for a paid PaymentIntent — just what the receipt email reads:
+  // the hosted receipt link and the card brand / last four.
+  function chargeFor(pm, amount, currency) {
+    const id = randomId('ch');
+    const charge = {
+      id,
+      object: 'charge',
+      amount,
+      currency,
+      paid: true,
+      // https like Stripe's, whatever the stand-in's own address is
+      receipt_url: `https://receipts.stripe-stand-in.test/${id}`,
+      payment_method_details: { type: pm.type || 'card', card: pm.card || null },
+    };
+    state.charges.set(id, charge);
+    return charge;
+  }
 
   function createPaymentIntent(b) {
     const invalid = (message, param, code) => ({ status: 400, body: { error: { type: 'invalid_request_error', message, param, code } } });
@@ -313,7 +347,11 @@ function createStripeStandIn({ publicBaseUrl, webhookUrl, webhookSecret, webhook
     let customerId = session.customer;
     if (!customerId && session.customer_creation === 'always') {
       customerId = randomId('cus');
-      state.customers.set(customerId, { id: customerId, object: 'customer', livemode: false });
+      // The Customer's email is whatever the Checkout Session was given
+      // (customer_email) — or, as on the real hosted page, whatever the payer
+      // types into the email field (the form's 'email' input) when it wasn't.
+      const email = session.customer_email || String((req.body && req.body.email) || '') || null;
+      state.customers.set(customerId, { id: customerId, object: 'customer', email, livemode: false });
     }
     const pm = { id: randomId('pm'), object: 'payment_method', type: 'card', customer: customerId || null, card: { brand: 'visa', last4: '4242' }, livemode: false };
     state.paymentMethods.set(pm.id, pm);
@@ -331,6 +369,7 @@ function createStripeStandIn({ publicBaseUrl, webhookUrl, webhookSecret, webhook
       livemode: false,
       created: Math.floor(Date.now() / 1000),
       status: 'succeeded',
+      latest_charge: chargeFor(pm, session.amount_total, session.currency).id,
     };
     state.paymentIntents.set(pi.id, pi);
 
@@ -353,6 +392,7 @@ function createStripeStandIn({ publicBaseUrl, webhookUrl, webhookSecret, webhook
 <p id="amount">${escapeHtml(formatMoney(session.amount_total, session.currency))}</p>
 ${closed ? `<p id="gone">This checkout session is ${escapeHtml(session.status)}.</p>` : `
 <form method="post" action="/pay/${escapeHtml(session.id)}">
+  <label>Email <input id="payerEmail" name="email" autocomplete="off"></label>
   <label>Card number <input id="cardNumber" name="cardNumber" autocomplete="off"></label>
   <button id="submitPay" type="submit">Pay ${escapeHtml(formatMoney(session.amount_total, session.currency))}</button>
 </form>

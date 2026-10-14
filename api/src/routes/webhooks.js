@@ -7,8 +7,11 @@ const {
   paymentIntentIdOf,
 } = require('../lib/stripe');
 const { withServiceRole, assertRowsAffected } = require('../db');
+const { sendActivationReceipt } = require('../workers/billingEmails');
 
 const router = express.Router();
+
+const ACTIVATION_RECEIPT_WAIT_MS = 8000;
 
 // No cors() here, deliberately — Stripe calls this server-to-server,
 // never from a browser, and there's no bearer token or cookie for CORS
@@ -413,6 +416,22 @@ async function finishActivationFromSession(session, eventId) {
     amountCents: session.amount_total,
     livemode: session.livemode === true,
   });
+
+  // The dealer's receipt for the $500. Strictly best effort: a failure here
+  // must never fail the webhook (Stripe would retry it, and a persistently
+  // failing endpoint gets disabled). Safe on a redelivered event — the
+  // receipt is claimed once per tenant — and the hourly sweep
+  // (workers/billingEmails.js) sends it later if this attempt falls short.
+  // Waits briefly so the common case is "sent before we answer", but never
+  // holds Stripe's request open for a slow mail server.
+  try {
+    await Promise.race([
+      sendActivationReceipt(session.client_reference_id),
+      new Promise((resolve) => setTimeout(resolve, ACTIVATION_RECEIPT_WAIT_MS).unref()),
+    ]);
+  } catch (err) {
+    console.error(`Activation receipt for tenant ${session.client_reference_id} failed (the hourly sweep will retry): ${err.message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -309,7 +309,7 @@ async function processRenewal(tenantId, { dryRun = false, stripeMode } = {}) {
       advance: { tenantId: row.id, dueText },
     });
     log('succeeded', { ...base, paymentIntentId: paymentIntent.id, livemode, nextDue });
-    await notifyAdmins(row.id, 'receipt', { tenantName: row.name, feeCents: attempt.amount_cents, currency });
+    await notifyAdmins(row.id, 'receipt', { tenantName: row.name, feeCents: attempt.amount_cents, currency, paidAt: new Date(), dueAt: nextDue });
     return { outcome: 'succeeded', ...base, paymentIntentId: paymentIntent.id, nextDue };
   }
 

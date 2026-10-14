@@ -4,7 +4,7 @@
 //   - receipt: the fee went through
 //   - failed:  the card on file was declined (sent on each failed attempt)
 // Sent to every admin on the tenant, with 50.'s support address on copy.
-function buildRenewalEmail(kind, { tenantName, adminName, feeCents, currency, dueAt, supportEmail, nextRetryAt, finalAttempt }) {
+function buildRenewalEmail(kind, { tenantName, adminName, feeCents, currency, dueAt, paidAt, supportEmail, nextRetryAt, finalAttempt }) {
   const firstName = (adminName || '').trim().split(' ')[0] || 'there';
   const fee = formatAmount(feeCents, currency);
   const dueText = dueAt ? formatDate(dueAt) : null;
@@ -20,7 +20,7 @@ function buildRenewalEmail(kind, { tenantName, adminName, feeCents, currency, du
   } else if (kind === 'receipt') {
     subject = `Receipt: 50. annual fee, ${fee}`;
     lines = [
-      `We charged ${fee} to the card on file for ${tenantName}'s 50. annual fee. That covers the next 12 months.`,
+      `We charged ${fee}${paidAt ? ` on ${formatDate(paidAt)}` : ''} to the card on file for ${tenantName}'s 50. annual fee. That covers the next 12 months${dueText ? `, through ${dueText}` : ''}.`,
       `Thanks for being with us. Questions? Reply to this email or write ${supportEmail}.`,
     ];
   } else if (kind === 'failed') {
@@ -55,7 +55,7 @@ function formatAmount(amountCents, currency) {
 }
 
 function formatDate(d) {
-  return new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+  return new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/New_York' });
 }
 
 function escapeHtml(s) {

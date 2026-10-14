@@ -204,6 +204,10 @@ router.post('/billing/checkout-session', requireAuth, async (req, res, next) => 
       currency: ctx.reward_currency,
       paymentMethodType: ctx.payment_method_type,
       existingCustomerId,
+      // The signed-in admin's own login email — so Stripe's customer (and
+      // anything Stripe sends it) is the dealer, never whoever happens to
+      // type an address on the payment page.
+      customerEmail: ctx.user_email,
       annualFeeCents: ctx.annual_fee_cents,
       successUrl,
       cancelUrl,

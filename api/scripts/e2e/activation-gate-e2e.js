@@ -682,12 +682,15 @@ async function main() {
         eq(b.line_items[0].price_data.unit_amount, '50000', 'unit_amount');
         eq(b.payment_intent_data.setup_future_usage, 'off_session', 'setup_future_usage');
         eq(b.customer_creation, 'always', 'customer_creation');
+        // The Stripe customer (and anything Stripe emails it) is the signed-in
+        // dealer admin — never an address typed on the payment page.
+        eq(b.customer_email, USERS.newAdmin.email, 'customer_email');
         eq(b.metadata.kind, 'activation', 'metadata.kind');
         eq(b.metadata.tenant_id, newTenantId, 'metadata.tenant_id');
         eq(b.client_reference_id, newTenantId, 'client_reference_id');
         eq(b.success_url, `${DEALER_URL}?activation=success&session_id={CHECKOUT_SESSION_ID}`, 'success_url');
         eq(b.cancel_url, `${DEALER_URL}?activation=cancelled`, 'cancel_url');
-        return `redirected to ${admin.page.url()} — Stripe received mode=payment, unit_amount=50000, setup_future_usage=off_session, customer_creation=always, metadata.kind=activation, success_url back to the dealer page`;
+        return `redirected to ${admin.page.url()} — Stripe received mode=payment, unit_amount=50000, setup_future_usage=off_session, customer_creation=always, customer_email=the admin's login email, metadata.kind=activation, success_url back to the dealer page`;
       }
       await admin.page.waitForURL(/checkout\.stripe\.com/, { timeout: 30000 });
       const t = await tenantRow('e2e-new-dealer');
