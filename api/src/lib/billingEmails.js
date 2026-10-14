@@ -93,7 +93,7 @@ function renderHtml(firstName, blocks) {
             `<td style="${FONT}font-size:14px;font-weight:bold;padding:5px 0;text-align:right;">${escapeHtml(value)}</td></tr>`
         )
         .join('');
-      return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F8F5F0;border-radius:8px;margin:4px 0 16px;"><tr><td style="padding:10px 16px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table></td></tr></table>`;
+      return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F4EE;border-radius:8px;margin:4px 0 16px;"><tr><td style="padding:10px 16px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table></td></tr></table>`;
     }
     if (b.table) {
       const { head, rows, foot } = b.table;
@@ -110,7 +110,7 @@ function renderHtml(firstName, blocks) {
       return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 16px;border-collapse:collapse;"><tr>${th}</tr>${body}${tf}</table>`;
     }
     if (b.link) {
-      return `<p style="${PARA}"><a href="${escapeHtml(b.link.url)}" style="color:#1F4D36;font-weight:bold;">${escapeHtml(b.link.text)}</a></p>`;
+      return `<p style="${PARA}"><a href="${escapeHtml(b.link.url)}" style="color:#33475A;font-weight:bold;">${escapeHtml(b.link.text)}</a></p>`;
     }
     return '';
   });
