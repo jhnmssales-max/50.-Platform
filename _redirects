@@ -15,3 +15,6 @@
 # (Facebook, iMessage, ...) get tenant-specific Open Graph tags; visitors
 # are redirected on to the lead page. See api/src/routes/sharePreview.js.
 /r/*  https://five0-platform.onrender.com/r/:splat  200
+
+# /reps -> fifty-reps.html: the sales-rep admin page (50. staff only; the API enforces it).
+/reps  /fifty-reps.html  200

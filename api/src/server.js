@@ -7,6 +7,7 @@ const publicRouter = require('./routes/public');
 const meRouter = require('./routes/me');
 const tenantSettingsRouter = require('./routes/tenantSettings');
 const billingRouter = require('./routes/billing');
+const repsRouter = require('./routes/reps');
 const webhooksRouter = require('./routes/webhooks');
 const sharePreviewRouter = require('./routes/sharePreview');
 const { describeStripeConfig } = require('./lib/stripe');
@@ -53,6 +54,7 @@ app.use('/api', publicRouter);
 app.use('/api', meRouter);
 app.use('/api', tenantSettingsRouter);
 app.use('/api', billingRouter);
+app.use('/api', repsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
@@ -71,7 +73,14 @@ app.use((err, req, res, next) => {
     console.error(err);
     return res.status(500).json({ error: 'Internal server error' });
   }
-  res.status(status).json({ error: err.message, ...(err.publicCode ? { code: err.publicCode } : {}) });
+  res.status(status).json({
+    error: err.message,
+    ...(err.publicCode ? { code: err.publicCode } : {}),
+    // Extra context an intentionally-thrown 4xx may carry: field errors for a
+    // 400, the matching leads for a possible-duplicate 409.
+    ...(err.details ? { details: err.details } : {}),
+    ...(err.matches ? { matches: err.matches } : {}),
+  });
 });
 
 const port = process.env.PORT || 3000;

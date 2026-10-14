@@ -259,6 +259,32 @@ Everything 50. tells a dealer about money goes to **the dealer's own admins** (e
 - **Verifying.** `npm run e2e:billing-emails` (needs the scratch Postgres, like the other e2e scripts).
 
 
+## Sales-rep program
+
+Reps sell 50. to dealers. The database keeps track of the reps, the leads, which rep closed and onboarded each dealer, what 50. owes each rep, and what was paid. Everything lives in the 50. platform database and is run from the **Reps page** (`fifty-reps.html`, served at `go.referwith50.com/reps`), which only a login on the `50-platform` tenant can use (a dealer's own login gets a 403 and the page says so).
+
+**Who sees what.** The tenant's `admin` (Joseph) sees everything, money included, and is the only one who can record or delete a payment, reverse an earning, change pay rates, or backdate an assignment. The tenant's `staff` (the helper) can add and edit reps, leads and dealer assignments but **never sees a dollar amount**: the API leaves the money fields out of `GET /api/reps` for staff, every money route answers 403, and the database itself (RLS on `rep_earnings`, `rep_payouts`, `rep_settings`) refuses them.
+
+**What a rep earns** (defaults in `rep_settings`, editable on the Money tab; changes apply to payments from then on):
+
+- **$50 sign-up bonus** when a dealer's $500 activation clears, to the dealer's closer **and** to its onboarder. One person in both roles earns both ($100).
+- **$1 per referral** when the 30% referral fee clears, again for closer and onboarder each. Paid in full when the per-card reward is $50 or more, scaled down in proportion for smaller cards (a $25 card pays 50¢, a $10 card 20¢), never scaled up.
+- **After a rep's 2,000th company** (companies they were closer or onboarder on, counted in the order the dealers activated), referrals from the companies *after* the 2,000th pay half (50¢, same scaling). The first 2,000 keep $1.
+- **Earned only when money really clears**: a succeeded, live-mode `billing_events` row. Test-mode, declined and pending charges earn nothing, and neither do the billing-exempt tenants (Good Steward Structures, North Mountain Structures, 50.).
+- The $100 yearly renewal pays reps nothing.
+- **Refunds and disputes reverse automatically** (a negative `rep_earnings` row when the charge goes to `needs_refund`/`disputed`, or a `dispute_created` row exists for the same payment). The admin can also reverse any earning by hand from a statement.
+- Dealers with no rep are **house accounts** (Silver Run, Black Brothers, and any dealer not assigned). They pay no one.
+- A lead's credit goes to **whoever closes it**; the rep who only found it is recorded and earns nothing.
+- Making a rep inactive moves nothing. The page lists the dealers still on them so the admin decides each one.
+
+**A rep earns only on payments after they were assigned**, so assigning a dealer later never back-pays what already cleared (the admin can pick an earlier start date to credit one on purpose), and reassigning a dealer never moves money already earned.
+
+- **Code.** `supabase/migrations/20261015000000_rep_program.sql` (tables `reps`, `rep_leads`, `rep_assignments`, `rep_settings`, `rep_earnings`, `rep_payouts`, plus `assign_rep()`, `rep_dealer_list()`, `reverse_rep_earning()`), `src/routes/reps.js` (the `/api/reps`, `/api/rep-leads`, `/api/rep-dealers`, `/api/rep-money/overview`, `/api/reps/:id/statement`, `/api/reps/:id/payouts`, `/api/rep-earnings/:id/reverse`, `/api/rep-settings` routes), `src/workers/repEarnings.js` (turns cleared payments into earnings), run hourly by `src/workers/renewalScheduler.js`. So an earning shows up **within about an hour** of the payment clearing. `npm run rep-earnings` runs one cycle by hand; **`npm run rep-earnings:dry-run`** shows what it would add and keeps nothing.
+- **Exactly once.** `rep_earnings` has a unique index per (charge, rep, role) and one per reversed row, plus an advisory lock (5031982007), so a re-run, an overlapping run or two servers can never pay anything twice.
+- **Statements and paying.** The Money tab has a monthly statement per rep (opening balance, bonuses, royalties, reversals, payments, closing balance, Eastern-time months) you can print, and a running "you owe" balance. 50. does not pay reps or email them: you pay them yourself and click **Record payment**.
+- **Verifying.** `npm run e2e:rep-program` (earnings rules, access control, RLS, reversals, statements; 32 checks) and `npm run e2e:rep-page` (the page in headless Chromium as admin, helper and a dealer login; 22 checks). Both need the scratch Postgres, like the other e2e scripts.
+
+
 ## Stripe safety gate: `assertRealStripeConfigured()`
 
 The Stripe counterpart of the reward worker's `assertRealGiftCardProviderConfigured()` (`src/lib/stripe.js`), with the same stance: it throws — never returns a boolean — and it runs before every action on this path that could create a checkout, charge a card, or unlock a tenant (the checkout endpoint, the usage fee, and the webhook's activation, twice). It refuses:
