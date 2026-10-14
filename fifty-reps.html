@@ -107,6 +107,7 @@
     <section id="tab-dealers" class="hide"></section>
     <section id="tab-money" class="hide"></section>
     <section id="tab-mymoney" class="hide"></section>
+    <section id="tab-builds" class="hide"></section>
   </main>
 </div>
 
@@ -120,7 +121,7 @@ const SUPABASE_URL = "https://jzjmuttqbtandwjmwwfn.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_RE92j36ZEVFvSBwV-Rl8hg_JyfxRT6a";
 
 const TZ = 'America/New_York';
-const state = { me: null, isAdmin: false, isRep: false, myRepId: null, reps: [], leads: [], dealers: [], money: null, month: null, tab: 'leads', settings: null };
+const state = { me: null, isAdmin: false, isRep: false, myRepId: null, reps: [], leads: [], dealers: [], builds: [], money: null, month: null, tab: 'leads', settings: null };
 
 /* ---------- helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -214,7 +215,7 @@ async function start(){
   const tabs = state.isRep
     ? [['leads','My leads'],['dealers','My dealers'],['mymoney','My money']]
     : [['leads','Leads'],['reps','Reps'],['dealers','Dealers']];
-  if(state.isAdmin) tabs.push(['money','Money']);
+  if(state.isAdmin) tabs.push(['builds','To build'], ['money','Money']);
   $('tabs').innerHTML = tabs.map(([k,l]) => '<button type="button" data-tab="' + k + '">' + l + '</button>').join('');
   $('tabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
   showTab(state.tab);
@@ -226,13 +227,14 @@ async function loadReps(){ const d = await api('/reps'); state.reps = d.reps; st
 async function showTab(tab){
   state.tab = tab; clearFlash();
   $('tabs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  for(const k of ['leads','reps','dealers','money','mymoney']) $('tab-' + k).classList.toggle('hide', k !== tab);
+  for(const k of ['leads','reps','dealers','money','mymoney','builds']) $('tab-' + k).classList.toggle('hide', k !== tab);
   try{
     if(tab === 'leads') await renderLeads();
     if(tab === 'reps') await renderReps();
     if(tab === 'dealers') await renderDealers();
     if(tab === 'money') await renderMoney();
     if(tab === 'mymoney') await renderMyMoney();
+    if(tab === 'builds') await renderBuilds();
   }catch(err){ flash(err.message); }
 }
 
@@ -269,7 +271,8 @@ async function renderLeads(){
       '<td>' + esc(plainDate(x.found_on)) + '</td>' +
       '<td><span class="pill ' + x.status + '">' + x.status + '</span></td>' +
       (state.isRep ? '' : '<td>' + (x.status === 'won' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>') +
-      '<td class="num">' + (x.status === 'won' ? '' :
+      '<td class="num"><button class="btn small secondary" data-files="' + x.id + '">Files</button> ' +
+        (x.status === 'won' ? (x.build_status === 'awaiting_approval' ? '<span class="muted">waiting on Joseph</span>' : '') :
         '<button class="btn small" data-win="' + x.id + '">Mark won</button> ' +
         (x.status === 'open' ? '<button class="btn small secondary" data-lost="' + x.id + '">Lost</button>' : '<button class="btn small secondary" data-reopen="' + x.id + '">Reopen</button>')) + '</td></tr>'
     ).join('') || '<tr><td colspan="7" class="muted" style="padding:18px">No leads yet.</td></tr>') +
@@ -278,6 +281,7 @@ async function renderLeads(){
   const form = $('leadForm');
   form.addEventListener('submit', (e) => { e.preventDefault(); submitLead(form, false); });
   $('tab-leads').querySelectorAll('[data-win]').forEach((b) => b.addEventListener('click', () => winLeadDialog(b.dataset.win)));
+  $('tab-leads').querySelectorAll('[data-files]').forEach((b) => b.addEventListener('click', () => filesDialog(b.dataset.files)));
   $('tab-leads').querySelectorAll('[data-lost]').forEach((b) => b.addEventListener('click', () => leadStatus(b.dataset.lost, 'lost')));
   $('tab-leads').querySelectorAll('[data-reopen]').forEach((b) => b.addEventListener('click', () => leadStatus(b.dataset.reopen, 'open')));
 }
@@ -352,6 +356,91 @@ function winLeadDialog(id){
       closeDialog(); flash('Marked won.', true); await loadReps(); await renderLeads();
     }catch(err){ flash(err.message); closeDialog(); }
   });
+}
+
+/* ---------- Brand files on a lead ---------- */
+// Drag a logo or a brand sheet onto a lead. The bytes go straight to the
+// platform's file store; nothing is kept in this page.
+const FILE_TYPES = 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml,application/pdf';
+
+async function filesDialog(leadId){
+  const lead = state.leads.find((x) => x.id === leadId);
+  openDialog('<h3>Brand files — ' + esc(lead.company_name) + '</h3><div id="fileBody" class="muted">Loading…</div>');
+  await drawFiles(leadId);
+}
+
+async function drawFiles(leadId){
+  let files = [];
+  try{ files = (await api('/rep-leads/' + leadId + '/files')).files; }catch(err){ $('fileBody').innerHTML = '<div class="notice">' + esc(err.message) + '</div>'; return; }
+  const logo = files.find((f) => f.kind === 'logo');
+  $('fileBody').innerHTML =
+    '<p class="muted">Drop their logo here, or anything else that shows their colours — a brand sheet, a photo of their sign, a screenshot. The logo is the one that ends up on their pages.</p>' +
+    '<div id="drop" style="border:2px dashed var(--line);border-radius:12px;padding:22px;text-align:center;cursor:pointer;background:#FBF9F5">' +
+      '<b>Drop files here</b><div class="muted">or click to choose · PNG, JPG, WEBP, GIF, SVG or PDF, up to 5MB</div>' +
+      '<input type="file" id="filePick" multiple accept="' + FILE_TYPES + '" style="display:none">' +
+    '</div>' +
+    '<div id="upMsg" class="msg"></div>' +
+    (files.length
+      ? '<div class="tablewrap" style="margin-top:14px"><table style="min-width:0"><tbody>' +
+        files.map((f) =>
+          '<tr><td style="width:52px">' + (/^image\/(png|jpe?g|webp|gif|svg)/.test(f.content_type)
+            ? '<img src="' + esc(f.public_url) + '" alt="" style="width:44px;height:44px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:6px">'
+            : '<span class="pill">PDF</span>') + '</td>' +
+          '<td><b>' + esc(f.filename) + '</b><div class="muted">' + Math.max(1, Math.round(f.size_bytes / 1024)) + ' KB' + (f.kind === 'logo' ? ' · their logo' : '') + '</div></td>' +
+          '<td class="num">' + (f.kind === 'logo' ? '' : '<button class="btn small secondary" data-mklogo="' + f.id + '">Use as logo</button> ') +
+            '<button class="btn small danger" data-delfile="' + f.id + '">Remove</button></td></tr>'
+        ).join('') + '</tbody></table></div>'
+      : '<p class="muted" style="margin-top:12px">Nothing yet.</p>') +
+    '<div class="actions"><button class="btn secondary" id="cancelDlg" type="button">Done</button></div>';
+
+  void logo;
+  $('cancelDlg').addEventListener('click', () => { closeDialog(); renderLeads().catch(() => {}); });
+  const drop = $('drop'), pick = $('filePick');
+  drop.addEventListener('click', () => pick.click());
+  pick.addEventListener('change', () => uploadFiles(leadId, [...pick.files]));
+  ['dragenter','dragover'].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.style.borderColor = 'var(--secondary)'; }));
+  ['dragleave','drop'].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.style.borderColor = 'var(--line)'; }));
+  drop.addEventListener('drop', (ev) => uploadFiles(leadId, [...(ev.dataTransfer ? ev.dataTransfer.files : [])]));
+  $('fileBody').querySelectorAll('[data-delfile]').forEach((b) => b.addEventListener('click', async () => {
+    try{ await api('/rep-lead-files/' + b.dataset.delfile, { method:'DELETE' }); await drawFiles(leadId); }
+    catch(err){ upMsg(err.message, false); }
+  }));
+  $('fileBody').querySelectorAll('[data-mklogo]').forEach((b) => b.addEventListener('click', async () => {
+    // One logo per lead: re-upload under kind=logo is the simplest honest way
+    // to change which one it is, so this just tells them to drop it again.
+    upMsg('Remove the current logo first, then drop this one in — the first image you add becomes the logo.', false);
+    void b;
+  }));
+}
+
+function upMsg(text, ok){ const el = $('upMsg'); if(!el) return; el.textContent = text; el.className = 'msg show ' + (ok ? 'okmsg' : 'err'); }
+
+async function uploadFiles(leadId, files){
+  if(!files.length) return;
+  const existing = (await api('/rep-leads/' + leadId + '/files').catch(() => ({ files: [] }))).files || [];
+  let haveLogo = existing.some((f) => f.kind === 'logo');
+  for(const file of files){
+    if(file.size > 5 * 1024 * 1024){ upMsg(file.name + ' is bigger than 5MB.', false); continue; }
+    upMsg('Uploading ' + file.name + '…', true);
+    // The first image on a lead is its logo, because that is what a rep
+    // almost always drops first and asking would be a question with one
+    // sensible answer.
+    const isImage = /^image\//.test(file.type);
+    const kind = (!haveLogo && isImage) ? 'logo' : 'other';
+    try{
+      const s = getSession();
+      const res = await fetch(API_BASE + '/rep-leads/' + leadId + '/files?kind=' + kind + '&filename=' + encodeURIComponent(file.name), {
+        method:'POST',
+        headers:{ 'Content-Type': file.type || 'application/octet-stream', ...(s ? { Authorization: 'Bearer ' + s.access_token } : {}) },
+        body: file,
+      });
+      const body = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(body.error || ('Upload failed (' + res.status + ')'));
+      if(kind === 'logo') haveLogo = true;
+    }catch(err){ upMsg(file.name + ': ' + err.message, false); }
+  }
+  upMsg('Uploaded.', true);
+  await drawFiles(leadId);
 }
 
 /* ---------- Reps ---------- */
@@ -464,6 +553,154 @@ async function renderDealers(){
     if(fromEl && fromEl.value) body.effective_from = new Date(fromEl.value + 'T00:00:00').toISOString();
     try{ await put('/rep-dealers/' + b.dataset.save + '/assignment', body); flash('Saved.', true); await renderDealers(); }catch(err){ flash(err.message); }
   }));
+}
+
+/* ---------- To build (admin only) ---------- */
+// Every won lead that does not have a 50. account yet. Nothing a rep typed or
+// uploaded reaches a dealer's page without passing through here first.
+async function renderBuilds(){
+  const q = await api('/rep-builds');
+  state.builds = q.builds;
+  $('tab-builds').innerHTML =
+    '<div class="head"><h2>To build</h2><span class="muted">' + q.builds.length + ' waiting</span></div>' +
+    (q.builds.length
+      ? '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th><th>Closed by</th><th>Won</th><th>Files</th><th></th></tr></thead><tbody>' +
+        q.builds.map((b) =>
+          '<tr><td><b>' + esc(b.company_name) + '</b>' + (b.website ? '<div class="muted">' + esc(b.website) + '</div>' : '<div class="muted">no website</div>') +
+            (b.notes ? '<div class="muted">' + esc(b.notes) + '</div>' : '') + '</td>' +
+          '<td>' + esc(b.contact_name || '') + '<div class="muted">' + esc(b.email || 'no email') + '</div></td>' +
+          '<td>' + esc(b.closed_by_name || '—') + '</td>' +
+          '<td>' + esc(plainDate(b.closed_on)) + '</td>' +
+          '<td class="num">' + b.file_count + '</td>' +
+          '<td class="num"><button class="btn" data-build="' + b.id + '">Review and build</button></td></tr>'
+        ).join('') + '</tbody></table></div>'
+      : '<div class="notice">Nothing waiting. When a rep marks a company won it lands here for you to check before anything is built.</div>');
+  $('tab-builds').querySelectorAll('[data-build]').forEach((x) => x.addEventListener('click', () => buildDialog(x.dataset.build)));
+}
+
+function swatch(key, label, value){
+  return '<div style="flex:1 1 130px;min-width:0"><label style="margin-top:0">' + esc(label) + '</label>' +
+    '<div class="inline" style="gap:6px;flex-wrap:nowrap">' +
+      '<input type="color" data-color="' + key + '" value="' + esc(value) + '" style="width:40px;padding:2px;height:36px;flex:0 0 auto">' +
+      '<input type="text" data-hex="' + key + '" value="' + esc(value) + '" maxlength="7" style="min-width:0;font-variant-numeric:tabular-nums"></div></div>';
+}
+
+// What the dealer's own page header will look like, drawn from whatever is in
+// the boxes right now. Cheaper than imagining it, and it catches a logo that
+// disappears on a dark bar before the dealer sees it.
+function drawPreview(){
+  const get = (k) => ($('dlg').querySelector('[data-hex="' + k + '"]') || {}).value || '#000000';
+  const p = $('previewBar');
+  if(!p) return;
+  p.style.background = get('primaryColor');
+  p.style.color = '#fff';
+  const chip = $('previewAccent');
+  if(chip){ chip.style.background = get('accentColor'); }
+  const body = $('previewBody');
+  if(body){ body.style.background = get('bg'); }
+}
+
+async function buildDialog(leadId){
+  const lead = state.builds.find((x) => x.id === leadId);
+  openDialog('<h3>' + esc(lead.company_name) + '</h3><p class="muted">Looking at their website and files…</p>');
+
+  let guess = { brand: {}, ok: false, reason: '', found: {}, source: null };
+  try{ guess = await post('/rep-leads/' + leadId + '/brand-guess', {}); }
+  catch(err){ guess = { brand: {}, ok: false, reason: err.message, found: {}, source: null }; }
+
+  const b = Object.assign({ primaryColor:'#1C2B33', primaryDark:'#33475A', secondary:'#7C9FBB', accentColor:'#C9974B', accentDark:'#8B6B2E', bg:'#F7F4EE' }, lead.brand || {}, guess.brand || {});
+  const cardCents = lead.reward_amount_cents || 5000;
+  const whereFrom = guess.ok
+    ? 'Guessed from ' + (guess.source === 'logo' ? 'the logo they sent' : 'their website') + (guess.found && guess.found.colorFrom ? ' — ' + esc(guess.found.colorFrom) : '') + '. Check it.'
+    : esc(guess.reason || 'Nothing could be read, so these are 50.\u2019s own colours.');
+
+  openDialog(
+    '<h3>Build ' + esc(lead.company_name) + '</h3>' +
+    '<div class="notice">' + whereFrom + '</div>' +
+    '<form id="buildForm">' +
+      '<div class="row"><div><label>Their name, as customers see it</label><input name="name" required maxlength="200" value="' + esc(lead.company_name) + '"></div>' +
+      '<div><label>Who gets the account</label><input name="admin_email" type="email" required maxlength="200" value="' + esc(lead.email || '') + '"></div></div>' +
+      '<div class="row"><div><label>Their contact\u2019s name</label><input name="admin_name" maxlength="120" value="' + esc(lead.contact_name || '') + '"></div>' +
+      '<div><label>Gift card each side gets ($)</label><input name="reward" type="number" min="5" max="500" step="1" value="' + (cardCents / 100) + '"></div></div>' +
+      '<p class="muted" style="margin:-4px 0 10px">The $500 setup and the 30% fee never change. The card does — $50 unless you say otherwise.</p>' +
+
+      '<h3 style="font-size:15px;margin:14px 0 2px">Their logo</h3>' +
+      (b.logoUrl
+        ? '<div class="inline"><img src="' + esc(b.logoUrl) + '" alt="" style="height:52px;width:auto;max-width:180px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px"><span class="muted">' + (guess.found && guess.found.logo ? esc(guess.found.logo) : 'uploaded by the rep') + '</span></div>' +
+          '<label>Logo address</label><input name="logoUrl" maxlength="600" value="' + esc(b.logoUrl) + '">'
+        : '<p class="muted">None. Their pages will show 50.\u2019s mark until you add one \u2014 paste an address here, or close this and drop a file on the lead.</p><label>Logo address</label><input name="logoUrl" maxlength="600" value="">') +
+
+      '<h3 style="font-size:15px;margin:16px 0 2px">Their colours</h3>' +
+      '<div class="row">' + swatch('primaryColor','Main', b.primaryColor) + swatch('primaryDark','Main, darker', b.primaryDark) + swatch('secondary','Lighter', b.secondary) + '</div>' +
+      '<div class="row">' + swatch('accentColor','Accent', b.accentColor) + swatch('accentDark','Accent, darker', b.accentDark) + swatch('bg','Page background', b.bg) + '</div>' +
+
+      '<h3 style="font-size:15px;margin:16px 0 6px">What they will see</h3>' +
+      '<div id="previewBody" style="border:1px solid var(--line);border-radius:10px;overflow:hidden">' +
+        '<div id="previewBar" style="padding:12px 14px;display:flex;align-items:center;gap:10px">' +
+          (b.logoUrl ? '<img id="previewLogo" src="' + esc(b.logoUrl) + '" alt="" style="height:26px;width:auto;max-width:110px;object-fit:contain">' : '') +
+          '<b style="font-family:Fraunces,serif">' + esc(lead.company_name) + '</b>' +
+          '<span id="previewAccent" style="margin-left:auto;border-radius:99px;padding:3px 12px;font-size:12px;font-weight:700;color:#fff">Refer a friend</span>' +
+        '</div>' +
+        '<div style="padding:14px"><span class="muted">Their customers see this, in their colours.</span></div>' +
+      '</div>' +
+
+      '<div class="actions">' +
+        '<button type="button" class="btn secondary" id="cancelDlg">Not yet</button>' +
+        '<button type="button" class="btn danger" id="declineBuild">Do not build</button>' +
+        '<button class="btn" type="submit" id="doBuild">Build it and email them</button>' +
+      '</div></form>'
+  );
+
+  $('dlg').querySelectorAll('[data-color]').forEach((inp) => inp.addEventListener('input', () => {
+    const hexInput = $('dlg').querySelector('[data-hex="' + inp.dataset.color + '"]');
+    hexInput.value = inp.value.toUpperCase();
+    drawPreview();
+  }));
+  $('dlg').querySelectorAll('[data-hex]').forEach((inp) => inp.addEventListener('input', () => {
+    if(/^#[0-9a-fA-F]{6}$/.test(inp.value)){
+      $('dlg').querySelector('[data-color="' + inp.dataset.hex + '"]').value = inp.value;
+      drawPreview();
+    }
+  }));
+  const logoInput = $('dlg').querySelector('[name=logoUrl]');
+  if(logoInput) logoInput.addEventListener('input', () => {
+    const img = $('previewLogo');
+    if(img) img.src = logoInput.value;
+  });
+  drawPreview();
+
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('declineBuild').addEventListener('click', async () => {
+    const reason = window.prompt('Not building ' + lead.company_name + '. Why? (optional — it stays on the lead)', '');
+    if(reason === null) return;
+    try{ await post('/rep-leads/' + leadId + '/decline-build', { reason }); closeDialog(); flash('Taken out of the queue. The lead stays won.', true); await renderBuilds(); }
+    catch(err){ flash(err.message); }
+  });
+
+  $('buildForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('doBuild');
+    btn.disabled = true; btn.textContent = 'Building…';
+    const d = formData(e.target);
+    const brand = {};
+    $('dlg').querySelectorAll('[data-hex]').forEach((inp) => { if(/^#[0-9a-fA-F]{6}$/.test(inp.value)) brand[inp.dataset.hex] = inp.value; });
+    if(d.logoUrl) brand.logoUrl = d.logoUrl;
+    try{
+      const out = await post('/rep-leads/' + leadId + '/build', {
+        name: d.name, admin_email: d.admin_email, admin_name: d.admin_name || undefined,
+        brand, reward_amount_cents: Math.round(Number(d.reward) * 100),
+      });
+      closeDialog();
+      const trouble = (out.emailed && out.emailed.problems) || [];
+      flash(trouble.length
+        ? out.name + ' is built, but: ' + trouble.join(' ')
+        : out.name + ' is built. ' + out.admin_email + ' has their sign-in link, and the rep knows it is live.', trouble.length === 0);
+      await renderBuilds();
+    }catch(err){
+      flash(err.message);
+      btn.disabled = false; btn.textContent = 'Build it and email them';
+    }
+  });
 }
 
 /* ---------- Money (admin only) ---------- */

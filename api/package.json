@@ -21,6 +21,7 @@
     "e2e:rep-program": "node scripts/e2e/rep-program-e2e.js",
     "e2e:rep-page": "node scripts/e2e/rep-page-e2e.js",
     "e2e:rep-pipeline": "node scripts/e2e/rep-pipeline-e2e.js",
+    "e2e:dealer-build": "node scripts/e2e/dealer-build-e2e.js",
     "e2e:activation-gate": "node scripts/e2e/activation-gate-e2e.js",
     "e2e:activation-gate:stripe-test": "node scripts/e2e/activation-gate-e2e.js --stripe=test"
   },
@@ -29,10 +30,12 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
+    "jpeg-js": "^0.4.4",
     "jsonwebtoken": "^9.0.2",
     "jwks-rsa": "^4.1.0",
     "nanoid": "^3.3.7",
     "pg": "^8.12.0",
+    "pngjs": "^7.0.0",
     "zod": "^3.23.8"
   }
 }

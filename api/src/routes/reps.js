@@ -4,6 +4,9 @@ const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
 const { withUserTransaction, withServiceRole, assertRowsAffected, getCallerContext } = require('../db');
 const supabaseAdmin = require('../lib/supabaseAdmin');
+const storage = require('../lib/supabaseStorage');
+const brandGuess = require('../lib/brandGuess');
+const dealerBuildEmails = require('../lib/dealerBuildEmails');
 const repInviteEmail = require('../lib/repInviteEmail');
 const { sendEmail } = require('../lib/postmark');
 
@@ -352,7 +355,8 @@ const leadPatch = z.object({ ...leadFields, status: z.enum(['open', 'lost']).opt
 
 const LEAD_COLUMNS = `l.id, l.company_name, l.contact_name, l.phone, l.email, l.website, l.notes,
   l.brought_in_by_rep_id, l.found_on, l.status,
-  l.closed_by_rep_id, l.onboarded_by_rep_id, l.closed_on, l.tenant_id, l.created_at`;
+  l.closed_by_rep_id, l.onboarded_by_rep_id, l.closed_on, l.tenant_id, l.created_at,
+  l.build_status, l.brand, l.brand_source, l.reward_amount_cents, l.built_at, l.declined_reason`;
 
 // A rep calling this gets only their own leads — not because of anything
 // here, but because RLS gives them no other rows.
@@ -560,6 +564,161 @@ router.put('/rep-dealers/:tenantId/assignment', requireAuth, wrap(async (req, re
 }));
 
 // ---------------------------------------------------------------------------
+// Brand files on a lead
+// ---------------------------------------------------------------------------
+// The bytes go to Supabase Storage, never to this service's disk, which Render
+// wipes on every deploy (see lib/supabaseStorage.js). RLS decides whose lead
+// may be written to; this only turns a refusal into a clear answer.
+//
+// Raw body rather than multipart or base64: no new dependency, no third
+// re-encoding of an image that is about to be re-encoded by storage anyway.
+// The name and kind ride along as query parameters.
+const uploadBody = express.raw({ type: () => true, limit: storage.MAX_BYTES + 1024 });
+
+async function leadIMayTouch(client, leadId) {
+  const { rows: [lead] } = await client.query(
+    `select id, company_name, website, status, build_status from rep_leads where id = $1`,
+    [leadId]
+  );
+  // RLS has already filtered this: a lead that is not mine simply is not here.
+  if (!lead) throw httpError(404, 'No such lead');
+  return lead;
+}
+
+router.post('/rep-leads/:id/files', requireAuth, uploadBody, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  const kind = req.query.kind === 'logo' ? 'logo' : 'other';
+  const filename = String(req.query.filename || 'upload').slice(0, 200);
+  const contentType = String(req.headers['content-type'] || '').split(';')[0].trim();
+
+  if (!storage.isConfigured()) {
+    throw httpError(503, 'This platform cannot store files yet: SUPABASE_SERVICE_ROLE_KEY is not set on the API service.', 'uploads_not_configured');
+  }
+  if (!Buffer.isBuffer(req.body) || !req.body.length) throw httpError(400, 'There was nothing in that file');
+  if (!storage.extensionFor(contentType)) throw httpError(400, 'Upload a PNG, JPG, WEBP, GIF, SVG or PDF');
+
+  // Check the lead first, so nothing is stored for a lead this person cannot
+  // touch — a refusal after the upload would leave an orphan in the bucket.
+  await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { rep: true });
+    await leadIMayTouch(client, id);
+  });
+
+  const stored = await storage.upload({ leadId: id, bytes: req.body, contentType });
+
+  try {
+    const row = await withUserTransaction(req.userId, async (client) => {
+      await requirePlatform(client, req.userId, { rep: true });
+      const { rows: [f] } = await client.query(
+        `insert into rep_lead_files (lead_id, kind, filename, content_type, size_bytes, storage_path, public_url)
+         values ($1, $2, $3, $4, $5, $6, $7)
+         returning id, lead_id, kind, filename, content_type, size_bytes, public_url, created_at`,
+        [id, kind, filename, contentType, stored.sizeBytes, stored.storagePath, stored.publicUrl]
+      );
+      if (!f) throw httpError(403, 'That lead is not yours');
+      return f;
+    });
+    res.status(201).json(row);
+  } catch (err) {
+    // The row is the record. A file with no row is litter nobody will ever
+    // find, so take it back out rather than leave it.
+    await storage.remove(stored.storagePath);
+    throw err;
+  }
+}));
+
+router.get('/rep-leads/:id/files', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  const files = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { rep: true });
+    const { rows } = await client.query(
+      `select id, lead_id, kind, filename, content_type, size_bytes, public_url, created_at
+       from rep_lead_files where lead_id = $1 order by created_at`,
+      [id]
+    );
+    return rows;
+  });
+  res.json({ files });
+}));
+
+router.delete('/rep-lead-files/:id', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  const removed = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { rep: true });
+    const { rows: [f] } = await client.query(
+      'delete from rep_lead_files where id = $1 returning storage_path',
+      [id]
+    );
+    if (!f) throw httpError(404, 'No such file');
+    return f;
+  });
+  await storage.remove(removed.storage_path);
+  res.json({ ok: true });
+}));
+
+// ---------------------------------------------------------------------------
+// Guessing the brand
+// ---------------------------------------------------------------------------
+// Always a guess, and said so: the answer carries where each part came from so
+// the approval screen can show it as something to check rather than a fact.
+// Staff and admin only — it is the approval step that uses it, and it reaches
+// out to somebody else's website.
+router.post('/rep-leads/:id/brand-guess', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  const prefer = req.query.from === 'logo' ? 'logo' : req.query.from === 'website' ? 'website' : 'auto';
+
+  const { lead, logo } = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId);
+    const l = await leadIMayTouch(client, id);
+    const { rows: [f] } = await client.query(
+      `select public_url, content_type from rep_lead_files
+       where lead_id = $1 and kind = 'logo' order by created_at desc limit 1`,
+      [id]
+    );
+    return { lead: l, logo: f || null };
+  });
+
+  const attempts = [];
+
+  // The logo the rep uploaded first when there is one: they chose it, and a
+  // homepage is a noisier place to look than the mark itself.
+  if (logo && prefer !== 'website') {
+    try {
+      const fetched = await fetch(logo.public_url);
+      if (!fetched.ok) throw new Error(`the stored file answered ${fetched.status}`);
+      const bytes = Buffer.from(await fetched.arrayBuffer());
+      const out = brandGuess.fromLogo(bytes, logo.content_type, logo.public_url);
+      attempts.push({ from: 'logo', ...out });
+      if (out.ok) return res.json({ ...out, attempts });
+    } catch (err) {
+      attempts.push({ from: 'logo', ok: false, reason: `Could not read the uploaded logo: ${err.message}` });
+    }
+  }
+
+  if (lead.website && prefer !== 'logo') {
+    const out = await brandGuess.fromWebsite(lead.website);
+    attempts.push({ from: 'website', ...out });
+    // A logo the rep uploaded beats one scraped off a page, when we have both.
+    if (out.ok) {
+      const brand = { ...out.brand, ...(logo ? { logoUrl: logo.public_url } : {}) };
+      return res.json({ ...out, brand, attempts });
+    }
+  }
+
+  // Nothing to go on: 50.'s own palette, plainly labelled, for Joseph to type
+  // over. Not an error — plenty of small builders have no website at all.
+  res.json({
+    ok: false,
+    source: null,
+    brand: { ...brandGuess.DEFAULTS, ...(logo ? { logoUrl: logo.public_url } : {}) },
+    reason: lead.website
+      ? (attempts.find((a) => a.reason) || {}).reason || 'Nothing could be read from that website.'
+      : 'No website on this lead, and no logo uploaded — these are 50.\u2019s own colours, to change.',
+    attempts,
+  });
+}));
+
+// ---------------------------------------------------------------------------
 // Money — the 50. admin only
 // ---------------------------------------------------------------------------
 router.get('/rep-money/overview', requireAuth, wrap(async (req, res) => {
@@ -734,6 +893,212 @@ router.put('/rep-settings', requireAuth, wrap(async (req, res) => {
     return s;
   });
   res.json(row);
+}));
+
+// ---------------------------------------------------------------------------
+// The build queue — the 50. admin only
+// ---------------------------------------------------------------------------
+// Every won lead that does not have a dealer yet. This is the list Joseph
+// works from, and the one thing standing between what a rep typed and what a
+// dealer's customers see.
+router.get('/rep-builds', requireAuth, wrap(async (req, res) => {
+  const out = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+    const { rows } = await client.query(
+      `select ${LEAD_COLUMNS},
+              (select name from reps where id = l.closed_by_rep_id) as closed_by_name,
+              (select count(*)::int from rep_lead_files f where f.lead_id = l.id) as file_count
+       from rep_leads l
+       where l.build_status = 'awaiting_approval'
+       order by l.closed_on, l.created_at`
+    );
+    return rows;
+  });
+  res.json({ builds: out });
+}));
+
+// A slug is the dealer's address on the platform, so it has to be unique and
+// URL-safe. Derived from the company name, then made unique by the database
+// rather than by guessing — two "Smith Construction"s are not far-fetched.
+function slugify(name) {
+  return String(name || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'dealer';
+}
+
+// The slug the DATABASE will uniquify (see approve_lead_build): this only
+// turns a company name into a legal base. It is not checked for collisions
+// here on purpose — this runs as the signed-in user, and RLS hides every
+// tenant but their own, so the answer would always be "free".
+
+const brandBody = z.object({
+  primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  primaryDark: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  secondary: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  accentDark: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  bg: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  logoUrl: z.string().url().max(600).optional(),
+  contactEmail: z.string().email().max(200).optional(),
+  builderUrl: z.string().url().max(600).optional(),
+}).strict();
+
+const buildBody = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  slug: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{1,48}$/).optional(),
+  brand: brandBody.optional(),
+  // The one price that varies per dealer: the gift card. $500 and 30% never do.
+  reward_amount_cents: z.number().int().min(500).max(50000).optional(),
+  admin_name: z.string().trim().min(1).max(120).optional(),
+  admin_email: z.string().email().max(200).optional(),
+});
+
+// Approving. Creates the dealer, gives their admin a login with no password,
+// and emails them a link to choose one — plus a note to the rep that it is
+// live. The database work is one transaction; the emails are best effort
+// afterwards, and a failed email is reported rather than hidden, because the
+// account exists either way and resending is the fix.
+router.post('/rep-leads/:id/build', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  const body = parseOr400(buildBody, req.body || {});
+  if (!supabaseAdmin.isConfigured()) {
+    throw httpError(503, 'This platform cannot create logins yet: SUPABASE_SERVICE_ROLE_KEY is not set on the API service.', 'logins_not_configured');
+  }
+
+  // 1. Everything the database can check, before anything is created anywhere.
+  const plan = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+    const { rows: [lead] } = await client.query(
+      `select ${LEAD_COLUMNS}, (select name from reps where id = l.closed_by_rep_id) as closed_by_name,
+              (select email from reps where id = l.closed_by_rep_id) as closed_by_email
+       from rep_leads l where l.id = $1`,
+      [id]
+    );
+    if (!lead) throw httpError(404, 'No such lead');
+    if (lead.status !== 'won') throw httpError(409, 'Mark the lead won first');
+    if (lead.build_status === 'built') throw httpError(409, 'That lead already has a 50. account');
+
+    const adminEmail = (body.admin_email || lead.email || '').trim().toLowerCase();
+    if (!adminEmail) throw httpError(400, 'This lead has no email address, so there is nobody to give the account to. Add one first.');
+
+    const name = (body.name || lead.company_name).trim();
+    const slug = body.slug || slugify(name);
+    return {
+      lead,
+      name,
+      slug,
+      adminEmail,
+      adminName: (body.admin_name || lead.contact_name || name).trim(),
+      brand: body.brand || lead.brand || {},
+      rewardCents: body.reward_amount_cents != null ? body.reward_amount_cents : lead.reward_amount_cents,
+    };
+  });
+
+  // 2. The dealer's login, before the tenant: a Supabase failure here must
+  //    leave nothing behind, and an account with no tenant is harmless and
+  //    reusable, where a tenant with no way in is not.
+  let authUserId;
+  try {
+    ({ userId: authUserId } = await supabaseAdmin.createPasswordlessUser(plan.adminEmail));
+  } catch (err) {
+    throw httpError(502, `Supabase would not create a login for ${plan.adminEmail}: ${err.message}`);
+  }
+
+  // 3. The dealer itself, in one transaction (see approve_lead_build).
+  const tenantId = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+    const { rows: [r] } = await client.query(
+      'select approve_lead_build($1, $2, $3, $4::jsonb, $5) as tenant_id',
+      [id, plan.slug, plan.name, JSON.stringify(plan.brand), plan.rewardCents]
+    );
+    return r.tenant_id;
+  });
+
+  // 4. Attach the login to it as that dealer's own admin. Service role: this
+  //    writes the row RLS itself consults, so no signed-in role may write it.
+  await withServiceRole(async (client) => {
+    const { rows: [existing] } = await client.query('select id, tenant_id from users where id = $1', [authUserId]);
+    if (existing && existing.tenant_id !== tenantId) {
+      throw httpError(409, `${plan.adminEmail} already signs in to another account on this platform. Use a different address for this dealer.`);
+    }
+    if (!existing) {
+      await client.query(
+        `insert into users (id, tenant_id, email, name, role) values ($1, $2, $3, $4, 'admin')`,
+        [authUserId, tenantId, plan.adminEmail, plan.adminName]
+      );
+    }
+  });
+
+  // 5. Tell them. Best effort, and honest about which part failed.
+  const frontend = String(process.env.FRONTEND_BASE_URL || '').replace(/\/+$/, '');
+  const from = process.env.EMAIL_FROM_ADDRESS;
+  const replyTo = process.env.BILLING_SUPPORT_EMAIL || 'joseph@referwith50.com';
+  const logoUrl = `${frontend}/assets/50-platform-logo.png`;
+  const emailed = { dealer: false, rep: false, problems: [] };
+
+  if (!from) {
+    emailed.problems.push('EMAIL_FROM_ADDRESS is not set, so nothing could be emailed.');
+  } else {
+    try {
+      const link = await supabaseAdmin.setPasswordLink(plan.adminEmail, `${frontend}/login`);
+      const mail = dealerBuildEmails.forDealer({
+        contactName: plan.adminName,
+        companyName: plan.name,
+        link,
+        signInUrl: `${frontend}/login`,
+        activationFeeCents: 50000,
+        rewardAmountCents: plan.rewardCents || 5000,
+        repName: plan.lead.closed_by_name,
+        logoUrl,
+      });
+      await sendEmail({ from: `Joseph at 50. <${from}>`, to: plan.adminEmail, replyTo, subject: mail.subject, htmlBody: mail.htmlBody, textBody: mail.textBody });
+      emailed.dealer = true;
+    } catch (err) {
+      emailed.problems.push(`The dealer could not be emailed their link: ${err.message}`);
+    }
+
+    if (plan.lead.closed_by_email) {
+      try {
+        const mail = dealerBuildEmails.forRep({
+          repName: plan.lead.closed_by_name,
+          companyName: plan.name,
+          contactName: plan.adminName,
+          contactEmail: plan.adminEmail,
+          signInUrl: `${frontend}/reps`,
+          activationFeeCents: 50000,
+          logoUrl,
+        });
+        await sendEmail({ from: `Joseph at 50. <${from}>`, to: plan.lead.closed_by_email, replyTo, subject: mail.subject, htmlBody: mail.htmlBody, textBody: mail.textBody });
+        emailed.rep = true;
+      } catch (err) {
+        emailed.problems.push(`The rep could not be told it is live: ${err.message}`);
+      }
+    }
+  }
+
+  res.status(201).json({
+    tenant_id: tenantId,
+    slug: plan.slug,
+    name: plan.name,
+    admin_email: plan.adminEmail,
+    reward_amount_cents: plan.rewardCents || 5000,
+    emailed,
+  });
+}));
+
+// Taking a won lead out of the queue without building anything. The lead
+// stays won: the rep still closed it.
+router.post('/rep-leads/:id/decline-build', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  const reason = parseOr400(z.object({ reason: optText(500) }), req.body || {}).reason;
+  await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+    await client.query('select decline_lead_build($1, $2)', [id, reason || null]);
+  });
+  res.json({ ok: true });
 }));
 
 module.exports = router;
