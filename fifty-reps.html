@@ -93,6 +93,23 @@
   </div>
 </section>
 
+<section id="setPwBox" class="hide">
+  <div class="panel">
+    <div class="brand"><img src="assets/50-platform-logo.png" alt="50."><span class="tag">Reps</span></div>
+    <p id="setPwWho" class="muted" style="margin:0 0 4px"></p>
+    <h2 style="font-size:19px;margin-bottom:6px">Choose a password</h2>
+    <p class="muted" style="margin:0 0 4px">This is what you will sign in with from now on. At least 8 characters.</p>
+    <form id="setPwForm">
+      <label for="newPw">New password</label>
+      <input id="newPw" type="password" autocomplete="new-password" minlength="8" required>
+      <label for="newPw2">Type it again</label>
+      <input id="newPw2" type="password" autocomplete="new-password" minlength="8" required>
+      <div style="margin-top:16px"><button class="btn" type="submit" id="setPwBtn">Save and sign in</button></div>
+      <div id="setPwMsg" class="msg"></div>
+    </form>
+  </div>
+</section>
+
 <div id="app" class="hide">
   <header class="top">
     <img src="assets/50-platform-logo.png" alt="50."><span>Reps</span>
@@ -186,6 +203,73 @@ $('loginForm').addEventListener('submit', async (e) => {
 });
 $('signOutBtn').addEventListener('click', () => { setSession(null); location.reload(); });
 
+/* ---------- arriving from an emailed link ---------- */
+// Supabase sends someone back here after they click "Set your password" with
+// the session in the URL's fragment (#access_token=…&type=recovery) rather
+// than in a query string, so it never reaches a server, ours included.
+// Without reading it, the person lands on a sign-in form holding a password
+// they have not set yet — which is exactly what happened the first time this
+// shipped.
+function readAuthFragment(){
+  const raw = (location.hash || '').replace(/^#/, '');
+  if(!raw) return null;
+  let p;
+  try{ p = new URLSearchParams(raw); }catch(e){ return null; }
+  const error = p.get('error_description') || p.get('error');
+  if(error) return { error: decodeURIComponent(error).replace(/\+/g, ' ') };
+  const access_token = p.get('access_token');
+  if(!access_token) return null;
+  return { access_token, refresh_token: p.get('refresh_token') || '', type: p.get('type') || '' };
+}
+
+// Take it straight back out of the address bar: a session in a URL is a
+// session in the browser history, in a bookmark, and in anything they paste.
+function clearFragment(){
+  try{ history.replaceState(null, '', location.pathname + location.search); }
+  catch(e){ location.hash = ''; }
+}
+
+function showSetPassword(email){
+  $('loginBox').classList.add('hide');
+  $('app').classList.add('hide');
+  $('setPwBox').classList.remove('hide');
+  $('setPwWho').textContent = email ? 'Signed in as ' + email : '';
+}
+
+async function whoAmI(){
+  try{
+    const s = getSession();
+    const res = await fetch(SUPABASE_URL + '/auth/v1/user', { headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + s.access_token } });
+    if(!res.ok) return null;
+    const d = await res.json();
+    return d.email || null;
+  }catch(e){ return null; }
+}
+
+$('setPwForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = $('setPwBtn'), msg = $('setPwMsg');
+  const a = $('newPw').value, b = $('newPw2').value;
+  msg.className = 'msg';
+  if(a !== b){ msg.textContent = 'Those two do not match.'; msg.className = 'msg show err'; return; }
+  btn.disabled = true;
+  try{
+    const s = getSession();
+    const res = await fetch(SUPABASE_URL + '/auth/v1/user', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + s.access_token },
+      body: JSON.stringify({ password: a }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if(!res.ok) throw new Error(body.msg || body.error_description || body.message || 'That password was not accepted.');
+    $('setPwBox').classList.add('hide');
+    await start();
+  }catch(err){
+    msg.textContent = err.message; msg.className = 'msg show err';
+    btn.disabled = false;
+  }
+});
+
 /* ---------- start ---------- */
 async function start(){
   try{
@@ -244,6 +328,20 @@ function closeDialog(){ const d = $('dlg'); if(d.open) d.close(); }
 
 /* ---------- Leads ---------- */
 async function renderLeads(){
+  // Anything half-typed into the add-a-lead form, and whether it was open at
+  // all, has to survive this redraw: the list reloads whenever a lead changes,
+  // and losing a lead someone was in the middle of writing down is the kind of
+  // thing that makes people stop using a tool.
+  const keep = (() => {
+    const details = $('tab-leads').querySelector('details');
+    if(!details) return null;
+    const values = {};
+    $('tab-leads').querySelectorAll('#leadForm input, #leadForm textarea, #leadForm select').forEach((el) => {
+      if(el.name && el.value) values[el.name] = el.value;
+    });
+    return { open: details.open, values, focused: (document.activeElement || {}).name || null };
+  })();
+
   const [l, dl] = await Promise.all([api('/rep-leads'), api('/rep-dealers')]);
   state.leads = l.leads; state.dealers = dl.dealers;
   const open = state.leads.filter((x) => x.status === 'open').length;
@@ -279,6 +377,19 @@ async function renderLeads(){
     '</tbody></table></div>';
 
   const form = $('leadForm');
+  if(keep){
+    const details = $('tab-leads').querySelector('details');
+    if(details) details.open = keep.open;
+    Object.entries(keep.values).forEach(([name, value]) => {
+      const el = form.querySelector('[name="' + name + '"]');
+      // The date box defaults to today; only put back what was really typed.
+      if(el && (!el.value || name !== 'found_on')) el.value = value;
+    });
+    if(keep.focused){
+      const el = form.querySelector('[name="' + keep.focused + '"]');
+      if(el) el.focus();
+    }
+  }
   form.addEventListener('submit', (e) => { e.preventDefault(); submitLead(form, false); });
   $('tab-leads').querySelectorAll('[data-win]').forEach((b) => b.addEventListener('click', () => winLeadDialog(b.dataset.win)));
   $('tab-leads').querySelectorAll('[data-files]').forEach((b) => b.addEventListener('click', () => filesDialog(b.dataset.files)));
@@ -294,6 +405,7 @@ async function submitLead(form, confirmDuplicate){
   if(confirmDuplicate) body.confirm_duplicate = true;
   try{
     await post('/rep-leads', body);
+    form.reset();
     flash('Lead added.', true);
     await renderLeads();
   }catch(err){
@@ -861,6 +973,23 @@ async function statementDialog(repId){
 
 /* ---------- boot ---------- */
 (async function(){
+  const fromLink = readAuthFragment();
+  if(fromLink && fromLink.error){
+    clearFragment();
+    const m = $('loginMsg');
+    m.textContent = fromLink.error + ' Ask Joseph to send you a fresh link.';
+    m.className = 'msg show err';
+    return;
+  }
+  if(fromLink){
+    setSession({ access_token: fromLink.access_token, refresh_token: fromLink.refresh_token });
+    clearFragment();
+    // recovery and invite both mean "they have no password yet, or are
+    // replacing one". Anything else is an ordinary session and goes straight in.
+    if(fromLink.type === 'recovery' || fromLink.type === 'invite' || fromLink.type === 'signup'){
+      return showSetPassword(await whoAmI());
+    }
+  }
   if(getSession()) { const ok = await start().then(() => true).catch(() => false); void ok; }
 })();
 </script>

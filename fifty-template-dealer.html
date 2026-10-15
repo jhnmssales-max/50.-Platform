@@ -191,6 +191,21 @@
 
   <hr class="divider" />
 
+  <div class="loginBox" id="setPwBox" style="display:none">
+    <h1>Choose a password</h1>
+    <p class="lede">This is what you will sign in with from now on. At least 8 characters.</p>
+    <div id="setPwMsg" class="msg"></div>
+    <form id="setPwForm">
+      <label for="newPw">New password</label>
+      <input type="password" id="newPw" autocomplete="new-password" minlength="8" />
+
+      <label for="newPw2">Type it again</label>
+      <input type="password" id="newPw2" autocomplete="new-password" minlength="8" />
+
+      <button type="submit" class="send" id="setPwBtn">Save and sign in</button>
+    </form>
+  </div>
+
   <div class="loginBox" id="loginBox">
     <h1>Sign in</h1>
     <p class="lede">Use the email and password for your staff or admin account.</p>
@@ -659,7 +674,82 @@ async function onActivationRequired(){
   }
 }
 
+// Supabase sends someone back here after they click "Set your password" in a
+// welcome email, with the session in the URL's FRAGMENT
+// (#access_token=...&type=recovery) — which never reaches a server, ours
+// included. Reading it is the difference between landing signed in and
+// landing on a sign-in form holding a password you have not set yet.
+function readAuthFragment(){
+  const raw = (location.hash || '').replace(/^#/, '');
+  if(!raw) return null;
+  let p;
+  try{ p = new URLSearchParams(raw); }catch(e){ return null; }
+  const error = p.get('error_description') || p.get('error');
+  if(error) return { error: decodeURIComponent(error).replace(/\+/g, ' ') };
+  const access_token = p.get('access_token');
+  if(!access_token) return null;
+  return { access_token, refresh_token: p.get('refresh_token') || '', type: p.get('type') || '' };
+}
+
+// Straight back out of the address bar: a session left in a URL is a session
+// in the history, in a bookmark, and in anything they paste.
+function clearFragment(){
+  try{ history.replaceState(null, '', location.pathname + location.search); }
+  catch(e){ location.hash = ''; }
+}
+
+function showSetPassword(){
+  document.getElementById('loginBox').style.display = 'none';
+  document.getElementById('setPwBox').style.display = 'block';
+}
+
+document.getElementById('setPwForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('setPwBtn');
+  const msg = document.getElementById('setPwMsg');
+  const a = document.getElementById('newPw').value;
+  const b = document.getElementById('newPw2').value;
+  msg.className = 'msg';
+  msg.textContent = '';
+  if(a.length < 8){ msg.textContent = 'Use at least 8 characters.'; msg.className = 'msg err'; return; }
+  if(a !== b){ msg.textContent = 'Those two do not match.'; msg.className = 'msg err'; return; }
+  btn.disabled = true;
+  try{
+    const session = getSession();
+    const res = await fetch(SUPABASE_URL + '/auth/v1/user', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + session.access_token },
+      body: JSON.stringify({ password: a }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if(!res.ok) throw new Error(body.msg || body.error_description || body.message || 'That password was not accepted.');
+    document.getElementById('setPwBox').style.display = 'none';
+    await init();
+  }catch(err){
+    msg.textContent = err.message; msg.className = 'msg err';
+    btn.disabled = false;
+  }
+});
+
 async function init(){
+  const fromLink = readAuthFragment();
+  if(fromLink && fromLink.error){
+    clearFragment();
+    showLoggedOut();
+    const m = document.getElementById('loginMsg');
+    m.textContent = fromLink.error + ' Ask for a fresh link.';
+    m.className = 'msg err';
+    return;
+  }
+  if(fromLink){
+    setSession({ access_token: fromLink.access_token, refresh_token: fromLink.refresh_token });
+    clearFragment();
+    // recovery and invite both mean "no password yet, or replacing one".
+    if(fromLink.type === 'recovery' || fromLink.type === 'invite' || fromLink.type === 'signup'){
+      showLoggedOut();
+      return showSetPassword();
+    }
+  }
   if(!getSession()){ showLoggedOut(); return; }
   try{
     await loadCurrentUser();
