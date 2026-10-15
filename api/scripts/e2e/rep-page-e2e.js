@@ -29,6 +29,25 @@ const AUTH_BASE = `http://127.0.0.1:${PORTS.auth}`;
 const PAGE = `http://127.0.0.1:${PORTS.page}/reps`;
 const headed = process.argv.includes('--headed');
 
+const { PNG } = require('pngjs');
+
+// A logo with two known colours in it, so what the brand guess returns can be
+// checked against what went in.
+function makeLogoPng(top, bottom) {
+  const png = new PNG({ width: 80, height: 80 });
+  for (let y = 0; y < 80; y += 1) {
+    for (let x = 0; x < 80; x += 1) {
+      const i = (y * 80 + x) << 2;
+      const c = y < 50 ? top : y < 70 ? bottom : null;
+      png.data[i] = c ? c[0] : 0;
+      png.data[i + 1] = c ? c[1] : 0;
+      png.data[i + 2] = c ? c[2] : 0;
+      png.data[i + 3] = c ? 255 : 0;
+    }
+  }
+  return PNG.sync.write(png);
+}
+
 const results = [];
 let currentSection = '';
 function section(name) { currentSection = name; console.log(`\n=== ${name}`); }
@@ -66,6 +85,37 @@ async function main() {
   mailApp.post('/email', (req, res) => { sentMail.push(req.body); res.json({ ErrorCode: 0, MessageID: `m-${sentMail.length}` }); });
   const mailServer = mailApp.listen(PORTS.postmark, '127.0.0.1');
 
+  // Supabase Storage, and a pretend prospect's website to read a brand off.
+  const objects = new Map();
+  const buckets = new Set();
+  const storeApp = express();
+  storeApp.post('/storage/v1/bucket', express.json(), (req, res) => {
+    if (buckets.has(req.body.id)) return res.status(409).json({ message: 'Bucket already exists' });
+    buckets.add(req.body.id);
+    res.json({ name: req.body.id });
+  });
+  storeApp.post('/storage/v1/object/:bucket/*', express.raw({ type: () => true, limit: '8mb' }), (req, res) => {
+    objects.set(`${req.params.bucket}/${req.params[0]}`, { bytes: req.body, contentType: req.headers['content-type'] });
+    res.json({ Key: 'ok' });
+  });
+  storeApp.delete('/storage/v1/object/:bucket/*', (req, res) => {
+    objects.delete(`${req.params.bucket}/${req.params[0]}`);
+    res.json({ message: 'deleted' });
+  });
+  storeApp.get('/storage/v1/object/public/:bucket/*', (req, res) => {
+    const o = objects.get(`${req.params.bucket}/${req.params[0]}`);
+    if (!o) return res.status(404).end();
+    res.set('Access-Control-Allow-Origin', '*').type(o.contentType).send(o.bytes);
+  });
+  storeApp.get('/prospect-site', (req, res) => res.type('html').send(
+    '<!doctype html><html><head><title>Hill Country Barns</title><meta name="theme-color" content="#2E5E3A">' +
+    '</head><body><img src="/logo.png" class="logo"><div style="background-color:#C47A2B">x</div>' +
+    '<div style="background-color:#C47A2B">y</div></body></html>'
+  ));
+  // Both live behind the auth stand-in's port, which the API already treats
+  // as its Supabase: one origin, as in production.
+  auth.app.use(storeApp);
+
   const admin = new Client({ connectionString: PG_ADMIN_URL });
   await admin.connect();
   await admin.query(`drop database if exists ${DB} with (force)`);
@@ -101,6 +151,7 @@ async function main() {
       PATH: process.env.PATH, HOME: process.env.HOME,
       DATABASE_URL: dbUrl(DB), SUPABASE_URL: AUTH_BASE, SUPABASE_JWKS_URL: '', PORT: String(PORTS.api),
       SUPABASE_SERVICE_ROLE_KEY: SERVICE_ROLE_KEY,
+      BRAND_LOOKUP_ALLOW_LOCAL: '1',
       POSTMARK_SERVER_TOKEN: 'postmark-test-token', POSTMARK_API_BASE: `http://127.0.0.1:${PORTS.postmark}`,
       EMAIL_FROM_ADDRESS: 'notifications@referwith50.test', BILLING_SUPPORT_EMAIL: 'joseph@referwith50.test',
       FRONTEND_BASE_URL: `http://127.0.0.1:${PORTS.page}`, TENANT_CREDENTIALS_ENCRYPTION_KEY: 'e2e-only-passphrase',
@@ -154,6 +205,13 @@ async function main() {
     if (expectApp) await page.waitForSelector('#app:not(.hide) nav.tabs button', { timeout: 8000 });
   }
   const tabNames = (page) => page.$$eval('#tabs button', (bs) => bs.map((b) => b.textContent));
+  // The add-a-lead panel starts open only while there are no leads, so set it
+  // open rather than clicking the summary, which toggles whichever way it was.
+  async function openAddLead(page) {
+    await page.waitForSelector('#tab-leads details');
+    await page.evaluate(() => { document.querySelector('#tab-leads details').open = true; });
+    await page.waitForSelector('#leadForm [name=company_name]', { state: 'visible' });
+  }
   const eqArr = (a, b, what) => assert(JSON.stringify(a) === JSON.stringify(b), `${what}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
   const eq = (a, b, what) => assert(JSON.stringify(a) === JSON.stringify(b), `${what}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
   const flashText = (page) => page.textContent('#appMsg');
@@ -177,10 +235,10 @@ async function main() {
     // ======================================================================
     section('Admin: the whole flow');
     const page = await newPage('admin');
-    await check('Admin signs in and sees Leads, Reps, Dealers and Money tabs', async () => {
+    await check('Admin signs in and sees Leads, Reps, Dealers, To build and Money tabs', async () => {
       await signIn(page, USERS.admin);
       const t = await tabNames(page);
-      assert(JSON.stringify(t) === JSON.stringify(['Leads', 'Reps', 'Dealers', 'Money']), `tabs: ${t}`);
+      assert(JSON.stringify(t) === JSON.stringify(['Leads', 'Reps', 'Dealers', 'To build', 'Money']), `tabs: ${t}`);
       return `${await page.textContent('#who')}`;
     });
     await check('Add two reps (Alice, Bob) on the Reps tab', async () => {
@@ -207,10 +265,10 @@ async function main() {
         await page.fill('#leadForm [name=notes]', 'Met at the county fair.');
         await page.selectOption('#leadForm [name=brought_in_by_rep_id]', { label: 'Alice Rep' });
       };
-      if (!(await page.$('#leadForm [name=company_name]:visible'))) await page.click('#tab-leads summary');
+      await openAddLead(page);
       await fill(); await page.click('#leadForm button[type=submit]');
       await page.waitForFunction(() => document.querySelectorAll('#tab-leads tbody tr').length === 1 && document.getElementById('tab-leads').textContent.includes('Acme Roofing'));
-      await page.click('#tab-leads summary');
+      await openAddLead(page);
       await fill(); await page.click('#leadForm button[type=submit]');
       await page.waitForSelector('#addAnyway');
       const warn = await page.textContent('#dupBox');
@@ -437,8 +495,7 @@ async function main() {
       const text = await repPage.textContent('#tab-leads');
       assert(text.includes('Acme Roofing'), 'her own won lead is listed');
       assert(!(await repPage.$('#leadForm [name=brought_in_by_rep_id]')) || true, 'form present');
-      await repPage.click('#tab-leads summary').catch(() => {});
-      await repPage.waitForSelector('#leadForm [name=company_name]');
+      await openAddLead(repPage);
       assert((await repPage.$$('#leadForm [name=brought_in_by_rep_id]')).length === 0, 'a rep is not asked whose lead it is');
       assert((await repPage.$$('#leadForm [name=website]')).length === 1, 'website field');
       assert((await repPage.$$('#leadForm [name=notes]')).length === 1, 'notes field');
@@ -500,6 +557,138 @@ async function main() {
       return JSON.stringify(out);
     });
     await repPage.context().close();
+
+    // ======================================================================
+    section('Building a dealer from the page');
+    let adminPage;
+    await check('A rep drops a logo on a lead and it appears in the Files dialog', async () => {
+      adminPage = await newPage('build');
+      await signIn(adminPage, USERS.admin);
+      await adminPage.click('[data-tab=leads]');
+      await adminPage.waitForSelector('#tab-leads [data-files]');
+      // Make a lead with a website, so the brand guess has somewhere to look.
+      await openAddLead(adminPage);
+      await adminPage.fill('#leadForm [name=company_name]', 'Hill Country Barns');
+      await adminPage.fill('#leadForm [name=email]', 'owner@hillcountry.test');
+      await adminPage.fill('#leadForm [name=contact_name]', 'Dale');
+      await adminPage.fill('#leadForm [name=website]', `${AUTH_BASE}/prospect-site`);
+      await adminPage.click('#leadForm button[type=submit]');
+      await adminPage.waitForFunction(() => document.getElementById('tab-leads').textContent.includes('Hill Country Barns'));
+
+      // A real PNG, dropped through the real file input.
+      const png = makeLogoPng([46, 94, 58], [196, 122, 43]);
+      await adminPage.locator('#tab-leads tr', { hasText: 'Hill Country Barns' }).locator('[data-files]').click();
+      await adminPage.waitForSelector('#filePick', { state: 'attached' });
+      await adminPage.setInputFiles('#filePick', { name: 'hill-country.png', mimeType: 'image/png', buffer: png });
+      // The list of files, not the drop zone's own instructions — which also
+      // mention a logo, and would make this wait pass before anything landed.
+      await adminPage.waitForSelector('#fileBody table img', { timeout: 20000 });
+      const shown = await adminPage.$$eval('#fileBody table img', (els) => els.length);
+      assert(shown === 1, `one file previewed, saw ${shown}`);
+      assert((await adminPage.textContent('#fileBody table')).includes('hill-country.png'), 'under its own name');
+
+      // The check that matters: the bytes are really at the URL the dealer's
+      // page would load them from, not on this service's disk.
+      const [row] = await sql(`select public_url, kind, size_bytes from rep_lead_files order by created_at desc limit 1`);
+      eq(row.kind, 'logo', 'stored as their logo');
+      assert(row.public_url.includes('/storage/v1/object/public/'), `url: ${row.public_url}`);
+      const fetched = await fetch(row.public_url);
+      eq(fetched.status, 200, 'the stored file is readable at its own URL');
+      eq(fetched.headers.get('content-type'), 'image/png', 'and is still a PNG');
+
+      await adminPage.click('#cancelDlg');
+      await adminPage.waitForFunction(() => !document.getElementById('dlg').open);
+      // Closing the dialog also refreshes the list behind it; let that settle
+      // before the next check starts clicking rows.
+      await adminPage.waitForSelector('#tab-leads table tbody tr');
+      await adminPage.waitForTimeout(300);
+      return `${row.size_bytes} bytes readable at its public URL`;
+    });
+
+    let hillLeadId;
+    await check('Marking it won puts it on the To build tab, and no dealer exists yet', async () => {
+      const tenantsBefore = (await sql('select count(*)::int n from tenants'))[0].n;
+      await adminPage.locator('#tab-leads tr', { hasText: 'Hill Country Barns' }).locator('[data-win]').click();
+      await adminPage.waitForSelector('#winForm');
+      await adminPage.selectOption('#winForm [name=closed_by_rep_id]', { label: 'Alice Rep' });
+      await adminPage.click('#winForm button[type=submit]');
+      await adminPage.waitForFunction(() => document.getElementById('appMsg').textContent.includes('Marked won'));
+      eq((await sql('select count(*)::int n from tenants'))[0].n, tenantsBefore, 'no dealer yet');
+      await adminPage.click('[data-tab=builds]');
+      await adminPage.waitForSelector('#tab-builds [data-build]');
+      const text = await adminPage.textContent('#tab-builds');
+      assert(text.includes('Hill Country Barns') && text.includes('Alice Rep'), text.slice(0, 200));
+      [{ id: hillLeadId }] = await sql(`select id from rep_leads where company_name = 'Hill Country Barns'`);
+      return 'in the queue, with the rep who closed it';
+    });
+
+    await check('The review screen guesses their colours, shows where from, and previews their page', async () => {
+      // The queue holds more than this one, so pick its row by name rather
+      // than taking whatever happens to be first.
+      await adminPage.locator('#tab-builds tr', { hasText: 'Hill Country Barns' }).locator('[data-build]').click();
+      await adminPage.waitForSelector('#buildForm');
+      const primary = await adminPage.inputValue('[data-hex="primaryColor"]');
+      const accent = await adminPage.inputValue('[data-hex="accentColor"]');
+      const why = await adminPage.textContent('#dlg .notice');
+      // The logo was uploaded, so it wins: these are the planted colours.
+      assert(primary.toUpperCase() === '#2E5E3A', `main colour from the logo: expected #2E5E3A, got ${primary}. The screen said: ${why}`);
+      eq(accent.toUpperCase(), '#C47A2B', 'accent, from the logo');
+      const notice = await adminPage.textContent('#dlg .notice');
+      assert(/Guessed from/.test(notice), `notice: ${notice}`);
+      // The preview bar is actually painted in that colour.
+      const bar = await adminPage.evaluate(() => getComputedStyle(document.getElementById('previewBar')).backgroundColor);
+      eq(bar, 'rgb(46, 94, 58)', 'the preview bar is their colour');
+      const card = await adminPage.inputValue('#buildForm [name=reward]');
+      eq(card, '50', 'the card defaults to $50');
+      return `${primary} / ${accent}, preview painted, "${notice.slice(0, 60)}…"`;
+    });
+
+    await check('Correcting a colour repaints the preview before anything is built', async () => {
+      await adminPage.fill('[data-hex="primaryColor"]', '#123456');
+      await adminPage.dispatchEvent('[data-hex="primaryColor"]', 'input');
+      await adminPage.waitForFunction(() => getComputedStyle(document.getElementById('previewBar')).backgroundColor === 'rgb(18, 52, 86)');
+      return 'typed a hex, the preview followed it';
+    });
+
+    await check('Building creates the dealer with the corrected colour and a $25 card, and emails both people', async () => {
+      await adminPage.fill('#buildForm [name=reward]', '25');
+      const mailBefore = sentMail.length;
+      await adminPage.click('#doBuild');
+      await adminPage.waitForFunction(() => document.getElementById('appMsg').textContent.includes('is built'));
+      const [t] = await sql(`select slug, name, branding, reward_amount_cents from tenants where slug like 'hill-country%'`);
+      eq(t.branding.primaryColor, '#123456', 'Joseph\'s correction went in, not the guess');
+      eq(t.reward_amount_cents, 2500, 'the $25 card');
+      assert(t.branding.logoUrl && t.branding.logoUrl.includes('/storage/'), `logo: ${t.branding.logoUrl}`);
+      const fresh = sentMail.slice(mailBefore);
+      assert(fresh.some((m) => m.To === 'owner@hillcountry.test'), 'the dealer was emailed');
+      assert(fresh.some((m) => m.To === 'alice@x.test' && /is live/.test(m.Subject)), 'the rep was told');
+      const dealerMail = fresh.find((m) => m.To === 'owner@hillcountry.test');
+      assert(dealerMail.TextBody.includes('$25 gift card'), 'their own card amount is in the email');
+      assert(!/password is|temporary password/i.test(dealerMail.TextBody), 'no password was emailed');
+      return `${t.name} (${t.slug}) built, $25 card, both emailed`;
+    });
+
+    await check('It leaves the queue, and the others in it are untouched', async () => {
+      await adminPage.waitForFunction(() => !document.getElementById('tab-builds').textContent.includes('Hill Country Barns'));
+      const [lead] = await sql('select build_status, tenant_id from rep_leads where id = $1', [hillLeadId]);
+      eq(lead.build_status, 'built', 'built');
+      assert(lead.tenant_id, 'and pointed at its dealer');
+      const stillWaiting = await sql(`select company_name from rep_leads where build_status = 'awaiting_approval'`);
+      assert(!stillWaiting.some((r) => r.company_name === 'Hill Country Barns'), 'it is out of the queue');
+      return `built; ${stillWaiting.length} other(s) still waiting, untouched`;
+    });
+
+    await check('The helper and a rep never see the To build tab at all', async () => {
+      for (const who of [USERS.helper, { email: 'alice@x.test' }]) {
+        const p = await newPage('no-builds');
+        await signIn(p, who);
+        const t = await tabNames(p);
+        assert(!t.includes('To build'), `${who.email} sees: ${t}`);
+        await p.context().close();
+      }
+      return 'no To build tab for either';
+    });
+    await adminPage.context().close();
 
     section('Page health');
     await check('No script errors or failed API calls were logged in the browser', async () => {

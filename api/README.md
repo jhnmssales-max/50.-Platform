@@ -275,6 +275,25 @@ None of this rests on the API alone. Every query runs as the signed-in user, so 
 
 **How a rep gets a login.** Joseph clicks Send login on the Reps tab. A Supabase Auth account is created **with no password at all**, and the rep is emailed a one-time link to choose their own (`src/lib/supabaseAdmin.js`, `src/lib/repInviteEmail.js`). No password is ever generated, emailed, stored or shown — not even to Joseph. The mail goes out as "Joseph at 50." from `EMAIL_FROM_ADDRESS` with `BILLING_SUPPORT_EMAIL` as Reply-To, because sending as `joseph@referwith50.com` directly would need that address verified as a Postmark sender signature first. Re-running it is a resend, not an error. This is the only thing that needs `SUPABASE_SERVICE_ROLE_KEY`; without it the route answers 503 `logins_not_configured` and creates nothing.
 
+## Building a dealer from a won lead
+
+A lead a rep marks **won does not become a dealer**. It queues for Joseph on the **To build** tab, carrying a draft brand that was guessed and is never trusted. He sees it, corrects it, and approves — and only then does a tenant exist. Nothing a rep types or uploads reaches a dealer's page without passing under his eye first.
+
+**Brand files.** A rep drags a logo or a brand sheet onto a lead (`rep_lead_files`). The bytes go to **Supabase Storage**, not to this service's disk, which Render wipes on every deploy — a logo written next to the API would survive until the next push and then quietly stop loading on a dealer's live page. The bucket is public on purpose: a company's own logo is already on their website, and the static pages that load it have no credentials. Only PNG, JPG, WEBP, GIF, SVG and PDF, up to 5MB, and the type is checked before anything is stored. The first image on a lead becomes its logo. RLS scopes files to the lead they hang off, so a rep can only attach to and read their own.
+
+**Guessing the brand** (`src/lib/brandGuess.js`). Two ways in, both producing the keys `tenants.branding` already uses:
+
+- **Their website** — fetch the homepage, find the logo (a declared `og:image`, an `<img>` that calls itself a logo, or the site icon) and take the colours from the page's own CSS, weighted so a colour on a button counts for more than one in a gradient. A declared `theme-color` wins outright.
+- **The logo they sent** — read the pixels and take the colours that cover most of it, near-identical shades counted together so anti-aliasing does not split one flat colour into forty. An SVG's colours are simply read out of its markup; a PDF has none to read, and says so.
+
+Both are bounded (8s, 1.5MB of HTML, a sampled grid rather than every pixel), because the input is somebody else's website. **The lookup refuses loopback, link-local and private addresses**, so a prospect's "website" cannot be used to make this service fetch something inside its own network; `BRAND_LOOKUP_ALLOW_LOCAL=1` is the e2e suites' way past that and is never set in production. Greys, near-black and near-white are discarded as telling us nothing. Whatever comes back is a **guess**: the answer carries where each part came from, the approval screen says so, and nothing is decided on its own.
+
+**Approving** (`approve_lead_build()`, admin only). One transaction: the tenant with its branding and gift card, the closing rep put on it, the lead marked built. The address is made unique **inside** the function, because the API runs as the signed-in user and RLS hides every tenant but their own — a "is this slug taken" check up there would answer no for every dealer that exists. Either side of that, the API creates the dealer's admin login through Supabase Auth with **no password**, and emails them a one-time link plus what the first sign-in costs. The rep gets their own email saying it is live and when their $50 lands. `billing_required` is never touched, so the dealer is gated into paying the $500 like any other.
+
+**The gift card is the one price that varies.** Joseph sets it per dealer on the approval screen; $500 and 30% never change, and a rep cannot change any of them.
+
+**What happens if something fails.** The login is created before the tenant, so a Supabase failure leaves nothing behind — an account with no tenant is harmless and reusable, where a tenant with no way into it is not. A file stored but not recorded is taken back out. An email that fails does not undo the build: the answer says which part failed, and resending is the fix.
+
 **The pipeline.** A lead is `open`, `won` or `lost`, and carries the company, website, contact, phone, email and notes. A rep marks their own lead **won** when the company says yes: that fixes the credit to them and does nothing else — no dealer is created and nothing is earned, because the build waits on Joseph. Staff winning a lead can additionally point it at a dealer that already exists, which is the step that actually puts reps on it (`assign_rep`).
 
 **Duplicates across reps.** The check spans every rep's leads — two reps on one company is the thing worth catching — but a rep may not read another rep's leads. `rep_lead_duplicates()` (security definer) decides per row how much the caller may see: staff get the whole match, a rep gets their own in full and, for anyone else's, only that the company is already being worked. No contact, no dates, no name of the rep who has it. A rep cannot confirm past someone else's company even by sending `confirm_duplicate` straight to the API.
@@ -300,7 +319,8 @@ None of this rests on the API alone. Every query runs as the signed-in user, so 
 - **Verifying.** Three suites, all needing the scratch Postgres like the other e2e scripts:
   - `npm run e2e:rep-pipeline` — rep logins, what each role can see, duplicates across reps, winning a lead, and the closer-only pay rule. Every "a rep cannot see this" is checked twice: once through the API and once straight at the database as that rep, so RLS is proved to be the guard. 28 checks.
   - `npm run e2e:rep-program` — the earnings rules, reversals, statements and assignment history. 33 checks.
-  - `npm run e2e:rep-page` — the page in headless Chromium as Joseph, as the helper, as a rep and as a dealer's login. 28 checks.
+  - `npm run e2e:dealer-build` — uploads, the brand guess (checked against colours planted in a test logo and a test website), the queue, approving, declining, and what happens when Supabase or Postmark is down. 24 checks.
+  - `npm run e2e:rep-page` — the page in headless Chromium as Joseph, as the helper, as a rep and as a dealer's login, including dropping a real PNG on a lead and building the dealer from the review screen. 35 checks.
 
 
 ## Stripe safety gate: `assertRealStripeConfigured()`
