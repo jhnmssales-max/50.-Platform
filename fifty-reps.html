@@ -824,23 +824,37 @@ async function renderDealers(){
   state.dealers = d.dealers;
   if(!state.isRep) await loadReps();
   $('tab-dealers').innerHTML =
-    '<div class="head"><h2>' + (state.isRep ? 'My dealers' : 'Dealers') + '</h2><span class="muted">' + (state.isRep ? 'The companies you signed' : 'Who closed and who onboarded each 50. dealer') + '</span></div>' +
+    '<div class="head"><h2>' + (state.isRep ? 'My dealers' : 'Companies') + '</h2><span class="muted">' +
+      (state.isRep ? 'The companies you signed'
+        : (state.dealers.filter((x) => !x.billing_exempt).length + ' paying \u00b7 ' +
+           state.dealers.filter((x) => x.billing_exempt).length + ' in-house')) + '</span></div>' +
     (state.isRep
       ? '<div class="notice">These are the companies you are on. A dealer only starts earning you royalties once they have paid and their customers start referring.</div>'
       : '<div class="notice">A change counts from now on: payments that cleared before it stay with whoever was on the dealer then. Dealers with nobody on them are house accounts and pay no one.' +
-        (state.isAdmin ? ' As admin you can also pick a start date to credit a payment that cleared earlier.' : '') + '</div>') +
-    '<div class="tablewrap"><table><thead><tr><th>Dealer</th><th>Activated</th>' +
+        (state.isAdmin ? ' As admin you can also pick a start date to credit a payment that cleared earlier.' : '') +
+        ' <b>In-house</b> companies are yours \u2014 they run a live program but pay no setup, renewal or 30% fee, so no rep is ever on one.</div>') +
+    '<div class="tablewrap"><table><thead><tr><th>' + (state.isRep ? 'Dealer' : 'Company') + '</th><th>Activated</th>' +
       (state.isRep ? '<th>My role</th>' : '<th>Closed by</th><th>Onboarded by</th>' + (state.isAdmin ? '<th>Start date</th>' : '') + '<th></th>') +
       '</tr></thead><tbody>' +
     (state.dealers.map((x) =>
-      '<tr data-tenant="' + x.tenant_id + '"><td><b>' + esc(x.name) + '</b></td>' +
-      '<td>' + (x.activated ? esc(plainDate(x.activated_on)) : '<span class="muted">not yet</span>') + '</td>' +
+      '<tr data-tenant="' + x.tenant_id + '"><td><b>' + esc(x.name) + '</b>' +
+        (x.billing_exempt ? '<div class="muted">In-house \u00b7 no fees</div>' : '') + '</td>' +
+      // An in-house company never pays the $500, so "not yet" would read as a
+      // dealer who is overdue rather than one who was never billed.
+      '<td>' + (x.billing_exempt ? '<span class="muted">\u2014</span>'
+        : (x.activated ? esc(plainDate(x.activated_on)) : '<span class="muted">not yet</span>')) + '</td>' +
       (state.isRep
         ? '<td>' + [x.closer_rep_id === state.myRepId ? 'closed' : null, x.onboarder_rep_id === state.myRepId ? 'onboarded' : null].filter(Boolean).join(' and ') + '</td>'
-        : '<td><select data-field="closer">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
-          '<td><select data-field="onboarder">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
-          (state.isAdmin ? '<td><input type="date" data-field="from" style="min-width:140px" title="Leave blank to start now"></td>' : '') +
-          '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button></td>')  +
+        // An in-house company pays nothing, so there is no payment for a rep
+        // to be credited with and nothing to assign. Showing the dropdowns
+        // would invite a change that could never pay anyone.
+        : (x.billing_exempt
+          ? '<td class="muted">—</td><td class="muted">—</td>' +
+            (state.isAdmin ? '<td class="muted">—</td>' : '') + '<td></td>'
+          : '<td><select data-field="closer">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
+            '<td><select data-field="onboarder">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
+            (state.isAdmin ? '<td><input type="date" data-field="from" style="min-width:140px" title="Leave blank to start now"></td>' : '') +
+            '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button></td>'))  +
       '</tr>'
     ).join('') || '<tr><td colspan="6" class="muted" style="padding:18px">' + (state.isRep ? 'None yet. They show up here once Joseph has built them.' : 'No dealers yet.') + '</td></tr>') + '</tbody></table></div>';
   $('tab-dealers').querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', async () => {
