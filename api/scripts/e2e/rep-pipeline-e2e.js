@@ -647,6 +647,77 @@ async function main() {
       return `${r.body.totals.leads} leads, ${r.body.totals.won} signed, ${r.body.totals.earned_cents} cents earned`;
     });
 
+    await check('A company\'s year counts its own invites, referrals, orders and rewards, month by month', async () => {
+      const A = tenants['dealer-a'].id;
+      const B = tenants['dealer-b'].id;
+      const year = new Date().getFullYear();
+      const at = (m, d) => `${year}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')} 12:00:00-04`;
+      const base = (await api('GET', `/reports/tenant/${A}?year=${year}`, { as: USERS.admin })).body;
+      const baseB = (await api('GET', `/reports/tenant/${B}?year=${year}`, { as: USERS.admin })).body;
+
+      // Dealer A: 3 invites in March, 2 in April; 2 referrals in April, one of
+      // which orders in May and is rewarded in May.
+      const mk = async (tenant, tag, month, kind) => {
+        const [c] = await sql(`insert into customers (tenant_id, name, email, created_at) values ($1,$2,$3,$4::timestamptz) returning id`,
+          [tenant, `Cust ${tag}`, `${tag}@cust.test`, at(month, 10)]);
+        const [l] = await sql(`insert into referral_links (tenant_id, code, kind, customer_id, created_at) values ($1,$2,$3,$4,$5::timestamptz) returning id`,
+          [tenant, `rep-${tag}`, kind, c.id, at(month, 10)]);
+        return { customer: c.id, link: l.id };
+      };
+      for (const [i, m] of [[1, 3], [2, 3], [3, 3], [4, 4], [5, 4]]) await mk(A, `a${i}`, m, 'invite');
+      // Dealer B gets its own invite, to prove one company's numbers never
+      // include another's.
+      await mk(B, 'b1', 3, 'invite');
+
+      const shareA = await mk(A, 'share1', 4, 'share');
+      const shareA2 = await mk(A, 'share2', 4, 'share');
+      await sql(`insert into referrals (tenant_id, referral_link_id, name, email, status, submitted_at, ordered_at, rewarded_at)
+                 values ($1,$2,'Friend One','f1@x.test','rewarded',$3::timestamptz,$4::timestamptz,$5::timestamptz)`,
+        [A, shareA.link, at(4, 15), at(5, 2), at(5, 9)]);
+      await sql(`insert into referrals (tenant_id, referral_link_id, name, email, status, submitted_at)
+                 values ($1,$2,'Friend Two','f2@x.test','new',$3::timestamptz)`,
+        [A, shareA2.link, at(4, 20)]);
+
+      const r = await api('GET', `/reports/tenant/${A}?year=${year}`, { as: USERS.admin });
+      eq(r.status, 200, `status: ${JSON.stringify(r.body)}`);
+      eq(r.body.months.length, 12, 'always twelve months');
+      eq(r.body.tenant.name, 'Dealer A Roofing', 'whose report it is');
+
+      // Earlier checks in this file already put referrals on dealer-a to drive
+      // the earnings worker, so measure what THIS check added rather than
+      // assuming the company starts the year empty.
+      const d = (month, key) => {
+        const now = r.body.months.find((m) => m.month === `${year}-${month}`)[key];
+        const was = base.months.find((m) => m.month === `${year}-${month}`)[key];
+        return now - was;
+      };
+      eq(d('03', 'invites'), 3, 'invites added in March');
+      eq(d('04', 'invites'), 2, 'invites added in April');
+      eq(d('04', 'referrals'), 2, 'referrals added in April');
+      // The one that ordered in May belongs to May's orders, not April's.
+      eq(d('04', 'ordered'), 0, 'April orders');
+      eq(d('05', 'ordered'), 1, 'May orders');
+      eq(d('05', 'rewarded'), 1, 'May rewards');
+      eq(r.body.totals.invites - base.totals.invites, 5, 'invites added this year');
+      eq(r.body.totals.referrals - base.totals.referrals, 2, 'referrals added this year');
+      // The months still add up to the totals the page prints.
+      eq(r.body.months.reduce((n, m) => n + m.referrals, 0), r.body.totals.referrals, 'months add up');
+
+      // Dealer B's single invite is nowhere in Dealer A's numbers.
+      const rb = await api('GET', `/reports/tenant/${B}?year=${year}`, { as: USERS.admin });
+      eq(rb.body.totals.invites - baseB.totals.invites, 1, 'dealer B has its own one invite');
+      eq(rb.body.totals.referrals, baseB.totals.referrals, 'and none of dealer A\'s referrals');
+      return `A: +5 invites, +2 referrals, 1 ordered and rewarded in May. B: +1 invite, referrals untouched.`;
+    });
+
+    await check('A company\'s year is staff-only, and a company that does not exist is a 404', async () => {
+      const A = tenants['dealer-a'].id;
+      eq((await api('GET', `/reports/tenant/${A}`, { as: ALICE })).status, 403, 'a rep');
+      eq((await api('GET', `/reports/tenant/${A}`, { as: USERS.helper })).status, 200, 'the helper may look');
+      eq((await api('GET', '/reports/tenant/00000000-0000-4000-8000-00000000dead', { as: USERS.admin })).status, 404, 'no such company');
+      return 'rep -> 403, helper -> 200, unknown id -> 404';
+    });
+
     await check('A deleted lead still counts as lost, with nothing kept about who it was', async () => {
       const doomed = (await api('POST', '/rep-leads', {
         as: ALICE,
