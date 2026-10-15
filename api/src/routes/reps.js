@@ -495,7 +495,10 @@ router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
   const lead = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { rep: true });
     const { rows: [l] } = await client.query(
-      'select id, company_name, status, build_status from rep_leads where id = $1',
+      `select id, company_name, status, build_status,
+              coalesce(brought_in_by_rep_id, closed_by_rep_id) as owner_rep_id,
+              to_char(found_on, 'YYYY-MM') as found_month
+       from rep_leads where id = $1`,
       [id]
     );
     // Not theirs, or not there: RLS has already made those the same thing.
@@ -514,6 +517,18 @@ router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
       await client.query(`delete from rep_leads where id = $1 and status <> 'won'`, [id]),
       { table: 'rep_leads', id }
     );
+    // A bare count survives, so "how many did they lose" still has an answer.
+    // Nothing about WHO: a rep, a month, a number. Counted against the month
+    // the lead came in, which is where the rest of that month's figures put it.
+    if (lead.owner_rep_id) {
+      await client.query(
+        `insert into rep_lead_outcomes (rep_id, month, lost_count)
+         values ($1, $2, 1)
+         on conflict (rep_id, month) do update
+           set lost_count = rep_lead_outcomes.lost_count + 1, updated_at = now()`,
+        [lead.owner_rep_id, lead.found_month]
+      );
+    }
   });
 
   // The stored files afterwards, and best effort: the rows are the record, and

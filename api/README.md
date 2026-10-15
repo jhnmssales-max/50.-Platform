@@ -279,6 +279,24 @@ Two settings in **Supabase → Authentication → URL Configuration** decide whe
 
 **How a rep gets a login.** Joseph clicks Send login on the Reps tab. A Supabase Auth account is created **with no password at all**, and the rep is emailed a one-time link to choose their own (`src/lib/supabaseAdmin.js`, `src/lib/repInviteEmail.js`). No password is ever generated, emailed, stored or shown — not even to Joseph. The mail goes out as "Joseph at 50." from `EMAIL_FROM_ADDRESS` with `BILLING_SUPPORT_EMAIL` as Reply-To, because sending as `joseph@referwith50.com` directly would need that address verified as a Postmark sender signature first. Re-running it is a resend, not an error. This is the only thing that needs `SUPABASE_SERVICE_ROLE_KEY`; without it the route answers 503 `logins_not_configured` and creates nothing.
 
+## Reports
+
+Two of them, both read-only arithmetic over rows that already exist (`src/routes/reports.js`, `GET /api/reports/rep/:id` and `GET /api/reports/company`, year at a time).
+
+**A rep's year** — opened by clicking their name on the Reps tab, or by the rep themselves from My money. Leads brought in and companies signed per month, what they earned split between sign-up bonuses and royalties, a conversion ring, and what is true right now: open leads, how many have sat over 30 days, how many are waiting to be built, and what they are owed. A rep may open **their own and no other** (`403 own_report_only`); Joseph may open anyone's.
+
+**The company's year** — the admin's alone. Money in by kind (activations, renewals, referral fees), money out (rep pay, running costs, card processing), profit per month, and the pipeline: leads in, companies signed, dashboards built.
+
+Three things worth knowing about how the numbers are made:
+
+- **Revenue is read as the service role**, deliberately. `billing_events` belongs to each dealer and RLS scopes it to that dealer's own tenant, so the same query run as the 50. admin returns 50.'s own rows and nothing else — an empty revenue line that reads like a quiet year rather than an error. The admin check happens first, under RLS, before anything is read.
+- **Costs that cannot be derived have a table.** Nothing in the database knows what Render or Postmark bills, so `platform_expenses` holds them, seeded with the real services this runs on at **zero** — naming them is something a migration can honestly do, guessing their amounts is not, and a made-up number inside a profit figure is worse than a blank one. The page says plainly when costs are unpriced and that the profit above them is therefore too high. A monthly cost applies to each month it covers, a yearly one is spread over twelve so a single January bill does not read as a terrible January, a one-off lands in its own month, and nothing applies to a month before it started.
+- **Card processing is the one estimate**, from a rate in `platform_finance_settings` (2.9% + 30¢ by default), and it is labelled an estimate everywhere it appears.
+
+**Lost leads still count.** Losing a lead deletes it, which is right for the contact's details and wrong for the arithmetic — a conversion rate with no denominator is not a rate. So `rep_lead_outcomes` keeps a bare tally: a rep, a month, a number. No company, no contact, nothing about who it was. Conversion is computed over leads that actually reached an answer; still-open leads are left out, since counting them as losses flatters nobody and counting them as wins flatters everybody.
+
+Charts are hand-drawn SVG in `fifty-reps.html` — a dozen bars and a ring, in the page's own colours, with no library and no build step, so they print with the page rather than arriving with their own opinions.
+
 ## Building a dealer from a won lead
 
 A lead a rep marks **won does not become a dealer**. It queues for Joseph on the **To build** tab, carrying a draft brand that was guessed and is never trusted. He sees it, corrects it, and approves — and only then does a tenant exist. Nothing a rep types or uploads reaches a dealer's page without passing under his eye first.
