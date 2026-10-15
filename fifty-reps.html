@@ -74,6 +74,17 @@
   .inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
   details.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-bottom:14px;}
   details.card summary{cursor:pointer;font-weight:600;color:var(--primary);}
+  /* the wording a rep collects: grouped by the stage a customer meets it in,
+     each box followed by a line saying where that sentence shows up. */
+  details.wording{border:1px dashed var(--line);border-radius:10px;padding:10px 14px;margin:14px 0 4px;}
+  details.wording summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--primary);}
+  .stagehead{font-family:'Fraunces',serif;font-weight:600;color:var(--primary);font-size:14px;
+    margin:16px 0 0;padding-top:10px;border-top:1px solid var(--line);}
+  .stagehead:first-of-type{border-top:0;padding-top:0;margin-top:8px;}
+  .hint{color:var(--muted);font-size:12px;margin:4px 0 0;}
+  .reads{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+    margin:6px 0 0;font-size:13px;}
+  .reads b{font-weight:600;}
   /* charts: drawn as plain SVG, no library, so they print and theme like the
      rest of the page rather than like somebody else's widget. */
   .chartcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;}
@@ -342,6 +353,85 @@ async function showTab(tab){
 function openDialog(html){ const d = $('dlg'); d.innerHTML = html; if(!d.open) d.showModal(); return d; }
 function closeDialog(){ const d = $('dlg'); if(d.open) d.close(); }
 
+/* ---------- the wording a dealer's own customers read ---------- */
+// Same nine lines, in the same order, as api/src/lib/tenantCopy.js — keep the
+// two in step. A business never sees these labels; a rep does, sitting across
+// from the owner, so each one says where the sentence turns up rather than
+// what the key is called. `generic` is what runs if the box is left empty: it
+// is deliberately trade-neutral, so a roofer whose rep typed nothing still
+// never reads "buy a shed from us".
+const COPY_FIELDS = [
+  { key:'offerHow', stage:'Their invite email, and their share page', label:'How the program works, in a sentence or two', multiline:true, max:600,
+    where:'The main offer line — the first thing a past customer reads. Wrap words in **stars** to bold them in the email.',
+    generic:"Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} Amazon E-Gift Card**." },
+  { key:'shareTitle', stage:'Their invite email, and their share page', label:'Title when a customer shares their link', max:200,
+    where:'The heading on a phone’s share sheet.',
+    generic:'Get {reward} when you make a purchase from {name}' },
+  { key:'shareText', stage:'Their invite email, and their share page', label:'Message the share sheet fills in', multiline:true, max:400,
+    where:'What their customer sends a friend, before they edit it.',
+    generic:'I referred you — make your purchase through my link and we both get {reward}.' },
+  { key:'friendAction', stage:'The page the referred friend lands on', label:'What the friend has to do', max:120,
+    where:'Finishes “When you …, you and your friend each get a card.” A few words.',
+    generic:'make your purchase' },
+  { key:'afterPurchase', stage:'The page the referred friend lands on', label:'The same thing, past tense', max:120,
+    where:'Finishes “Once you have …” on the screen after they send the form.',
+    generic:'made your purchase' },
+  { key:'inquiryNoun', stage:'The page the referred friend lands on', label:'What their form submission is called', max:120,
+    where:'Used on the privacy page, e.g. “we keep your roofing inquiry”.',
+    generic:'inquiry' },
+  { key:'eligibility', stage:'Their terms page', label:'Who can take part', max:300,
+    where:'Finishes “Anyone who has … may refer a friend.”',
+    generic:'have made a purchase with us' },
+  { key:'qualifyingEvent', stage:'Their terms page', label:'What earns the reward', max:300,
+    where:'Finishes “A reward is earned when the referred friend …”',
+    generic:'places and completes a qualifying order' },
+  { key:'rewardCondition', stage:'Their terms page', label:'What they confirm before a card goes out', multiline:true, max:600,
+    where:'Finishes “Cards are sent once …” — this is what keeps them from paying on a cancelled order.',
+    generic:'confirms the referred order has actually been placed and a qualifying deposit received. Cancelled, refunded, or unfulfilled orders do not qualify for a reward.' },
+];
+
+// Every box carries its generic wording as the placeholder, so an empty box
+// shows exactly what will run instead of looking like something is missing.
+function copyFieldsHtml(values){
+  const v = values || {};
+  let stage = null;
+  return COPY_FIELDS.map((f) => {
+    const head = f.stage === stage ? '' : '<p class="stagehead">' + esc(f.stage) + '</p>';
+    stage = f.stage;
+    const val = esc(v[f.key] || '');
+    const common = 'name="copy_' + f.key + '" maxlength="' + f.max + '" placeholder="' + esc(f.generic) + '"';
+    return head + '<label>' + esc(f.label) + '</label>' +
+      (f.multiline
+        ? '<textarea ' + common + ' rows="3">' + val + '</textarea>'
+        : '<input ' + common + ' value="' + val + '">') +
+      '<p class="hint">' + esc(f.where) + '</p>';
+  }).join('');
+}
+
+// Pulls the boxes back out. A box left empty is simply absent, which is what
+// tells the API to use the generic wording for that line.
+function readCopyFields(form){
+  const out = {};
+  COPY_FIELDS.forEach((f) => {
+    const el = form.querySelector('[name="copy_' + f.key + '"]');
+    const t = el && el.value ? el.value.trim() : '';
+    if(t) out[f.key] = t;
+  });
+  return out;
+}
+
+function copyCount(copy){
+  return copy ? COPY_FIELDS.filter((f) => copy[f.key]).length : 0;
+}
+
+// The summary line on the add-a-lead form and the lead row: says how much of
+// it is their own words rather than showing nine fields' worth of text.
+function wordingSummary(copy){
+  const n = copyCount(copy);
+  if(!n) return 'nothing written yet — generic wording will be used';
+  return n + ' of ' + COPY_FIELDS.length + ' in their own words';
+}
+
 /* ---------- Leads ---------- */
 async function renderLeads(){
   // Anything half-typed into the add-a-lead form, and whether it was open at
@@ -355,7 +445,8 @@ async function renderLeads(){
     $('tab-leads').querySelectorAll('#leadForm input, #leadForm textarea, #leadForm select').forEach((el) => {
       if(el.name && el.value) values[el.name] = el.value;
     });
-    return { open: details.open, values, focused: (document.activeElement || {}).name || null };
+    const wording = $('tab-leads').querySelector('details.wording');
+    return { open: details.open, wordingOpen: wording ? wording.open : false, values, focused: (document.activeElement || {}).name || null };
   })();
 
   const [l, dl] = await Promise.all([api('/rep-leads'), api('/rep-dealers')]);
@@ -373,19 +464,29 @@ async function renderLeads(){
         (state.isRep ? '' : '<div><label>Brought in by</label><select name="brought_in_by_rep_id">' + repOptions('', { blank: '— nobody / me —', activeOnly: true }) + '</select></div>') +
         '<div><label>Date</label><input name="found_on" type="date" value="' + todayYmd() + '"></div></div>' +
       '<label>Notes</label><textarea name="notes" rows="2" maxlength="2000" placeholder="Where you met them, what they want, what to follow up on."></textarea>' +
+      // Optional on purpose: a rep on the phone closing a deal should not be
+      // blocked by nine boxes. Anything left empty runs the generic wording,
+      // and the lead can be opened again later to fill it in.
+      '<details class="wording"><summary>What their customers will read \u2014 optional</summary>' +
+        '<p class="hint" style="margin:6px 0 0">Their words, in their trade. Leave a box empty and the wording underneath it is used instead. ' +
+        '<b>{reward}</b> becomes their gift card amount and <b>{name}</b> their business name.</p>' +
+        copyFieldsHtml(null) +
+      '</details>' +
       '<div class="actions"><button class="btn" type="submit">Add lead</button></div></form>' +
       '<div id="dupBox"></div></details>' +
     '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th>' + (state.isRep ? '' : '<th>Brought in by</th>') + '<th>Found</th><th>Status</th>' + (state.isRep ? '' : '<th>Won by</th>') + '<th></th></tr></thead><tbody>' +
     (state.leads.map((x) =>
       '<tr><td><b>' + esc(x.company_name) + '</b>' +
         (x.website ? '<div class="muted">' + esc(x.website) + '</div>' : '') +
-        (x.notes ? '<div class="muted">' + esc(x.notes) + '</div>' : '') + '</td>' +
+        (x.notes ? '<div class="muted">' + esc(x.notes) + '</div>' : '') +
+        '<div class="muted">Wording: ' + esc(wordingSummary(x.copy)) + '</div></td>' +
       '<td>' + esc(x.contact_name || '') + '<div class="muted">' + esc([x.phone, x.email].filter(Boolean).join(' · ')) + '</div></td>' +
       (state.isRep ? '' : '<td>' + esc(repName(x.brought_in_by_rep_id) || '—') + '</td>') +
       '<td>' + esc(plainDate(x.found_on)) + '</td>' +
       '<td><span class="pill ' + x.status + '">' + x.status + '</span></td>' +
       (state.isRep ? '' : '<td>' + (x.status === 'won' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>') +
-      '<td class="num"><button class="btn small secondary" data-files="' + x.id + '">Files</button> ' +
+      '<td class="num"><button class="btn small secondary" data-wording="' + x.id + '">Wording</button> ' +
+        '<button class="btn small secondary" data-files="' + x.id + '">Files</button> ' +
         (x.status === 'won' ? (x.build_status === 'awaiting_approval' ? '<span class="muted">waiting on Joseph</span>' : '') :
         '<button class="btn small" data-win="' + x.id + '">Mark won</button> ' +
         '<button class="btn small danger" data-lost="' + x.id + '">Lost</button>') + '</td></tr>'
@@ -396,6 +497,8 @@ async function renderLeads(){
   if(keep){
     const details = $('tab-leads').querySelector('details');
     if(details) details.open = keep.open;
+    const wording = $('tab-leads').querySelector('details.wording');
+    if(wording) wording.open = keep.wordingOpen;
     Object.entries(keep.values).forEach(([name, value]) => {
       const el = form.querySelector('[name="' + name + '"]');
       // The date box defaults to today; only put back what was really typed.
@@ -409,6 +512,7 @@ async function renderLeads(){
   form.addEventListener('submit', (e) => { e.preventDefault(); submitLead(form, false); });
   $('tab-leads').querySelectorAll('[data-win]').forEach((b) => b.addEventListener('click', () => winLeadDialog(b.dataset.win)));
   $('tab-leads').querySelectorAll('[data-files]').forEach((b) => b.addEventListener('click', () => filesDialog(b.dataset.files)));
+  $('tab-leads').querySelectorAll('[data-wording]').forEach((b) => b.addEventListener('click', () => wordingDialog(b.dataset.wording)));
   $('tab-leads').querySelectorAll('[data-lost]').forEach((b) => b.addEventListener('click', () => lostDialog(b.dataset.lost)));
 }
 function todayYmd(){ return new Date().toLocaleDateString('en-CA', { timeZone: TZ }); }
@@ -417,6 +521,8 @@ function formData(form){ const o = {}; new FormData(form).forEach((v, k) => { o[
 async function submitLead(form, confirmDuplicate){
   const d = formData(form);
   const body = { company_name: d.company_name, contact_name: d.contact_name, phone: d.phone, email: d.email, website: d.website, notes: d.notes, found_on: d.found_on || undefined, brought_in_by_rep_id: d.brought_in_by_rep_id || null };
+  const copy = readCopyFields(form);
+  if(Object.keys(copy).length) body.copy = copy;
   if(confirmDuplicate) body.confirm_duplicate = true;
   try{
     await post('/rep-leads', body);
@@ -516,6 +622,43 @@ function winLeadDialog(id){
 // Drag a logo or a brand sheet onto a lead. The bytes go straight to the
 // platform's file store; nothing is kept in this page.
 const FILE_TYPES = 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml,application/pdf';
+
+// Opened from the lead row, so wording can be collected on the second call
+// rather than only at the moment the lead is written down. A won lead can
+// still be edited here — the words are not fixed until the dashboard is
+// built, and that is usually when someone finally asks the owner.
+async function wordingDialog(leadId){
+  const lead = state.leads.find((x) => x.id === leadId);
+  if(!lead) return flash('That lead is gone.');
+  openDialog(
+    '<h3>What ' + esc(lead.company_name) + '’s customers will read</h3>' +
+    '<p class="muted">Their words, in their trade. Leave a box empty and the wording shown inside it is used instead. ' +
+    '<b>{reward}</b> becomes their gift card amount, <b>{name}</b> their business name.</p>' +
+    '<form id="wordingForm">' + copyFieldsHtml(lead.copy) +
+      '<div class="actions">' +
+        '<button type="button" class="btn secondary" id="cancelDlg">Cancel</button>' +
+        '<button class="btn" type="submit" id="saveWording">Save wording</button>' +
+      '</div></form>'
+  );
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('wordingForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('saveWording');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    const copy = readCopyFields(e.target);
+    try{
+      // null rather than {} when every box is empty: that is what clears it
+      // back to the generic wording instead of storing nine blanks.
+      await patch('/rep-leads/' + leadId, { copy: Object.keys(copy).length ? copy : null });
+      closeDialog();
+      flash('Wording saved for ' + lead.company_name + '.', true);
+      await renderLeads();
+    }catch(err){
+      flash(err.message);
+      btn.disabled = false; btn.textContent = 'Save wording';
+    }
+  });
+}
 
 async function filesDialog(leadId){
   const lead = state.leads.find((x) => x.id === leadId);
@@ -888,6 +1031,12 @@ async function buildDialog(leadId){
         '<div style="padding:14px"><span class="muted">Their customers see this, in their colours.</span></div>' +
       '</div>' +
 
+      '<h3 style="font-size:15px;margin:16px 0 2px">What their customers will read</h3>' +
+      '<p class="muted" style="margin:2px 0 0">' + esc(wordingSummary(lead.copy)) + '. This is the last point it can be changed before their first invite goes out.</p>' +
+      '<details class="wording"' + (copyCount(lead.copy) ? '' : ' open') + '><summary>Their wording</summary>' +
+        copyFieldsHtml(lead.copy) +
+      '</details>' +
+
       '<p class="muted" style="margin:14px 0 0">Building it emails ' + esc(lead.contact_name || 'their contact') + ' a link to set their password, and tells the rep it is live.</p>' +
       '<div class="actions">' +
         '<button type="button" class="btn secondary" id="cancelDlg">Not yet</button>' +
@@ -931,9 +1080,12 @@ async function buildDialog(leadId){
     $('dlg').querySelectorAll('[data-hex]').forEach((inp) => { if(/^#[0-9a-fA-F]{6}$/.test(inp.value)) brand[inp.dataset.hex] = inp.value; });
     if(d.logoUrl) brand.logoUrl = d.logoUrl;
     try{
+      // Always sent, even when every box is empty: that is what tells the API
+      // to write the generic wording onto this dealer rather than leave them
+      // falling through to the shed wording the older tenants still use.
       const out = await post('/rep-leads/' + leadId + '/build', {
         name: d.name, admin_email: d.admin_email, admin_name: d.admin_name || undefined,
-        brand, reward_amount_cents: Math.round(Number(d.reward) * 100),
+        brand, copy: readCopyFields(e.target), reward_amount_cents: Math.round(Number(d.reward) * 100),
       });
       closeDialog();
       const trouble = (out.emailed && out.emailed.problems) || [];

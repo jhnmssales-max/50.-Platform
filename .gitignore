@@ -1,0 +1,2 @@
+# e2e run output, written next to the suites that produce it
+api/*-results.md
