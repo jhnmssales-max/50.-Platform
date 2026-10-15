@@ -355,6 +355,201 @@ router.get('/reports/company', requireAuth, wrap(async (req, res) => {
 // ---------------------------------------------------------------------------
 // The expense list itself
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// One dealer's year — how their own referral program is actually going
+// ---------------------------------------------------------------------------
+// Every table this reads (customers, referral_links, referrals,
+// gift_card_transactions, billing_events) is scoped by RLS to the signed-in
+// user's own tenant, and the signed-in user here is 50. staff. Read as the
+// signed-in user, every count below would come back 0 for every dealer — the
+// silent-empty-read this whole file guards against — so the reads run under
+// withServiceRole with the connection guard in front of them, exactly as the
+// company report's revenue read does. The admin check happens first, under
+// RLS, before any of it.
+router.get('/reports/tenant/:id', requireAuth, wrap(async (req, res) => {
+  const id = z.string().uuid().parse(req.params.id);
+  const { year, tenant } = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId);
+    const y = yearParam(req.query.year, await currentYear(client));
+    // rep_dealer_list() is the one place that decides which companies a
+    // signed-in user may look at, so asking it keeps this endpoint honest
+    // rather than giving staff a second, looser door into any tenant row.
+    const { rows: [t] } = await client.query(
+      'select tenant_id, name, slug, activated, activated_on, billing_exempt from rep_dealer_list() where tenant_id = $1',
+      [id]
+    );
+    if (!t) throw httpError(404, 'No such company');
+    return { year: y, tenant: t };
+  });
+
+  const bounds = [`${year}-01-01`, `${year + 1}-01-01`];
+  const months = emptyMonths(year);
+  const tz = BILLING_TIME_ZONE;
+
+  const data = await withServiceRole(async (sc) => {
+    await assertServiceRoleConnection(sc);
+
+    // Invites sent: one 'invite' link is minted per customer the business
+    // invites into the program. Counted by when it was created, which is when
+    // the email went out.
+    const { rows: invites } = await sc.query(
+      `select to_char(created_at at time zone '${tz}', 'YYYY-MM') as month, count(*)::int as invites
+       from referral_links
+       where tenant_id = $1 and kind = 'invite'
+         and (created_at at time zone '${tz}') >= $2::date and (created_at at time zone '${tz}') < $3::date
+       group by 1`,
+      [id, ...bounds]
+    );
+
+    // People added to the program, whether or not they have shared anything.
+    const { rows: people } = await sc.query(
+      `select to_char(created_at at time zone '${tz}', 'YYYY-MM') as month, count(*)::int as customers
+       from customers
+       where tenant_id = $1
+         and (created_at at time zone '${tz}') >= $2::date and (created_at at time zone '${tz}') < $3::date
+       group by 1`,
+      [id, ...bounds]
+    );
+
+    // Friends who actually filled the form in, by the month they did it.
+    const { rows: inbound } = await sc.query(
+      `select to_char(submitted_at at time zone '${tz}', 'YYYY-MM') as month, count(*)::int as referrals
+       from referrals
+       where tenant_id = $1
+         and (submitted_at at time zone '${tz}') >= $2::date and (submitted_at at time zone '${tz}') < $3::date
+       group by 1`,
+      [id, ...bounds]
+    );
+
+    // Ordered and rewarded are counted by when each actually happened, not by
+    // when the referral first came in — a referral that lands in March and
+    // orders in May belongs to May's orders and March's referrals.
+    const { rows: ordered } = await sc.query(
+      `select to_char(ordered_at at time zone '${tz}', 'YYYY-MM') as month, count(*)::int as ordered
+       from referrals
+       where tenant_id = $1 and ordered_at is not null
+         and (ordered_at at time zone '${tz}') >= $2::date and (ordered_at at time zone '${tz}') < $3::date
+       group by 1`,
+      [id, ...bounds]
+    );
+    const { rows: rewarded } = await sc.query(
+      `select to_char(rewarded_at at time zone '${tz}', 'YYYY-MM') as month, count(*)::int as rewarded
+       from referrals
+       where tenant_id = $1 and rewarded_at is not null
+         and (rewarded_at at time zone '${tz}') >= $2::date and (rewarded_at at time zone '${tz}') < $3::date
+       group by 1`,
+      [id, ...bounds]
+    );
+
+    // Cards the platform itself issued. Cards Joseph buys and sends by hand
+    // leave no row here, so this is a floor, not the whole story — said plainly
+    // in caveats below rather than quietly presented as the total.
+    const { rows: cards } = await sc.query(
+      `select to_char(issued_at at time zone '${tz}', 'YYYY-MM') as month,
+              count(*)::int as cards_issued, sum(amount_cents)::int as card_cents
+       from gift_card_transactions
+       where tenant_id = $1 and status = 'issued' and issued_at is not null
+         and (issued_at at time zone '${tz}') >= $2::date and (issued_at at time zone '${tz}') < $3::date
+       group by 1`,
+      [id, ...bounds]
+    );
+
+    // What this company has actually paid 50., split the way they were billed.
+    const { rows: paid } = await sc.query(
+      `select to_char(created_at at time zone '${tz}', 'YYYY-MM') as month,
+              sum(amount_cents) filter (where event_type = 'activation_charge')::int as activation_cents,
+              sum(amount_cents) filter (where event_type = 'renewal_charge')::int as renewal_cents,
+              sum(amount_cents) filter (where event_type = 'referral_fee')::int as fee_cents,
+              sum(amount_cents)::int as paid_cents,
+              sum(reward_amount_cents) filter (where event_type = 'referral_fee')::int as billed_reward_cents
+       from billing_events
+       where tenant_id = $1 and status = 'succeeded'
+         and (created_at at time zone '${tz}') >= $2::date and (created_at at time zone '${tz}') < $3::date
+       group by 1`,
+      [id, ...bounds]
+    );
+
+    // Standing figures, not monthly ones.
+    const { rows: [now] } = await sc.query(
+      `select
+         (select count(*)::int from customers where tenant_id = $1) as customers_total,
+         (select count(*)::int from referral_links where tenant_id = $1 and kind = 'invite') as invites_total,
+         (select count(*)::int from referrals where tenant_id = $1 and status in ('new', 'contacted')) as awaiting_answer,
+         (select count(*)::int from referrals where tenant_id = $1 and status = 'ordered') as ordered_not_rewarded,
+         (select max(submitted_at) from referrals where tenant_id = $1) as last_referral_at`,
+      [id]
+    );
+
+    return { invites, people, inbound, ordered, rewarded, cards, paid, now };
+  });
+
+  const merged = [...data.invites, ...data.people, ...data.inbound, ...data.ordered,
+    ...data.rewarded, ...data.cards, ...data.paid].reduce((acc, row) => {
+    const at = acc.find((x) => x.month === row.month);
+    if (at) Object.assign(at, row); else acc.push({ ...row });
+    return acc;
+  }, []);
+
+  const keys = ['invites', 'customers', 'referrals', 'ordered', 'rewarded',
+    'cards_issued', 'card_cents', 'activation_cents', 'renewal_cents', 'fee_cents',
+    'paid_cents', 'billed_reward_cents'];
+  const byMonth = fill(months, merged, keys);
+  const total = (k) => byMonth.reduce((n, m) => n + m[k], 0);
+
+  const referrals = total('referrals');
+  const caveats = [];
+  if (!total('cards_issued') && total('rewarded')) {
+    caveats.push('Card amounts count only cards the platform issued itself. Cards bought and sent by hand are not recorded here, so the money spent on rewards is higher than it looks.');
+  }
+  if (tenant.billing_exempt) {
+    caveats.push('This is one of your own companies: it pays no setup, renewal or 30% fee, so it shows no money paid to 50.');
+  }
+
+  res.json({
+    year,
+    tenant: {
+      id: tenant.tenant_id,
+      name: tenant.name,
+      slug: tenant.slug,
+      activated: tenant.activated,
+      activated_on: tenant.activated_on,
+      billing_exempt: tenant.billing_exempt,
+    },
+    months: byMonth,
+    totals: {
+      invites: total('invites'),
+      customers: total('customers'),
+      referrals,
+      ordered: total('ordered'),
+      rewarded: total('rewarded'),
+      cards_issued: total('cards_issued'),
+      card_cents: total('card_cents'),
+      paid_cents: total('paid_cents'),
+      activation_cents: total('activation_cents'),
+      renewal_cents: total('renewal_cents'),
+      fee_cents: total('fee_cents'),
+    },
+    now: {
+      customers_total: data.now.customers_total,
+      invites_total: data.now.invites_total,
+      awaiting_answer: data.now.awaiting_answer,
+      ordered_not_rewarded: data.now.ordered_not_rewarded,
+      last_referral_at: data.now.last_referral_at,
+    },
+    // Two different questions, so two different rates. How many invited people
+    // actually produced a referral says whether the program is being shared;
+    // how many referrals turned into an order says whether it is worth running.
+    conversion: {
+      invites: total('invites'),
+      referrals,
+      ordered: total('ordered'),
+      share_rate: total('invites') ? Math.round((referrals / total('invites')) * 1000) / 10 : null,
+      order_rate: referrals ? Math.round((total('ordered') / referrals) * 1000) / 10 : null,
+    },
+    caveats,
+  });
+}));
+
 const expenseBody = z.object({
   name: z.string().trim().min(1).max(120),
   category: z.enum(['hosting', 'email', 'payments', 'software', 'rewards', 'people', 'other']),

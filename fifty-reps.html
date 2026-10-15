@@ -82,6 +82,9 @@
     margin:16px 0 0;padding-top:10px;border-top:1px solid var(--line);}
   .stagehead:first-of-type{border-top:0;padding-top:0;margin-top:8px;}
   .hint{color:var(--muted);font-size:12px;margin:4px 0 0;}
+  .linkish{background:none;border:0;padding:0;font:inherit;cursor:pointer;color:var(--primary);
+    font-weight:600;border-bottom:1px solid var(--line);}
+  .linkish:hover{border-bottom-color:var(--primary);}
   .reads{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;
     margin:6px 0 0;font-size:13px;}
   .reads b{font-weight:600;}
@@ -837,7 +840,10 @@ async function renderDealers(){
       (state.isRep ? '<th>My role</th>' : '<th>Closed by</th><th>Onboarded by</th>' + (state.isAdmin ? '<th>Start date</th>' : '') + '<th></th>') +
       '</tr></thead><tbody>' +
     (state.dealers.map((x) =>
-      '<tr data-tenant="' + x.tenant_id + '"><td><b>' + esc(x.name) + '</b>' +
+      '<tr data-tenant="' + x.tenant_id + '"><td>' +
+        // The name is the way in, the same way a rep's name opens their year.
+        (state.isRep ? '<b>' + esc(x.name) + '</b>'
+          : '<button type="button" class="linkish" data-company="' + x.tenant_id + '">' + esc(x.name) + '</button>') +
         (x.billing_exempt ? '<div class="muted">In-house \u00b7 no fees</div>' : '') + '</td>' +
       // An in-house company never pays the $500, so "not yet" would read as a
       // dealer who is overdue rather than one who was never billed.
@@ -857,6 +863,8 @@ async function renderDealers(){
             '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button></td>'))  +
       '</tr>'
     ).join('') || '<tr><td colspan="6" class="muted" style="padding:18px">' + (state.isRep ? 'None yet. They show up here once Joseph has built them.' : 'No dealers yet.') + '</td></tr>') + '</tbody></table></div>';
+  $('tab-dealers').querySelectorAll('[data-company]').forEach((b) =>
+    b.addEventListener('click', () => companyReport(b.dataset.company)));
   $('tab-dealers').querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', async () => {
     const tr = b.closest('tr');
     const closer = tr.querySelector('[data-field=closer]').value || null;
@@ -1184,6 +1192,102 @@ async function repReport(repId, year){
   $('cancelDlg').addEventListener('click', closeDialog);
   $('printReport').addEventListener('click', () => window.print());
   $('repYear').addEventListener('change', (e) => repReport(repId, e.target.value));
+}
+
+/* ---------- one company's year ---------- */
+// Opened by clicking a company in the Companies tab. Answers, in order: is
+// this program being used at all, is it producing anything, and what has it
+// been worth. Deliberately the same furniture as a rep's year — same charts,
+// same print button — so Joseph is reading one kind of page, not three.
+async function companyReport(tenantId, year){
+  openDialog('<h3>Loading…</h3>');
+  let d;
+  try{ d = await api('/reports/tenant/' + tenantId + (year ? '?year=' + year : '')); }
+  catch(err){ closeDialog(); return flash(err.message); }
+
+  const t = d.totals, now = d.now, c = d.conversion;
+  const lastSeen = now.last_referral_at
+    ? plainDate(String(now.last_referral_at).slice(0, 10))
+    : 'never';
+
+  openDialog(
+    '<div class="noprint actions" style="justify-content:space-between;margin:0 0 6px">' +
+      '<div class="inline"><label style="margin:0">Year</label>' +
+      '<select id="coYear" style="width:auto">' + [d.year + 1, d.year, d.year - 1, d.year - 2].map((y) =>
+        '<option value="' + y + '"' + (y === d.year ? ' selected' : '') + '>' + y + '</option>').join('') + '</select></div>' +
+      '<button class="btn small secondary" id="printReport" type="button">Print</button></div>' +
+    '<h3>' + esc(d.tenant.name) + ' — ' + d.year + '</h3>' +
+    '<p class="muted">' +
+      (d.tenant.billing_exempt ? 'In-house · no fees'
+        : (d.tenant.activated ? 'Paying since ' + esc(plainDate(d.tenant.activated_on)) : 'Has not paid the $500 yet')) +
+      ' · last referral ' + esc(lastSeen) + '</p>' +
+
+    '<div class="cards">' +
+      '<div class="stat"><b>' + t.invites + '</b><span>Invites sent in ' + d.year + '</span></div>' +
+      '<div class="stat"><b>' + t.referrals + '</b><span>Referrals in</span></div>' +
+      '<div class="stat"><b>' + t.ordered + '</b><span>Turned into orders</span></div>' +
+      '<div class="stat"><b>' + t.rewarded + '</b><span>Rewards paid out</span></div>' +
+    '</div>' +
+
+    '<div class="reportgrid">' +
+      '<div class="chartcard"><h3>Month by month</h3>' +
+        '<div class="muted">Invites going out, and referrals coming back.</div>' +
+        barChart(d.months, [
+          { key:'invites', label:'Invites sent', color:CHART.steel },
+          { key:'referrals', label:'Referrals in', color:CHART.primary },
+        ]) + '</div>' +
+      '<div class="chartcard"><h3>Referrals that ordered</h3>' +
+        '<div class="muted">' + (t.referrals
+            ? 'Of the ' + t.referrals + ' referral' + (t.referrals === 1 ? '' : 's') + ' that came in this year.'
+            : 'No referrals yet this year.') + '</div>' +
+        donut(
+          [{ label:'Ordered', value:t.ordered, color:CHART.primary },
+           { label:'Did not', value:Math.max(0, t.referrals - t.ordered), color:CHART.line }],
+          c.order_rate === null ? '—' : c.order_rate + '%',
+          'ordered'
+        ) + '</div>' +
+    '</div>' +
+
+    '<div class="chartcard"><h3>Orders and rewards</h3>' +
+      '<div class="muted">Referrals that ordered, and the ones that have been rewarded, in the month each happened.</div>' +
+      barChart(d.months, [
+        { key:'ordered', label:'Ordered', color:CHART.green },
+        { key:'rewarded', label:'Rewarded', color:CHART.gold },
+      ]) + '</div>' +
+
+    (d.tenant.billing_exempt ? '' :
+      '<div class="chartcard"><h3>What they have paid 50.</h3>' +
+        '<div class="muted">Setup, yearly renewal and the 30% on each reward.</div>' +
+        barChart(d.months, [
+          { key:'activation_cents', label:'Setup', color:CHART.primary },
+          { key:'renewal_cents', label:'Renewal', color:CHART.steel },
+          { key:'fee_cents', label:'30% fees', color:CHART.gold },
+        ], { money:true }) + '</div>') +
+
+    '<div class="tablewrap"><table style="min-width:0"><thead><tr><th>Month</th>' +
+      '<th class="num">Invites</th><th class="num">Referrals</th><th class="num">Ordered</th><th class="num">Rewarded</th>' +
+      (d.tenant.billing_exempt ? '' : '<th class="num">Paid 50.</th>') + '</tr></thead><tbody>' +
+      d.months.map((m) => '<tr><td>' + esc(m.label) + '</td>' +
+        '<td class="num">' + m.invites + '</td><td class="num">' + m.referrals + '</td>' +
+        '<td class="num">' + m.ordered + '</td><td class="num">' + m.rewarded + '</td>' +
+        (d.tenant.billing_exempt ? '' : '<td class="num">' + dollars(m.paid_cents) + '</td>') + '</tr>').join('') +
+      '<tr><td><b>Total</b></td><td class="num"><b>' + t.invites + '</b></td><td class="num"><b>' + t.referrals +
+        '</b></td><td class="num"><b>' + t.ordered + '</b></td><td class="num"><b>' + t.rewarded + '</b></td>' +
+        (d.tenant.billing_exempt ? '' : '<td class="num"><b>' + dollars(t.paid_cents) + '</b></td>') + '</tr>' +
+    '</tbody></table></div>' +
+
+    '<p class="muted" style="margin-top:12px">Right now: ' + now.customers_total + ' on the program, ' +
+      now.awaiting_answer + ' referral' + (now.awaiting_answer === 1 ? '' : 's') + ' waiting to be answered, ' +
+      now.ordered_not_rewarded + ' ordered but not yet rewarded' +
+      (c.share_rate !== null ? ' · ' + c.share_rate + '% of invites produced a referral' : '') + '.</p>' +
+
+    (d.caveats || []).map((x) => '<p class="muted">' + esc(x) + '</p>').join('') +
+
+    '<div class="actions noprint"><button class="btn secondary" id="cancelDlg" type="button">Close</button></div>'
+  );
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('printReport').addEventListener('click', () => window.print());
+  $('coYear').addEventListener('change', (e) => companyReport(tenantId, e.target.value));
 }
 
 /* ---------- the company's year (admin only) ---------- */

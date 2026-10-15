@@ -360,7 +360,8 @@ async function main() {
     await check('The three in-house companies are listed, marked, and cannot be given a rep', async () => {
       await page.click('[data-tab=dealers]');
       await page.waitForSelector('#tab-dealers tr[data-tenant]');
-      const names = await page.$$eval('#tab-dealers tbody tr', (rows) => rows.map((r) => r.querySelector('b').textContent));
+      const names = await page.$$eval('#tab-dealers tbody tr', (rows) =>
+        rows.map((r) => (r.querySelector('[data-company]') || r.querySelector('b')).textContent));
       for (const n of ['Good Steward Structures', 'North Mountain Structures', '50.']) {
         assert(names.includes(n), `${n} missing from the companies list: ${JSON.stringify(names)}`);
       }
@@ -473,6 +474,63 @@ async function main() {
       await page.click('#goDealers');
       await page.waitForSelector('#tab-dealers tr[data-tenant]');
     });
+    await check('Clicking a company opens its year, with its own numbers and charts drawn', async () => {
+      await page.click('[data-tab=dealers]');
+      await page.waitForSelector('#tab-dealers tr[data-tenant]');
+      await page.locator(`tr[data-tenant="${tenants['dealer-a'].id}"]`).locator('[data-company]').click();
+      // A closed dialog keeps its markup, so waiting for '#dlg h3' alone
+      // matches the PREVIOUS dialog's heading immediately. Wait for this one.
+      await page.waitForFunction(() => {
+        const d = document.getElementById('dlg');
+        return d && d.open && /Dealer A Roofing/.test(d.querySelector('h3').textContent);
+      }, { timeout: 15000 });
+      // The four headline tiles, the two charts in the grid, and the month table.
+      const tiles = await page.$$eval('#dlg .cards .stat span', (els) => els.map((e) => e.textContent));
+      assert(tiles.some((x) => /Invites sent/.test(x)), `tiles: ${JSON.stringify(tiles)}`);
+      assert(tiles.some((x) => /Referrals in/.test(x)), `tiles: ${JSON.stringify(tiles)}`);
+      const charts = await page.$$eval('#dlg svg', (els) => els.length);
+      assert(charts >= 3, `expected the bar charts and the ring, got ${charts} svg`);
+      // Same selector the rep-report check uses: a zero-value bar is drawn at
+      // height 0, so only a bar with real height proves real data got through.
+      const bars = await page.$$eval('#dlg svg.chart rect', (els) => els.filter((e) => Number(e.getAttribute('height')) > 1).length);
+      const shown = (await page.textContent('#dlg')).replace(/\s+/g, ' ').slice(0, 200);
+      assert(bars > 0, `no bar has any height — the chart drew nothing. Dialog said: ${shown}`);
+      const rows = await page.$$eval('#dlg table tbody tr', (els) => els.length);
+      eq(rows, 13, 'twelve months and a total row');
+      // Every month is drawn, December included — it sits right at the edge of
+      // the dialog, which is exactly where a month quietly goes missing.
+      const labels = await page.$$eval('#dlg svg.chart text', (els) => els.map((e) => e.textContent));
+      for (const m of ['Jan', 'Jun', 'Dec']) assert(labels.includes(m), `missing ${m}: ${labels.join(',')}`);
+      // Switching year redraws rather than erroring.
+      await page.selectOption('#coYear', String(new Date().getFullYear() - 1));
+      await page.waitForFunction(() => /\u2014 \d{4}/.test(document.querySelector('#dlg h3').textContent));
+      await page.click('#cancelDlg');
+      return `${charts} charts, ${bars} drawn bars, 12 months + total, year switch works`;
+    });
+
+    await check('A paying dealer shows what it paid 50.; an in-house one shows no money and says why', async () => {
+      await page.locator(`tr[data-tenant="${tenants['dealer-a'].id}"]`).locator('[data-company]').click();
+      await page.waitForFunction(() => {
+        const d = document.getElementById('dlg');
+        return d && d.open && /Dealer A Roofing/.test(d.querySelector('h3').textContent);
+      }, { timeout: 15000 });
+      const paying = await page.textContent('#dlg');
+      assert(/What they have paid 50\./.test(paying), 'a paying dealer hides its money chart');
+      await page.click('#cancelDlg');
+
+      await page.locator(`tr[data-tenant="${tenants['good-steward-structures'].id}"]`).locator('[data-company]').click();
+      await page.waitForFunction(() => {
+        const d = document.getElementById('dlg');
+        return d && d.open && /Good Steward Structures/.test(d.querySelector('h3').textContent);
+      }, { timeout: 15000 });
+      const inhouse = await page.textContent('#dlg');
+      assert(/In-house/.test(inhouse), 'an in-house company is not labelled as one');
+      assert(!/What they have paid 50\./.test(inhouse), 'an in-house company shows a money chart it can never fill');
+      assert(/pays no setup, renewal or 30% fee/.test(inhouse), 'it does not say why the money is missing');
+      await page.click('#cancelDlg');
+      return 'paying: money chart shown; in-house: no money chart, and it says why';
+    });
+
     await check('Signing out clears the session', async () => {
       await page.click('#signOutBtn');
       await page.waitForSelector('#loginBox:not(.hide)');
