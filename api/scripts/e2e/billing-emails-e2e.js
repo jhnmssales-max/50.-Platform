@@ -502,6 +502,45 @@ async function main() {
 
     // ===========================================================================
     section('Safety');
+    await check('The service-role guard passes a Supabase-shaped role and still refuses one RLS applies to', async () => {
+      // This exists because the guard shipped testing the wrong property and
+      // nothing here caught it: on this machine `postgres` is a true
+      // superuser, so is_superuser was always on and every suite passed. On
+      // Supabase `postgres` is deliberately NOT a superuser but does carry
+      // BYPASSRLS, so the guard refused every production cycle and told
+      // whoever read the log to check a DATABASE_URL that was correct.
+      // What matters is whether RLS applies, not what the role is called.
+      const { assertServiceRoleConnection } = require(path.join(REPO_ROOT, 'api', 'src', 'db.js'));
+      await sql(`drop role if exists e2e_bypassrls`);
+      await sql(`drop role if exists e2e_rls_applies`);
+      await sql(`create role e2e_bypassrls login password 'x' bypassrls`);
+      await sql(`create role e2e_rls_applies login password 'x'`);
+      const asRole = async (role) => {
+        const u = new URL(dbUrl(DB));
+        u.username = role; u.password = 'x';
+        const c = new Client({ connectionString: u.toString() });
+        await c.connect();
+        try { await assertServiceRoleConnection(c); return null; }
+        catch (err) { return err.message; }
+        finally { await c.end(); }
+      };
+
+      // The production shape: not a superuser, but RLS does not apply to it.
+      const bypass = await asRole('e2e_bypassrls');
+      assert(bypass === null, `a BYPASSRLS role was refused: ${bypass}`);
+
+      // The failure the guard is actually for: RLS silently empties its reads.
+      const applies = await asRole('e2e_rls_applies');
+      assert(applies, 'a role RLS applies to was let through — the guard is doing nothing');
+      assert(/bypassrls=false/.test(applies), `the error does not name what is wrong: ${applies}`);
+
+      // And the local superuser, which is what every other check here runs as.
+      const supered = await asRole('postgres').catch(() => null);
+      void supered;
+      await sql(`drop role if exists e2e_bypassrls`);
+      await sql(`drop role if exists e2e_rls_applies`);
+      return 'BYPASSRLS non-superuser -> allowed; role RLS applies to -> refused by name';
+    });
     await check('Overlapping runs: while another process holds the lock, a cycle stands down and sends nothing', async () => {
       const other = new Client({ connectionString: dbUrl(DB) });
       await other.connect();
