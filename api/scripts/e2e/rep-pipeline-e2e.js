@@ -603,6 +603,136 @@ async function main() {
     });
 
     // ===========================================================================
+    section('Reports');
+    await check('A rep\'s report counts what they actually did, month by month', async () => {
+      const r = await api('GET', `/reports/rep/${rep.Alice.id}`, { as: USERS.admin });
+      eq(r.status, 200, 'status');
+      eq(r.body.months.length, 12, 'always twelve months, holes and all');
+      eq(r.body.rep.name, 'Alice Rep', 'whose report it is');
+      // She earned $50 + three royalties on dealer-a, and $50 on dealer-b.
+      eq(r.body.totals.earned_cents, 5000 + 100 + 50 + 20 + 5000, 'earned this year');
+      assert(r.body.totals.won >= 1, `won: ${r.body.totals.won}`);
+      assert(r.body.now.dealers >= 1, 'the dealers she is on');
+      const summed = r.body.months.reduce((n, m) => n + m.earned_cents, 0);
+      eq(summed, r.body.totals.earned_cents, 'the months add up to the total');
+      return `${r.body.totals.leads} leads, ${r.body.totals.won} signed, ${r.body.totals.earned_cents} cents earned`;
+    });
+
+    await check('A deleted lead still counts as lost, with nothing kept about who it was', async () => {
+      const doomed = (await api('POST', '/rep-leads', {
+        as: ALICE,
+        body: { company_name: 'Counted Then Gone Co', contact_name: 'Secret Pat', email: 'pat@secret.test', phone: '717-555-0123' },
+      })).body;
+      const before = (await api('GET', `/reports/rep/${rep.Alice.id}`, { as: USERS.admin })).body.totals.lost;
+      await api('DELETE', `/rep-leads/${doomed.id}`, { as: ALICE });
+      const after = (await api('GET', `/reports/rep/${rep.Alice.id}`, { as: USERS.admin })).body.totals.lost;
+      eq(after, before + 1, 'the count went up');
+
+      // And the tally really is only a count — no trace of the company anywhere.
+      const [tally] = await sql(`select * from rep_lead_outcomes where rep_id = $1 order by month desc limit 1`, [rep.Alice.id]);
+      const columns = Object.keys(tally).join(',');
+      eq(columns.includes('company') || columns.includes('email') || columns.includes('phone'), false, `columns: ${columns}`);
+      const anywhere = await sql(
+        `select count(*)::int n from rep_leads where company_name = 'Counted Then Gone Co'`
+      );
+      eq(anywhere[0].n, 0, 'the lead itself is gone');
+      return `lost ${before} -> ${after}; the tally holds only ${columns}`;
+    });
+
+    await check('A rep can open their own report and nobody else\'s', async () => {
+      const mine = await api('GET', `/reports/rep/${rep.Alice.id}`, { as: ALICE });
+      eq(mine.status, 200, 'own');
+      const theirs = await api('GET', `/reports/rep/${rep.Bob.id}`, { as: ALICE });
+      eq(theirs.status, 403, 'another rep\'s');
+      eq(theirs.body.code, 'own_report_only', 'code');
+      return 'own 200, another rep\'s 403 own_report_only';
+    });
+
+    await check('The company report is the admin\'s alone, and its months add up', async () => {
+      eq((await api('GET', '/reports/company', { as: ALICE })).status, 403, 'rep');
+      eq((await api('GET', '/reports/company', { as: USERS.helper })).status, 403, 'helper');
+      const c = await api('GET', '/reports/company', { as: USERS.admin });
+      eq(c.status, 200, 'admin');
+      eq(c.body.months.length, 12, 'twelve months');
+      const revenue = c.body.months.reduce((n, m) => n + m.revenue_cents, 0);
+      eq(revenue, c.body.totals.revenue_cents, 'revenue adds up');
+      const profit = c.body.months.reduce((n, m) => n + m.profit_cents, 0);
+      eq(profit, c.body.totals.profit_cents, 'profit adds up');
+      // Revenue is only what really cleared: one $500 activation and three fees.
+      eq(c.body.totals.activation_cents, 50000 + 50000, 'two activations');
+      assert(c.body.totals.fee_cents > 0, 'the referral fees are in there');
+      assert(c.body.caveats.length >= 3, 'and it says what is an estimate');
+      return `taken ${c.body.totals.revenue_cents}, cost ${c.body.totals.cost_cents}, profit ${c.body.totals.profit_cents}`;
+    });
+
+    await check('Rep pay and the seeded costs land in the company\'s cost line', async () => {
+      const c = (await api('GET', '/reports/company', { as: USERS.admin })).body;
+      const repEarned = (await sql('select coalesce(sum(amount_cents),0)::int t from rep_earnings'))[0].t;
+      eq(c.totals.rep_cost_cents, repEarned, 'every cent a rep earned is a cost');
+      assert(c.expenses.length >= 7, `the services are listed: ${c.expenses.length}`);
+      eq(c.expenses.every((e) => e.amount_cents === 0), true, 'and seeded at zero, not guessed');
+      eq(c.totals.running_cost_cents, 0, 'so running costs are zero until they are priced');
+      return `${c.expenses.length} costs listed, all unpriced, rep pay ${repEarned} cents counted`;
+    });
+
+    await check('Pricing a cost moves the profit, and only for the months it covers', async () => {
+      const c0 = (await api('GET', '/reports/company', { as: USERS.admin })).body;
+      const render = c0.expenses.find((e) => e.name.startsWith('Render'));
+      const add = await api('POST', '/reports/expenses', {
+        as: USERS.admin,
+        body: { name: 'One-off laptop', category: 'other', amount_cents: 120000, recurrence: 'once', started_on: `${c0.year}-03-15` },
+      });
+      eq(add.status, 201, 'added');
+      // Dated from January, because a cost correctly does not apply to months
+      // before it started — the seeded rows start today, so left alone this
+      // would only cover the rest of the year.
+      await api('PATCH', `/reports/expenses/${render.id}`, {
+        as: USERS.admin, body: { amount_cents: 2500, started_on: `${c0.year}-01-01` },
+      });
+
+      const c1 = (await api('GET', '/reports/company', { as: USERS.admin })).body;
+      eq(c1.totals.running_cost_cents, 2500 * 12 + 120000, '$25 a month all year, plus the one-off');
+      const march = c1.months.find((m) => m.month === `${c0.year}-03`);
+      const april = c1.months.find((m) => m.month === `${c0.year}-04`);
+      eq(march.running_cost_cents, 2500 + 120000, 'the one-off lands in March');
+      eq(april.running_cost_cents, 2500, 'and nowhere else');
+      eq(c1.totals.profit_cents, c0.totals.profit_cents - (2500 * 12 + 120000), 'profit drops by exactly that');
+
+      // Put it back so later checks see the state they expect.
+      await api('DELETE', `/reports/expenses/${add.body.id}`, { as: USERS.admin });
+      await api('PATCH', `/reports/expenses/${render.id}`, { as: USERS.admin, body: { amount_cents: 0 } });
+      return 'monthly spread over twelve, one-off in its own month, profit follows';
+    });
+
+    await check('A cost that started mid-year is only charged from the month it started', async () => {
+      const c0 = (await api('GET', '/reports/company', { as: USERS.admin })).body;
+      const made = await api('POST', '/reports/expenses', {
+        as: USERS.admin,
+        body: { name: 'Started in July', category: 'software', amount_cents: 1000, recurrence: 'monthly', started_on: `${c0.year}-07-01` },
+      });
+      const c1 = (await api('GET', '/reports/company', { as: USERS.admin })).body;
+      const june = c1.months.find((m) => m.month === `${c0.year}-06`);
+      const july = c1.months.find((m) => m.month === `${c0.year}-07`);
+      eq(june.running_cost_cents, 0, 'nothing in June');
+      eq(july.running_cost_cents, 1000, 'and $10 from July');
+      eq(c1.totals.running_cost_cents, 1000 * 6, 'six months of it, not twelve');
+      await api('DELETE', `/reports/expenses/${made.body.id}`, { as: USERS.admin });
+      return 'July to December only';
+    });
+
+    await check('The card fee is an estimate from a rate the admin can change', async () => {
+      const before = (await api('GET', '/reports/company', { as: USERS.admin })).body;
+      const put = await api('PUT', '/reports/card-fee', { as: USERS.admin, body: { card_fee_bps: 0, card_fee_fixed_cents: 0 } });
+      eq(put.status, 200, 'saved');
+      const zero = (await api('GET', '/reports/company', { as: USERS.admin })).body;
+      eq(zero.totals.processing_estimate_cents, 0, 'at zero it costs nothing');
+      eq(zero.totals.profit_cents, before.totals.profit_cents + before.totals.processing_estimate_cents, 'and profit rises by what it was');
+      await api('PUT', '/reports/card-fee', { as: USERS.admin, body: { card_fee_bps: 290, card_fee_fixed_cents: 30 } });
+      eq((await api('PUT', '/reports/card-fee', { as: ALICE, body: { card_fee_bps: 0, card_fee_fixed_cents: 0 } })).status, 403, 'a rep cannot touch it');
+      return `was ${before.totals.processing_estimate_cents} cents at 2.9% + 30c`;
+    });
+
+    // ===========================================================================
     section('Everyone else is still shut out');
     await check('A dealer\'s own admin gets 403 on every rep route, reps included', async () => {
       for (const [m, p] of [['GET', '/reps'], ['GET', '/rep-leads'], ['GET', '/rep-dealers'], ['GET', '/rep-money/overview'], ['GET', '/rep-settings']]) {

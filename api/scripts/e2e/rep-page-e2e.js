@@ -279,10 +279,10 @@ async function main() {
     // ======================================================================
     section('Admin: the whole flow');
     const page = await newPage('admin');
-    await check('Admin signs in and sees Leads, Reps, Dealers, Build dashboards and Money tabs', async () => {
+    await check('Admin signs in and sees all five of his tabs', async () => {
       await signIn(page, USERS.admin);
       const t = await tabNames(page);
-      assert(JSON.stringify(t) === JSON.stringify(['Leads', 'Reps', 'Dealers', 'Build dashboards', 'Money']), `tabs: ${t}`);
+      assert(JSON.stringify(t) === JSON.stringify(['Leads', 'Reps', 'Dealers', 'Build dashboards', 'Money', 'Company']), `tabs: ${t}`);
       return `${await page.textContent('#who')}`;
     });
     await check('Add two reps (Alice, Bob) on the Reps tab', async () => {
@@ -825,6 +825,84 @@ async function main() {
       await p.context().close();
       return msg;
     });
+
+    // ======================================================================
+    section('Reports, in the browser');
+    let coPage;
+    await check('A rep\'s name opens their year, with bars and a conversion ring drawn', async () => {
+      coPage = await newPage('reports');
+      await signIn(coPage, USERS.admin);
+      await coPage.click('[data-tab=reps]');
+      await coPage.waitForSelector('#tab-reps [data-report]');
+      await coPage.locator('#tab-reps tr', { hasText: 'Alice Rep' }).locator('[data-report]').click();
+      await coPage.waitForSelector('#dlg svg.chart');
+      const charts = await coPage.$$eval('#dlg svg.chart', (els) => els.length);
+      assert(charts >= 2, `charts drawn: ${charts}`);
+      // Twelve month labels, so a quiet month is a gap in the chart, not missing.
+      const labels = await coPage.$$eval('#dlg svg.chart text', (els) => els.map((e) => e.textContent));
+      for (const m of ['Jan', 'Jun', 'Dec']) assert(labels.includes(m), `missing ${m}: ${labels.join(',')}`);
+      // The bars are real rectangles with real heights, not an empty frame.
+      const bars = await coPage.$$eval('#dlg svg.chart rect', (els) => els.filter((e) => Number(e.getAttribute('height')) > 1).length);
+      assert(bars > 0, 'no bars have any height');
+      const text = (await coPage.textContent('#dlg')).replace(/\s+/g, ' ');
+      assert(/Companies signed in/.test(text) && /Conversion/.test(text), text.slice(0, 160));
+      await coPage.click('#cancelDlg');
+      return `${charts} charts, ${bars} bars with height`;
+    });
+
+    await check('The Company tab shows money in, money out and profit, and says what is estimated', async () => {
+      await coPage.click('[data-tab=company]');
+      await coPage.waitForSelector('#tab-company svg.chart');
+      const text = (await coPage.textContent('#tab-company')).replace(/\s+/g, ' ');
+      assert(/Taken in/.test(text) && /Cost to run/.test(text) && /Profit/.test(text), text.slice(0, 200));
+      assert(/estimate/i.test(text), 'it says the card fee is an estimate');
+      // The seeded costs have no amounts, and the page says so rather than
+      // quietly reporting a profit that is too good.
+      assert(/no amount yet/.test(text), 'it warns the profit is overstated');
+      assert(/not set/.test(text), 'and marks each unpriced row');
+      const charts = await coPage.$$eval('#tab-company svg.chart', (e) => e.length);
+      assert(charts >= 2, `charts: ${charts}`);
+      return `${charts} charts; unpriced costs flagged`;
+    });
+
+    await check('Pricing a cost on the page changes the profit on the page', async () => {
+      const profitBefore = await coPage.$$eval('#tab-company .stat b', (b) => b[2].textContent);
+      await coPage.locator('#tab-company tr', { hasText: 'Postmark' }).locator('[data-editexp]').click();
+      await coPage.waitForSelector('#expForm');
+      await coPage.fill('#expForm [name=amount]', '15');
+      await coPage.fill('#expForm [name=started_on]', `${new Date().getFullYear()}-01-01`);
+      await coPage.click('#expForm button[type=submit]');
+      await coPage.waitForFunction((was) => {
+        const b = document.querySelectorAll('#tab-company .stat b');
+        return b.length > 2 && b[2].textContent !== was;
+      }, profitBefore);
+      const [, , profitAfter] = await coPage.$$eval('#tab-company .stat b', (b) => b.map((x) => x.textContent));
+      assert(profitAfter !== profitBefore, `profit did not move: ${profitBefore}`);
+      const [row] = await sql(`select amount_cents from platform_expenses where name = 'Postmark'`);
+      eq(row.amount_cents, 1500, 'saved to the database too');
+      return `profit ${profitBefore} -> ${profitAfter} after pricing Postmark at $15`;
+    });
+
+    await check('Neither the helper nor a rep can open the Company tab', async () => {
+      for (const who of [USERS.helper, { email: 'alice@x.test' }]) {
+        const p = await newPage('no-company');
+        await signIn(p, who);
+        const t = await tabNames(p);
+        assert(!t.includes('Company'), `${who.email} sees: ${t}`);
+        await p.context().close();
+      }
+      // And not by asking the API directly either.
+      const out = await coPage.evaluate(async (base) => {
+        const s = JSON.parse(localStorage.getItem('fifty:reps-session'));
+        void s;
+        return base;
+      }, API_ORIGIN);
+      void out;
+      const r = await fetch(`${API_ORIGIN}/api/reports/company`, { headers: { Authorization: `Bearer ${auth.mintToken(USERS.helper)}` } });
+      eq(r.status, 403, 'helper, straight at the API');
+      return 'no Company tab for either; the API refuses the helper too';
+    });
+    await coPage.context().close();
 
     section('Page health');
     await check('No script errors or failed API calls were logged in the browser', async () => {

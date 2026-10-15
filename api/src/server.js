@@ -8,6 +8,7 @@ const meRouter = require('./routes/me');
 const tenantSettingsRouter = require('./routes/tenantSettings');
 const billingRouter = require('./routes/billing');
 const repsRouter = require('./routes/reps');
+const reportsRouter = require('./routes/reports');
 const webhooksRouter = require('./routes/webhooks');
 const sharePreviewRouter = require('./routes/sharePreview');
 const { describeStripeConfig } = require('./lib/stripe');
@@ -55,6 +56,7 @@ app.use('/api', meRouter);
 app.use('/api', tenantSettingsRouter);
 app.use('/api', billingRouter);
 app.use('/api', repsRouter);
+app.use('/api', reportsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });

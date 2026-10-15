@@ -74,6 +74,20 @@
   .inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
   details.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-bottom:14px;}
   details.card summary{cursor:pointer;font-weight:600;color:var(--primary);}
+  /* charts: drawn as plain SVG, no library, so they print and theme like the
+     rest of the page rather than like somebody else's widget. */
+  .chartcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;}
+  .chartcard h3{font-size:15px;margin-bottom:2px;}
+  .chartcard .muted{margin-bottom:10px;}
+  .chartwrap{overflow-x:auto;}
+  svg.chart{display:block;width:100%;min-width:520px;height:auto;font-family:'Inter',system-ui,sans-serif;}
+  svg.chart text{fill:var(--muted);font-size:11px;}
+  svg.chart text.val{fill:var(--charcoal);font-size:10px;font-variant-numeric:tabular-nums;}
+  svg.chart .axis{stroke:var(--line);stroke-width:1;}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px;}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .legend i{width:10px;height:10px;border-radius:2px;display:inline-block;}
+  .reportgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;align-items:start;}
   @media print{ header.top,nav.tabs,.noprint{display:none!important;} body{background:#fff;} }
 </style>
 </head>
@@ -125,6 +139,7 @@
     <section id="tab-money" class="hide"></section>
     <section id="tab-mymoney" class="hide"></section>
     <section id="tab-builds" class="hide"></section>
+    <section id="tab-company" class="hide"></section>
   </main>
 </div>
 
@@ -138,7 +153,7 @@ const SUPABASE_URL = "https://jzjmuttqbtandwjmwwfn.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_RE92j36ZEVFvSBwV-Rl8hg_JyfxRT6a";
 
 const TZ = 'America/New_York';
-const state = { me: null, isAdmin: false, isRep: false, myRepId: null, reps: [], leads: [], dealers: [], builds: [], money: null, month: null, tab: 'leads', settings: null };
+const state = { me: null, isAdmin: false, isRep: false, myRepId: null, reps: [], leads: [], dealers: [], builds: [], company: null, money: null, month: null, tab: 'leads', settings: null };
 
 /* ---------- helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -299,7 +314,7 @@ async function start(){
   const tabs = state.isRep
     ? [['leads','My leads'],['dealers','My dealers'],['mymoney','My money']]
     : [['leads','Leads'],['reps','Reps'],['dealers','Dealers']];
-  if(state.isAdmin) tabs.push(['builds','Build dashboards'], ['money','Money']);
+  if(state.isAdmin) tabs.push(['builds','Build dashboards'], ['money','Money'], ['company','Company']);
   $('tabs').innerHTML = tabs.map(([k,l]) => '<button type="button" data-tab="' + k + '">' + l + '</button>').join('');
   $('tabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
   showTab(state.tab);
@@ -311,7 +326,7 @@ async function loadReps(){ const d = await api('/reps'); state.reps = d.reps; st
 async function showTab(tab){
   state.tab = tab; clearFlash();
   $('tabs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  for(const k of ['leads','reps','dealers','money','mymoney','builds']) $('tab-' + k).classList.toggle('hide', k !== tab);
+  for(const k of ['leads','reps','dealers','money','mymoney','builds','company']) $('tab-' + k).classList.toggle('hide', k !== tab);
   try{
     if(tab === 'leads') await renderLeads();
     if(tab === 'reps') await renderReps();
@@ -319,6 +334,7 @@ async function showTab(tab){
     if(tab === 'money') await renderMoney();
     if(tab === 'mymoney') await renderMyMoney();
     if(tab === 'builds') await renderBuilds();
+    if(tab === 'company') await renderCompany();
   }catch(err){ flash(err.message); }
 }
 
@@ -590,7 +606,8 @@ async function renderReps(){
     '<div class="tablewrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Login</th><th class="num">Companies closed</th><th class="num">Onboarded</th><th class="num">Leads found</th>' +
     (adminCols ? '<th class="num">Earned this month</th><th class="num">You owe</th>' : '') + '<th></th></tr></thead><tbody>' +
     (state.reps.map((r) =>
-      '<tr><td><b>' + esc(r.name) + '</b> ' + (r.active ? '' : '<span class="pill off">inactive</span>') + '</td>' +
+      '<tr><td><a href="#" data-report="' + r.id + '" style="color:var(--primary);font-weight:600;text-decoration:none;border-bottom:1px solid var(--line)">' + esc(r.name) + '</a> ' +
+        (r.active ? '' : '<span class="pill off">inactive</span>') + '</td>' +
       '<td>' + esc(r.phone || '') + '<div class="muted">' + esc(r.email || '') + '</div></td>' +
       '<td>' + (r.has_login ? '<span class="pill closed">can sign in</span>' : '<span class="pill off">no login</span>') + '</td>' +
       '<td class="num">' + r.companies_closed + '</td><td class="num">' + r.companies_onboarded + '</td><td class="num">' + r.leads_brought_in + '</td>' +
@@ -602,6 +619,7 @@ async function renderReps(){
   $('addRepBtn').addEventListener('click', () => repDialog(null));
   $('tab-reps').querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => repDialog(b.dataset.edit)));
   $('tab-reps').querySelectorAll('[data-invite]').forEach((b) => b.addEventListener('click', () => inviteRep(b.dataset.invite, b)));
+  $('tab-reps').querySelectorAll('[data-report]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); repReport(a.dataset.report); }));
 }
 // Emails the rep a one-time link to choose their own password. No password is
 // created or shown here, or anywhere — not even to Joseph.
@@ -692,6 +710,94 @@ async function renderDealers(){
     try{ await put('/rep-dealers/' + b.dataset.save + '/assignment', body); flash('Saved.', true); await renderDealers(); }catch(err){ flash(err.message); }
   }));
 }
+
+/* ---------- charts ---------- */
+// Drawn by hand as SVG rather than pulled from a library: these are a dozen
+// bars and a ring, the page already has no build step and no dependencies, and
+// a chart that inherits the page's own colours and prints with it is worth
+// more here than one that arrives with its own opinions.
+
+// A "nice" top to the axis, so the gridline labels are round numbers a person
+// reads at a glance rather than 1,347.
+function niceMax(value){
+  if(!(value > 0)) return 1;
+  const pow = Math.pow(10, Math.floor(Math.log10(value)));
+  const n = value / pow;
+  const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+  return step * pow;
+}
+
+// Grouped bars: one group per month, one bar per series.
+// series: [{ key, label, color }], rows: [{ label, [key]: number }]
+function barChart(rows, series, { money = false, height = 190 } = {}){
+  const W = 760, H = height, padL = 52, padR = 10, padT = 12, padB = 26;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const max = niceMax(Math.max(0, ...rows.flatMap((r) => series.map((s) => Number(r[s.key]) || 0))));
+  const groupW = plotW / rows.length;
+  const barW = Math.max(3, (groupW - 6) / series.length);
+  const y = (v) => padT + plotH - (Math.max(0, v) / max) * plotH;
+  const fmt = (v) => money ? dollars(v) : String(v);
+
+  let svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Monthly chart">';
+  // Four gridlines, labelled, because a bar you cannot measure is decoration.
+  for(let i = 0; i <= 4; i++){
+    const v = (max / 4) * i, gy = y(v);
+    svg += '<line class="axis" x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + gy.toFixed(1) + '"></line>';
+    svg += '<text x="' + (padL - 6) + '" y="' + (gy + 3.5).toFixed(1) + '" text-anchor="end">' + esc(money ? dollars(v).replace(/\.00$/, '') : Math.round(v)) + '</text>';
+  }
+  rows.forEach((row, i) => {
+    const gx = padL + i * groupW;
+    series.forEach((sdef, j) => {
+      const v = Number(row[sdef.key]) || 0;
+      const bx = gx + 3 + j * barW;
+      const by = y(v), bh = Math.max(v > 0 ? 1.5 : 0, padT + plotH - by);
+      svg += '<rect x="' + bx.toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + (barW - 1.5).toFixed(1) +
+             '" height="' + bh.toFixed(1) + '" rx="2" fill="' + sdef.color + '"><title>' +
+             esc(row.label + ' · ' + sdef.label + ': ' + fmt(v)) + '</title></rect>';
+    });
+    svg += '<text x="' + (gx + groupW / 2).toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(row.label) + '</text>';
+  });
+  svg += '</svg>';
+  const legend = '<div class="legend">' + series.map((sdef) =>
+    '<span><i style="background:' + sdef.color + '"></i>' + esc(sdef.label) + '</span>').join('') + '</div>';
+  return '<div class="chartwrap">' + svg + '</div>' + legend;
+}
+
+// A ring rather than a pie: the hole is where the number that matters goes.
+function donut(slices, centreTop, centreSub){
+  const size = 150, r = 58, stroke = 22, c = size / 2;
+  const total = slices.reduce((n, s) => n + s.value, 0);
+  let angle = -Math.PI / 2;
+  let paths = '';
+  if(total > 0){
+    slices.forEach((s) => {
+      if(s.value <= 0) return;
+      const sweep = (s.value / total) * Math.PI * 2;
+      const end = angle + sweep;
+      // A slice that is the whole ring cannot be drawn as an arc; draw a circle.
+      if(s.value === total){
+        paths += '<circle cx="' + c + '" cy="' + c + '" r="' + r + '" fill="none" stroke="' + s.color + '" stroke-width="' + stroke + '"><title>' + esc(s.label + ': ' + s.value) + '</title></circle>';
+      }else{
+        const x1 = c + r * Math.cos(angle), y1 = c + r * Math.sin(angle);
+        const x2 = c + r * Math.cos(end), y2 = c + r * Math.sin(end);
+        paths += '<path d="M ' + x1.toFixed(2) + ' ' + y1.toFixed(2) + ' A ' + r + ' ' + r + ' 0 ' +
+                 (sweep > Math.PI ? 1 : 0) + ' 1 ' + x2.toFixed(2) + ' ' + y2.toFixed(2) + '" fill="none" stroke="' +
+                 s.color + '" stroke-width="' + stroke + '" stroke-linecap="butt"><title>' + esc(s.label + ': ' + s.value) + '</title></path>';
+      }
+      angle = end;
+    });
+  }else{
+    paths = '<circle cx="' + c + '" cy="' + c + '" r="' + r + '" fill="none" stroke="var(--line)" stroke-width="' + stroke + '"></circle>';
+  }
+  return '<svg class="chart" style="min-width:0;max-width:' + size + 'px;margin:0 auto" viewBox="0 0 ' + size + ' ' + size + '" role="img">' +
+    paths +
+    '<text x="' + c + '" y="' + (c - 2) + '" text-anchor="middle" style="font-family:Fraunces,serif;font-size:21px;fill:var(--primary)">' + esc(centreTop) + '</text>' +
+    '<text x="' + c + '" y="' + (c + 15) + '" text-anchor="middle">' + esc(centreSub) + '</text></svg>' +
+    '<div class="legend" style="justify-content:center">' + slices.map((s) =>
+      '<span><i style="background:' + s.color + '"></i>' + esc(s.label) + ' ' + s.value + '</span>').join('') + '</div>';
+}
+
+const CHART = { primary:'#1C2B33', steel:'#7C9FBB', gold:'#C9974B', green:'#2B6B5A', red:'#A12B2B', line:'#C9C2B5' };
 
 /* ---------- Build dashboards (admin only) ---------- */
 // Every won lead that does not have a 50. account yet. Nothing a rep typed or
@@ -842,6 +948,216 @@ async function buildDialog(leadId){
   });
 }
 
+/* ---------- a rep's year ---------- */
+// Opens for the rep themselves and for Joseph, from the same place, showing
+// the same numbers. Nothing here is modelled: every figure is a count or a sum
+// of rows that exist.
+async function repReport(repId, year){
+  openDialog('<h3>Loading…</h3>');
+  let d;
+  try{ d = await api('/reports/rep/' + repId + (year ? '?year=' + year : '')); }
+  catch(err){ closeDialog(); return flash(err.message); }
+
+  const t = d.totals, now = d.now;
+  const rate = d.conversion.rate;
+  const openish = now.open_leads;
+
+  openDialog(
+    '<div class="noprint actions" style="justify-content:space-between;margin:0 0 6px">' +
+      '<div class="inline"><label style="margin:0">Year</label>' +
+      '<select id="repYear" style="width:auto">' + [d.year + 1, d.year, d.year - 1, d.year - 2].map((y) =>
+        '<option value="' + y + '"' + (y === d.year ? ' selected' : '') + '>' + y + '</option>').join('') + '</select></div>' +
+      '<button class="btn small secondary" id="printReport" type="button">Print</button></div>' +
+    '<h3>' + esc(d.rep.name) + ' — ' + d.year + '</h3>' +
+    '<p class="muted">' + esc(d.rep.email || '') + (d.rep.active ? '' : ' · inactive') + '</p>' +
+
+    '<div class="cards">' +
+      '<div class="stat"><b>' + t.won + '</b><span>Companies signed in ' + d.year + '</span></div>' +
+      '<div class="stat"><b>' + t.leads + '</b><span>Leads brought in</span></div>' +
+      '<div class="stat"><b>' + openish + '</b><span>Still open' + (now.open_over_30_days ? ' · ' + now.open_over_30_days + ' over 30 days' : '') + '</span></div>' +
+      '<div class="stat"><b>' + dollars(t.earned_cents) + '</b><span>Earned in ' + d.year + '</span></div>' +
+    '</div>' +
+
+    '<div class="reportgrid">' +
+      '<div class="chartcard"><h3>Month by month</h3>' +
+        '<div class="muted">Leads brought in, and companies signed.</div>' +
+        barChart(d.months, [
+          { key:'leads', label:'Leads in', color:CHART.steel },
+          { key:'won', label:'Signed', color:CHART.primary },
+        ]) + '</div>' +
+      '<div class="chartcard"><h3>Conversion</h3>' +
+        '<div class="muted">' + (d.conversion.decided
+            ? 'Of the ' + d.conversion.decided + ' that reached an answer. Still-open leads are left out.'
+            : 'Nothing has reached an answer yet.') + '</div>' +
+        donut(
+          [{ label:'Signed', value:d.conversion.won, color:CHART.primary }, { label:'Lost', value:d.conversion.lost, color:CHART.line }],
+          rate === null ? '—' : rate + '%',
+          'signed'
+        ) + '</div>' +
+    '</div>' +
+
+    '<div class="chartcard"><h3>What they earned</h3>' +
+      '<div class="muted">Sign-up bonuses and referral royalties, in the month each was earned.</div>' +
+      barChart(d.months, [
+        { key:'bonus_cents', label:'Sign-up bonuses', color:CHART.primary },
+        { key:'royalty_cents', label:'Referral royalties', color:CHART.gold },
+      ], { money:true }) + '</div>' +
+
+    '<div class="tablewrap"><table style="min-width:0"><thead><tr><th>Month</th><th class="num">Leads in</th><th class="num">Signed</th><th class="num">Lost</th><th class="num">Earned</th></tr></thead><tbody>' +
+      d.months.map((m) => '<tr><td>' + esc(m.label) + '</td><td class="num">' + m.leads + '</td><td class="num">' + m.won +
+        '</td><td class="num">' + m.lost + '</td><td class="num">' + dollars(m.earned_cents) + '</td></tr>').join('') +
+      '<tr><td><b>Total</b></td><td class="num"><b>' + t.leads + '</b></td><td class="num"><b>' + t.won +
+        '</b></td><td class="num"><b>' + t.lost + '</b></td><td class="num"><b>' + dollars(t.earned_cents) + '</b></td></tr>' +
+    '</tbody></table></div>' +
+
+    '<p class="muted" style="margin-top:12px">Right now: ' + now.dealers + ' dealer' + (now.dealers === 1 ? '' : 's') +
+      ', ' + now.awaiting_build + ' waiting to be built, ' + dollars(now.owed_cents) + ' owed.</p>' +
+
+    '<div class="actions noprint"><button class="btn secondary" id="cancelDlg" type="button">Close</button></div>'
+  );
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('printReport').addEventListener('click', () => window.print());
+  $('repYear').addEventListener('change', (e) => repReport(repId, e.target.value));
+}
+
+/* ---------- the company's year (admin only) ---------- */
+async function renderCompany(year){
+  const d = await api('/reports/company' + (year ? '?year=' + year : ''));
+  state.company = d;
+  const t = d.totals;
+  const margin = t.revenue_cents > 0 ? Math.round((t.profit_cents / t.revenue_cents) * 1000) / 10 : null;
+  const unpriced = d.expenses.filter((e) => e.amount_cents === 0).length;
+
+  $('tab-company').innerHTML =
+    '<div class="head"><h2>Company</h2><div class="inline"><label style="margin:0">Year</label>' +
+      '<select id="coYear" style="width:auto">' + [d.year + 1, d.year, d.year - 1, d.year - 2].map((y) =>
+        '<option value="' + y + '"' + (y === d.year ? ' selected' : '') + '>' + y + '</option>').join('') + '</select>' +
+      '<button class="btn small secondary noprint" id="printCo" type="button">Print</button></div></div>' +
+
+    (unpriced
+      ? '<div class="notice"><b>' + unpriced + ' cost' + (unpriced === 1 ? ' has' : 's have') + ' no amount yet,' +
+        ' so the profit below is higher than the real one.</b> They are listed at the bottom — put your numbers in and every figure here becomes true.</div>'
+      : '') +
+
+    '<div class="cards">' +
+      '<div class="stat"><b>' + dollars(t.revenue_cents) + '</b><span>Taken in ' + d.year + '</span></div>' +
+      '<div class="stat"><b>' + dollars(t.cost_cents) + '</b><span>Cost to run</span></div>' +
+      '<div class="stat"><b class="' + (t.profit_cents < 0 ? 'neg' : '') + '">' + dollars(t.profit_cents) + '</b><span>Profit' + (margin === null ? '' : ' · ' + margin + '%') + '</span></div>' +
+      '<div class="stat"><b>' + d.companies.dealers + '</b><span>Dealers · ' + d.companies.paid + ' paid · ' + d.companies.in_house + ' in-house</span></div>' +
+    '</div>' +
+
+    '<div class="chartcard"><h3>Money in and money out</h3>' +
+      '<div class="muted">What cleared each month, against what it cost to run — rep pay, the bills below, and card processing.</div>' +
+      barChart(d.months, [
+        { key:'revenue_cents', label:'Taken', color:CHART.primary },
+        { key:'cost_cents', label:'Cost', color:CHART.gold },
+        { key:'profit_cents', label:'Profit', color:CHART.green },
+      ], { money:true, height:210 }) + '</div>' +
+
+    '<div class="chartcard"><h3>The pipeline</h3>' +
+      '<div class="muted">Leads coming in, companies signed, and dashboards built.</div>' +
+      barChart(d.months, [
+        { key:'leads', label:'Leads in', color:CHART.steel },
+        { key:'closed', label:'Signed', color:CHART.primary },
+        { key:'built', label:'Built', color:CHART.green },
+      ]) + '</div>' +
+
+    '<div class="tablewrap"><table><thead><tr><th>Month</th><th class="num">Leads</th><th class="num">Signed</th>' +
+      '<th class="num">Activations</th><th class="num">Renewals</th><th class="num">Referral fees</th><th class="num">Taken</th>' +
+      '<th class="num">Rep pay</th><th class="num">Running costs</th><th class="num">Card fees</th><th class="num">Profit</th></tr></thead><tbody>' +
+      d.months.map((m) => '<tr><td>' + esc(m.label) + '</td><td class="num">' + m.leads + '</td><td class="num">' + m.closed + '</td>' +
+        '<td class="num">' + dollars(m.activation_cents) + '</td><td class="num">' + dollars(m.renewal_cents) + '</td>' +
+        '<td class="num">' + dollars(m.fee_cents) + '</td><td class="num"><b>' + dollars(m.revenue_cents) + '</b></td>' +
+        '<td class="num">' + dollars(m.rep_cost_cents) + '</td><td class="num">' + dollars(m.running_cost_cents) + '</td>' +
+        '<td class="num">' + dollars(m.processing_estimate_cents) + '</td>' +
+        '<td class="num"><b>' + dollarCell(m.profit_cents) + '</b></td></tr>').join('') +
+      '<tr><td><b>Total</b></td><td class="num"><b>' + t.leads + '</b></td><td class="num"><b>' + t.closed + '</b></td>' +
+        '<td class="num"><b>' + dollars(t.activation_cents) + '</b></td><td class="num"><b>' + dollars(t.renewal_cents) + '</b></td>' +
+        '<td class="num"><b>' + dollars(t.fee_cents) + '</b></td><td class="num"><b>' + dollars(t.revenue_cents) + '</b></td>' +
+        '<td class="num"><b>' + dollars(t.rep_cost_cents) + '</b></td><td class="num"><b>' + dollars(t.running_cost_cents) + '</b></td>' +
+        '<td class="num"><b>' + dollars(t.processing_estimate_cents) + '</b></td><td class="num"><b>' + dollarCell(t.profit_cents) + '</b></td></tr>' +
+    '</tbody></table></div>' +
+
+    '<ul class="muted" style="margin:12px 0 18px;padding-left:18px">' + d.caveats.map((c) => '<li>' + esc(c) + '</li>').join('') + '</ul>' +
+
+    '<div class="head" style="margin-top:22px"><h2 style="font-size:19px">What it costs to run</h2>' +
+      '<button class="btn" id="addExpense" type="button">Add a cost</button></div>' +
+    '<div class="tablewrap"><table><thead><tr><th>What</th><th>Kind</th><th>How often</th><th class="num">Amount</th><th>From</th><th></th></tr></thead><tbody>' +
+      (d.expenses.map((e) =>
+        '<tr' + (e.amount_cents === 0 ? ' style="background:var(--warn-bg)"' : '') + '><td><b>' + esc(e.name) + '</b>' +
+          (e.notes ? '<div class="muted">' + esc(e.notes) + '</div>' : '') + '</td>' +
+        '<td>' + esc(e.category) + '</td><td>' + esc(e.recurrence) + '</td>' +
+        '<td class="num">' + (e.amount_cents === 0 ? '<span class="muted">not set</span>' : dollars(e.amount_cents)) + '</td>' +
+        '<td>' + esc(plainDate(e.started_on)) + (e.ended_on ? ' – ' + esc(plainDate(e.ended_on)) : '') + '</td>' +
+        '<td class="num"><button class="btn small secondary" data-editexp="' + e.id + '">Edit</button> ' +
+          '<button class="btn small danger" data-delexp="' + e.id + '">Remove</button></td></tr>'
+      ).join('') || '<tr><td colspan="6" class="muted" style="padding:18px">Nothing listed yet.</td></tr>') +
+    '</tbody></table></div>' +
+
+    '<details class="card" style="margin-top:14px"><summary>Card processing rate</summary>' +
+      '<p class="muted">Taken off every payment. 2.9% + 30¢ is Stripe’s standard US card rate; your statement is the real figure.</p>' +
+      '<form id="feeForm"><div class="row">' +
+        '<div><label>Percentage (%)</label><input name="pct" type="number" min="0" max="100" step="0.01" value="' + (d.card_fee.card_fee_bps / 100) + '"></div>' +
+        '<div><label>Plus, per payment ($)</label><input name="fixed" type="number" min="0" step="0.01" value="' + (d.card_fee.card_fee_fixed_cents / 100) + '"></div></div>' +
+      '<div class="actions"><button class="btn" type="submit">Save rate</button></div></form></details>';
+
+  $('coYear').addEventListener('change', (e) => renderCompany(e.target.value).catch((err) => flash(err.message)));
+  $('printCo').addEventListener('click', () => window.print());
+  $('addExpense').addEventListener('click', () => expenseDialog(null));
+  $('tab-company').querySelectorAll('[data-editexp]').forEach((b) => b.addEventListener('click', () => expenseDialog(b.dataset.editexp)));
+  $('tab-company').querySelectorAll('[data-delexp]').forEach((b) => b.addEventListener('click', async () => {
+    const e = d.expenses.find((x) => x.id === b.dataset.delexp);
+    if(!window.confirm('Remove "' + e.name + '" from the cost list? Past months stop counting it.')) return;
+    try{ await api('/reports/expenses/' + b.dataset.delexp, { method:'DELETE' }); await renderCompany(d.year); }
+    catch(err){ flash(err.message); }
+  }));
+  $('feeForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = formData(e.target);
+    try{
+      await put('/reports/card-fee', { card_fee_bps: Math.round(Number(f.pct) * 100), card_fee_fixed_cents: Math.round(Number(f.fixed) * 100) });
+      flash('Rate saved.', true); await renderCompany(d.year);
+    }catch(err){ flash(err.message); }
+  });
+}
+
+function expenseDialog(id){
+  const e = id ? state.company.expenses.find((x) => x.id === id)
+               : { name:'', category:'other', amount_cents:0, recurrence:'monthly', started_on: todayYmd(), ended_on:null, notes:'' };
+  const cats = ['hosting','email','payments','software','rewards','people','other'];
+  const recs = [['monthly','Every month'],['yearly','Once a year'],['once','One-off']];
+  openDialog(
+    '<h3>' + (id ? 'Edit ' + esc(e.name) : 'Add a cost') + '</h3>' +
+    '<form id="expForm"><div class="row">' +
+      '<div><label>What is it</label><input name="name" required maxlength="120" value="' + esc(e.name) + '"></div>' +
+      '<div><label>Amount ($)</label><input name="amount" type="number" min="0" step="0.01" value="' + (e.amount_cents / 100) + '"></div></div>' +
+    '<div class="row"><div><label>Kind</label><select name="category">' +
+        cats.map((c) => '<option value="' + c + '"' + (c === e.category ? ' selected' : '') + '>' + c + '</option>').join('') + '</select></div>' +
+      '<div><label>How often</label><select name="recurrence">' +
+        recs.map(([v, l]) => '<option value="' + v + '"' + (v === e.recurrence ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div></div>' +
+    '<div class="row"><div><label>Started</label><input name="started_on" type="date" value="' + esc(String(e.started_on).slice(0,10)) + '"></div>' +
+      '<div><label>Ended <span class="muted">(leave blank if ongoing)</span></label><input name="ended_on" type="date" value="' + esc(e.ended_on ? String(e.ended_on).slice(0,10) : '') + '"></div></div>' +
+    '<label>Note</label><input name="notes" maxlength="500" value="' + esc(e.notes || '') + '">' +
+    '<div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Cancel</button><button class="btn" type="submit">Save</button></div></form>'
+  );
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('expForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const f = formData(ev.target);
+    const body = {
+      name: f.name, category: f.category, recurrence: f.recurrence,
+      amount_cents: Math.round(Number(f.amount || 0) * 100),
+      started_on: f.started_on || undefined,
+      ended_on: f.ended_on || null,
+      notes: f.notes || null,
+    };
+    try{
+      if(id) await patch('/reports/expenses/' + id, body); else await post('/reports/expenses', body);
+      closeDialog(); flash('Saved.', true); await renderCompany(state.company.year);
+    }catch(err){ flash(err.message); closeDialog(); }
+  });
+}
+
 /* ---------- Money (admin only) ---------- */
 async function renderMoney(){
   const q = state.month ? '?month=' + state.month : '';
@@ -910,7 +1226,7 @@ async function renderMyMoney(){
   const s = await api('/reps/' + me.id + '/statement?month=' + month);
   const label = { activation: 'Sign-up bonus', referral: 'Referral royalty', reversal: 'Adjustment' };
   $('tab-mymoney').innerHTML =
-    '<div class="head"><h2>My money</h2><div class="inline"><label style="margin:0">Month</label><input type="month" id="myMonth" value="' + esc(month) + '" style="width:auto"></div></div>' +
+    '<div class="head"><h2>My money</h2><div class="inline"><button class="btn secondary" id="myReportBtn" type="button">My year in numbers</button><label style="margin:0">Month</label><input type="month" id="myMonth" value="' + esc(month) + '" style="width:auto"></div></div>' +
     '<div class="cards">' +
       '<div class="stat"><b>' + dollars(me.owed_cents) + '</b><span>Owed to you right now</span></div>' +
       '<div class="stat"><b>' + dollars(s.activation_cents + s.royalty_cents + s.reversal_cents) + '</b><span>Earned in ' + esc(monthLabel(s.month)) + '</span></div>' +
@@ -929,6 +1245,7 @@ async function renderMyMoney(){
       : '') +
     '<p class="muted" style="margin-top:14px">A sign-up bonus lands once the company has actually paid 50. Royalties land as their customers\' referrals are rewarded. Both can take up to an hour to show here.</p>';
   $('myMonth').addEventListener('change', (e) => { if(e.target.value){ state.month = e.target.value; renderMyMoney().catch((err) => flash(err.message)); } });
+  $('myReportBtn').addEventListener('click', () => repReport(me.id));
 }
 
 function payDialog(repId, suggestedCents){
