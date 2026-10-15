@@ -178,15 +178,32 @@ async function withServiceRole(fn) {
 // worker; nothing else needs it, since every webhook handler's first
 // write already targets a specific, known-to-exist row and so is already
 // covered by assertRowsAffected).
+// What actually matters here is whether row-level security applies to the
+// connecting role — not whether it is a superuser. Those are the same thing on
+// a stock local Postgres, where `postgres` is a true superuser, and they are
+// NOT the same thing on Supabase, where `postgres` is deliberately not a
+// superuser but does carry BYPASSRLS. Testing only is_superuser therefore
+// passed every test on the local database and failed on every cycle in
+// production, which is the shape of outage this guard exists to prevent:
+// REP_EARNINGS, BILLING_EMAILS and reward issuance all refused to run, and the
+// error told whoever read it to go and check a DATABASE_URL that was correct.
+//
+// A role escapes RLS if it is a superuser OR has BYPASSRLS. Anything else is
+// still refused, loudly, exactly as before.
 async function assertServiceRoleConnection(client) {
   const { rows: [row] } = await client.query(
-    `select current_setting('is_superuser') = 'on' as is_superuser, current_user, session_user`
+    `select current_setting('is_superuser') = 'on' as is_superuser,
+            coalesce((select rolbypassrls from pg_roles where rolname = current_user), false) as bypasses_rls,
+            current_user, session_user`
   );
-  if (!row.is_superuser) {
+  if (!row.is_superuser && !row.bypasses_rls) {
     throw new Error(
-      `withServiceRole is connected as a non-superuser role — current_user="${row.current_user}" ` +
-        `session_user="${row.session_user}". This means every RLS-scoped read/write in this call will be ` +
-        `silently and incorrectly restricted rather than erroring: check DATABASE_URL.`
+      `withServiceRole is connected as a role that row-level security still applies to — ` +
+        `current_user="${row.current_user}" session_user="${row.session_user}" ` +
+        `(superuser=${row.is_superuser}, bypassrls=${row.bypasses_rls}). Every RLS-scoped read in this call ` +
+        `would come back silently empty rather than erroring, which looks exactly like "nothing is due". ` +
+        `Point DATABASE_URL at a role with BYPASSRLS — on Supabase that is the postgres role from ` +
+        `Project Settings - Database, not a pooled application role.`
     );
   }
 }
