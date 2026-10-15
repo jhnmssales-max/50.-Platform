@@ -286,9 +286,16 @@ async function main() {
       const gss = await api('PUT', `/rep-dealers/${tenants['good-steward-structures'].id}/assignment`, { as: USERS.admin, body: { closer_rep_id: rep.Sam.id, onboarder_rep_id: null } });
       eq(gss.status, 409, 'billing-exempt tenant');
       const list = await api('GET', '/rep-dealers', { as: USERS.helper });
-      assert(!/cents|stripe|billing/i.test(JSON.stringify(list.body)), 'money or billing field in the dealer list');
-      assert(!list.body.dealers.some((d) => ['good-steward-structures', 'north-mountain-structures', '50-platform'].includes(d.slug)), 'exempt tenant in the list');
-      return 'helper backdate -> 403; helper assign now -> 200; GSS -> 409; list excludes the 3 exempt tenants and has no money fields';
+      assert(!/cents|stripe/i.test(JSON.stringify(list.body)), 'money field in the dealer list');
+      // Staff now SEE the three in-house companies — they run live programs and
+      // were invisible before — but they still cannot be assigned to a rep,
+      // which is the 409 above.
+      const exempt = list.body.dealers.filter((d) => ['good-steward-structures', 'north-mountain-structures', '50-platform'].includes(d.slug));
+      eq(exempt.length, 3, 'the three in-house companies are listed for staff');
+      assert(exempt.every((d) => d.billing_exempt === true), `flagged exempt: ${JSON.stringify(exempt.map((d) => [d.slug, d.billing_exempt]))}`);
+      assert(exempt.every((d) => d.closer_rep_id === null && d.onboarder_rep_id === null), 'an in-house company has nobody on it');
+      assert(list.body.dealers.filter((d) => !d.billing_exempt).every((d) => d.billing_exempt === false), 'paying dealers are flagged false, not undefined');
+      return 'helper backdate -> 403; helper assign now -> 200; GSS -> 409; staff see all 3 in-house companies, flagged, unassignable, no money fields';
     });
     await check('The admin can backdate a start date (to credit a dealer that paid before the assignment was made)', async () => {
       for (const slug of ['dealer-c', 'dealer-d', 'dealer-e']) {

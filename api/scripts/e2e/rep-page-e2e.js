@@ -357,6 +357,30 @@ async function main() {
       assert(a, 'not saved');
     });
 
+    await check('The three in-house companies are listed, marked, and cannot be given a rep', async () => {
+      await page.click('[data-tab=dealers]');
+      await page.waitForSelector('#tab-dealers tr[data-tenant]');
+      const names = await page.$$eval('#tab-dealers tbody tr', (rows) => rows.map((r) => r.querySelector('b').textContent));
+      for (const n of ['Good Steward Structures', 'North Mountain Structures', '50.']) {
+        assert(names.includes(n), `${n} missing from the companies list: ${JSON.stringify(names)}`);
+      }
+      // Paying dealers first, so the tab still opens on the ones that matter.
+      assert(names.indexOf('Dealer A Roofing') < names.indexOf('Good Steward Structures'), `order: ${JSON.stringify(names)}`);
+
+      const gssRow = page.locator(`tr[data-tenant="${tenants['good-steward-structures'].id}"]`);
+      assert((await gssRow.textContent()).includes('In-house'), 'GSS is not marked in-house');
+      // No dropdowns and no Save: an in-house company pays nothing, so there is
+      // no payment for a rep to be credited with.
+      eq(await gssRow.locator('[data-field=closer]').count(), 0, 'in-house row offers a closer dropdown');
+      eq(await gssRow.locator('[data-save]').count(), 0, 'in-house row offers a Save button');
+      // And it never reads as a dealer who owes the $500.
+      assert(!(await gssRow.textContent()).includes('not yet'), 'in-house row reads as unpaid');
+
+      const header = await page.textContent('#tab-dealers .head');
+      assert(/3 in-house/.test(header), `header: ${header}`);
+      return `${names.length} companies listed, 3 marked in-house, paying ones first`;
+    });
+
     // Money arrives (the way the webhook / fee code would write it), the worker runs.
     const ta = tenants['dealer-a'].id;
     await sql(`insert into billing_events (tenant_id, event_type, amount_cents, status, livemode, stripe_payment_intent_id, created_at) values ($1,'activation_charge',50000,'succeeded',true,'pi_act',now())`, [ta]);

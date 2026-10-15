@@ -641,6 +641,9 @@ router.get('/rep-dealers', requireAuth, wrap(async (req, res) => {
       closer_rep_id: d.closer_rep_id,
       onboarder_rep_id: d.onboarder_rep_id,
       assigned_from: d.assigned_from,
+      // Good Steward, North Mountain and 50.'s own tenant: live programs that
+      // pay no setup, renewal or 30% fee. Staff see them; a rep never does.
+      billing_exempt: d.billing_exempt === true,
     })),
   });
 }));

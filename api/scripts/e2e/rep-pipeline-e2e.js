@@ -592,14 +592,43 @@ async function main() {
       const his = await api('GET', '/rep-dealers', { as: BOB });
       eq(his.body.dealers.map((d) => d.name).sort(), ['Dealer A Roofing', 'Dealer B Fencing'], 'Bob: onboarder on one, closer on the other');
       const all = await api('GET', '/rep-dealers', { as: USERS.admin });
-      eq(all.body.dealers.length, 2, 'the admin sees both');
+      // The admin sees both paying dealers plus the three in-house companies
+      // (GSS, NMS and 50. itself), which run live programs and pay no fees.
+      eq(all.body.dealers.filter((d) => !d.billing_exempt).map((d) => d.name).sort(), ['Dealer A Roofing', 'Dealer B Fencing'], 'the admin sees both paying dealers');
+      eq(all.body.dealers.filter((d) => d.billing_exempt).map((d) => d.name).sort(), ['50.', 'Good Steward Structures', 'North Mountain Structures'], 'and the three in-house companies');
+      // Paying dealers come first, so the tab opens on the ones that matter.
+      eq(all.body.dealers.slice(0, 2).every((d) => !d.billing_exempt), true, 'paying dealers are listed first');
+      assert(!hers.body.dealers.some((d) => d.billing_exempt), 'a rep was shown an in-house company');
+      assert(!his.body.dealers.some((d) => d.billing_exempt), 'a rep was shown an in-house company');
       // Carol is on nothing at all, so she sees nothing.
       await api('POST', `/reps/${rep.Carol.id}/invite`, { as: USERS.admin });
       auth.setPassword('carol@reps.test', PASSWORD);
       const carol = { id: auth.userIdFor('carol@reps.test'), email: 'carol@reps.test' };
       const none = await api('GET', '/rep-dealers', { as: carol });
       eq(none.status, 200, 'Carol'); eq(none.body.dealers.length, 0, 'a rep on no dealers sees an empty list, not an error');
-      return 'Alice: dealer-a. Bob: both (one as onboarder). Carol: none. Admin: both.';
+      return 'Alice: dealer-a. Bob: both (one as onboarder). Carol: none. Admin: 2 paying + 3 in-house.';
+    });
+
+    await check('Even a hand-written assignment does not show a rep an in-house company', async () => {
+      // The API refuses to assign a rep to a billing-exempt tenant (409), so
+      // force the row straight into the database. An in-house company can
+      // never pay, so it must never appear in a rep's list however it got
+      // assigned — and it must never start counting toward their royalties.
+      await sql(
+        `insert into rep_assignments (tenant_id, closer_rep_id, effective_from) values ($1, $2, now())`,
+        [tenants['good-steward-structures'].id, rep.Alice.id]
+      );
+      const hers = await api('GET', '/rep-dealers', { as: ALICE });
+      eq(hers.status, 200, 'status');
+      assert(!hers.body.dealers.some((d) => d.billing_exempt), `leaked: ${JSON.stringify(hers.body.dealers.map((d) => d.name))}`);
+      eq(hers.body.dealers.map((d) => d.name), ['Dealer A Roofing'], 'still only her own paying dealer');
+      // Joseph still sees it, listed as in-house, with the stray assignment on it.
+      const all = await api('GET', '/rep-dealers', { as: USERS.admin });
+      const gss = all.body.dealers.find((d) => d.name === 'Good Steward Structures');
+      eq(gss.billing_exempt, true, 'still flagged in-house for Joseph');
+      await sql(`delete from rep_assignments where tenant_id = $1 and closer_rep_id = $2`,
+        [tenants['good-steward-structures'].id, rep.Alice.id]);
+      return 'the exempt half of the filter holds even against a row written by hand';
     });
 
     // ===========================================================================
