@@ -9,6 +9,7 @@ const brandGuess = require('../lib/brandGuess');
 const dealerBuildEmails = require('../lib/dealerBuildEmails');
 const repInviteEmail = require('../lib/repInviteEmail');
 const { sendEmail } = require('../lib/postmark');
+const tenantCopy = require('../lib/tenantCopy');
 
 // The sales-rep program (see the rep_program migration and workers/repEarnings.js).
 //
@@ -338,6 +339,24 @@ router.post('/reps/:id/invite', requireAuth, wrap(async (req, res) => {
 // ---------------------------------------------------------------------------
 // Leads
 // ---------------------------------------------------------------------------
+// The wording a rep collects for this business. Every key optional, every
+// key a string: cleanCopy drops blanks and anything that is not a key we
+// know, so a form posting nine empty boxes stores null rather than nine
+// empty strings. See api/src/lib/tenantCopy.js for what each one feeds.
+// JSON.stringify(null) is the string "null", which Postgres casts to a jsonb
+// null — a value, not an absent one, and jsonb_typeof says 'null' rather than
+// 'object'. Storing that would both fail rep_leads_copy_is_object and make
+// "no wording" indistinguishable from "wording that is literally null", so an
+// empty result becomes a real SQL NULL here.
+function copyParam(input) {
+  const cleaned = tenantCopy.cleanCopy(input);
+  return cleaned === null ? null : JSON.stringify(cleaned);
+}
+
+const copyBody = z.object(
+  Object.fromEntries(tenantCopy.COPY_FIELDS.map((f) => [f.key, z.string().max(f.max).optional()]))
+).strict();
+
 const leadFields = {
   company_name: z.string().trim().min(1).max(200),
   contact_name: optText(120),
@@ -347,6 +366,8 @@ const leadFields = {
   notes: optText(2000),
   brought_in_by_rep_id: uuid.nullable().optional(),
   found_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  // null clears it back to the generic wording; omitting it leaves it alone.
+  copy: copyBody.nullable().optional(),
 };
 const leadCreate = z.object({ ...leadFields, confirm_duplicate: z.boolean().optional() });
 // Won is deliberately absent: it goes through POST /rep-leads/:id/win, which
@@ -356,7 +377,8 @@ const leadPatch = z.object({ ...leadFields, status: z.enum(['open', 'lost']).opt
 const LEAD_COLUMNS = `l.id, l.company_name, l.contact_name, l.phone, l.email, l.website, l.notes,
   l.brought_in_by_rep_id, l.found_on, l.status,
   l.closed_by_rep_id, l.onboarded_by_rep_id, l.closed_on, l.tenant_id, l.created_at,
-  l.build_status, l.brand, l.brand_source, l.reward_amount_cents, l.built_at, l.declined_reason`;
+  l.build_status, l.brand, l.brand_source, l.reward_amount_cents, l.built_at, l.declined_reason,
+  l.copy`;
 
 // A rep calling this gets only their own leads — not because of anything
 // here, but because RLS gives them no other rows.
@@ -433,11 +455,14 @@ router.post('/rep-leads', requireAuth, wrap(async (req, res) => {
       }
     }
     const { rows: [lead] } = await client.query(
-      `insert into rep_leads (company_name, contact_name, phone, email, website, notes, brought_in_by_rep_id, found_on)
-       values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::date, current_date))
+      `insert into rep_leads (company_name, contact_name, phone, email, website, notes, brought_in_by_rep_id, found_on, copy)
+       values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::date, current_date), $9::jsonb)
        returning ${LEAD_COLUMNS.replace(/l\./g, '')}`,
       [body.company_name, body.contact_name || null, body.phone || null, body.email || null,
-       body.website || null, body.notes || null, broughtIn, body.found_on || null]
+       body.website || null, body.notes || null, broughtIn, body.found_on || null,
+       // Blank boxes store nothing: the build fills them with the generic
+       // wording, and a lead with no wording is the normal case, not an error.
+       copyParam(body.copy)]
     );
     return lead;
   });
@@ -460,6 +485,13 @@ router.patch('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
         vals.push(body[key] === '' ? null : body[key]);
         sets.push(`${key} = $${vals.length}`);
       }
+    }
+    // Wording is replaced wholesale rather than merged: the form always sends
+    // every box, so a box someone emptied means "drop back to the generic
+    // wording for that line", and a merge would make that impossible.
+    if (body.copy !== undefined) {
+      vals.push(copyParam(body.copy));
+      sets.push(`copy = $${vals.length}::jsonb`);
     }
     if (!sets.length) throw httpError(400, 'Nothing to change');
     // A won lead stays won: winning is the one step that fixes who gets the
@@ -1016,6 +1048,10 @@ const buildBody = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   slug: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{1,48}$/).optional(),
   brand: brandBody.optional(),
+  // Last chance to fix the wording before their first customer reads it. What
+  // the build screen sends is what the rep collected, with whatever Joseph
+  // changed; anything still blank is filled from the generic wording below.
+  copy: copyBody.optional(),
   // The one price that varies per dealer: the gift card. $500 and 30% never do.
   reward_amount_cents: z.number().int().min(500).max(50000).optional(),
   admin_name: z.string().trim().min(1).max(120).optional(),
@@ -1058,7 +1094,15 @@ router.post('/rep-leads/:id/build', requireAuth, wrap(async (req, res) => {
       slug,
       adminEmail,
       adminName: (body.admin_name || lead.contact_name || name).trim(),
-      brand: body.brand || lead.brand || {},
+      // branding.copy is where every public page and the invite email read
+      // their sentences from, so the wording rides along inside brand rather
+      // than needing its own argument through approve_lead_build. Every key is
+      // always set: a new dealer must never fall through to the shed wording
+      // that tenant-branding.js still defaults to for the older tenants.
+      brand: {
+        ...(body.brand || lead.brand || {}),
+        copy: tenantCopy.copyForNewTenant(body.copy !== undefined ? body.copy : lead.copy),
+      },
       rewardCents: body.reward_amount_cents != null ? body.reward_amount_cents : lead.reward_amount_cents,
     };
   });

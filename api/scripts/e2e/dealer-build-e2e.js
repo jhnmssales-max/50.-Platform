@@ -222,6 +222,8 @@ async function main() {
       body: {
         company_name: 'Silver Run Home Improvements', contact_name: 'Christian', email: 'christian@silverrun.test',
         phone: '717-555-0199', website: `${SITE}/`, notes: 'Wants it before spring.',
+        // Christian's own words. A roofer does not say "buy a shed".
+        copy: { friendAction: 'hire us for your roof', inquiryNoun: 'roofing inquiry' },
       },
     })).body;
 
@@ -343,6 +345,48 @@ async function main() {
     });
 
     // ======================================================================
+    section('The wording their customers will read');
+    await check('What the rep typed is stored on the lead, trimmed, and nothing else is', async () => {
+      const r = await api('GET', '/rep-leads', { as: ALICE });
+      const mine = r.body.leads.find((x) => x.id === lead.id);
+      eq(mine.copy.friendAction, 'hire us for your roof', 'the rep\'s words');
+      eq(mine.copy.inquiryNoun, 'roofing inquiry', 'and the second one');
+      eq(Object.keys(mine.copy).length, 2, 'only the two boxes that were filled');
+      return 'two lines in their own words, seven left to the generic wording';
+    });
+
+    await check('Blank boxes are dropped rather than stored empty, and junk keys are refused', async () => {
+      const blanks = (await api('POST', '/rep-leads', {
+        as: USERS.admin,
+        body: { company_name: 'All Blanks Co', copy: { friendAction: '   ', eligibility: '' } },
+      })).body;
+      eq(blanks.copy, null, 'nine empty boxes store nothing');
+      const junk = await api('POST', '/rep-leads', {
+        as: USERS.admin, body: { company_name: 'Junk Co', copy: { notAKey: 'x' } },
+      });
+      eq(junk.status, 400, 'an unknown key is a bad request, not silently dropped');
+      return 'blank -> null, unknown key -> 400';
+    });
+
+    await check('A rep can come back and fill the wording in later, and empty it again', async () => {
+      const later = (await api('PATCH', `/rep-leads/${lead.id}`, {
+        as: ALICE,
+        body: { copy: { friendAction: 'hire us for your roof', inquiryNoun: 'roofing inquiry', offerHow: 'Have us do your roof and you both get {reward}.' } },
+      })).body;
+      eq(later.copy.offerHow, 'Have us do your roof and you both get {reward}.', 'the line added on the second call');
+      eq(Object.keys(later.copy).length, 3, 'now three');
+
+      const cleared = (await api('PATCH', `/rep-leads/${lead.id}`, { as: ALICE, body: { copy: null } })).body;
+      eq(cleared.copy, null, 'clearing it drops back to the generic wording');
+
+      // Put it back the way the rest of this file expects to find it.
+      await api('PATCH', `/rep-leads/${lead.id}`, {
+        as: ALICE, body: { copy: { friendAction: 'hire us for your roof', inquiryNoun: 'roofing inquiry' } },
+      });
+      return 'added later, cleared, restored';
+    });
+
+    // ======================================================================
     section('The queue');
     await check('A won lead goes into the queue by itself, and no dealer exists yet', async () => {
       const tenantsBefore = (await sql('select count(*)::int n from tenants'))[0].n;
@@ -399,6 +443,44 @@ async function main() {
       eq(t.reward_amount_cents, 2500, 'card amount on the tenant');
       eq(t.billing_required, true, 'they are gated into paying the $500');
       return `${t.name} (${t.slug}), ${t.branding.primaryColor}, $25 card, billing required`;
+    });
+
+    await check('Their wording lands on the dealer, with every other line filled in generically', async () => {
+      const [t] = await sql('select branding from tenants where id = $1', [built.tenant_id]);
+      const c = t.branding.copy;
+      assert(c, 'the dealer has wording at all');
+      eq(c.friendAction, 'hire us for your roof', 'the rep\'s words, intact');
+      eq(c.inquiryNoun, 'roofing inquiry', 'and the second one');
+      eq(c.offerHow.includes('make a purchase with us'), true, 'a blank line got the generic wording');
+      eq(Object.keys(c).length, 9, 'every line is set, so nothing can fall through to a default');
+      return `${Object.keys(c).length} lines: 2 Christian's, 7 generic`;
+    });
+
+    await check('No shed wording reaches a dealer who never sold a shed', async () => {
+      const [t] = await sql('select branding from tenants where id = $1', [built.tenant_id]);
+      const all = JSON.stringify(t.branding.copy).toLowerCase();
+      assert(!all.includes('shed'), `shed wording leaked: ${all}`);
+      assert(!all.includes('building'), `building wording leaked: ${all}`);
+      // And the older tenants are untouched: their pages still read from
+      // tenant-branding.js's shed default, which this must not have changed.
+      const [gss] = await sql(`select branding from tenants where slug = 'good-steward-structures'`);
+      eq(gss.branding.copy, undefined, 'GSS still has no copy of its own, so it keeps the old default');
+      return 'nothing about sheds or buildings on the roofer; GSS unchanged';
+    });
+
+    await check('Joseph can overrule the rep\'s wording on the build screen', async () => {
+      const late = (await api('POST', '/rep-leads', {
+        as: USERS.admin, body: { company_name: 'Late Edit Co', email: 'late@edit.test', copy: { friendAction: 'typo here' } },
+      })).body;
+      // Joseph winning it on a rep's behalf has to name the rep, same as always.
+      await api('POST', `/rep-leads/${late.id}/win`, { as: USERS.admin, body: { closed_by_rep_id: repRow.id } });
+      const r = await api('POST', `/rep-leads/${late.id}/build`, {
+        as: USERS.admin, body: { copy: { friendAction: 'book your install' } },
+      });
+      eq(r.status, 201, `build: ${JSON.stringify(r.body)}`);
+      const [t] = await sql('select branding from tenants where id = $1', [r.body.tenant_id]);
+      eq(t.branding.copy.friendAction, 'book your install', 'what Joseph typed wins over what the rep typed');
+      return 'the build screen is the last word';
     });
 
     await check('The dealer gets a login with no password and a link to set one; the rep is told it is live', async () => {

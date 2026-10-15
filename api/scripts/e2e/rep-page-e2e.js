@@ -557,6 +557,78 @@ async function main() {
       return 'lead added under Alice, with its website';
     });
 
+    await check('She can type the business\'s own wording onto a lead, and it reaches the database', async () => {
+      await openAddLead(repPage);
+      // The wording section is deliberately shut: it is optional, and a rep
+      // writing a lead down on a call should not have to scroll past it.
+      const shut = await repPage.$eval('#leadForm details.wording', (d) => !d.open);
+      assert(shut, 'the wording section starts closed');
+      await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
+      await repPage.fill('#leadForm [name=company_name]', 'Gutters By Dale');
+      await repPage.fill('#leadForm [name=copy_friendAction]', 'book your gutter job');
+      await repPage.fill('#leadForm [name=copy_inquiryNoun]', 'gutter inquiry');
+      await repPage.click('#leadForm button[type=submit]');
+      await repPage.waitForFunction(() => document.getElementById('tab-leads').textContent.includes('Gutters By Dale'));
+      const [row] = await sql(`select copy from rep_leads where company_name = 'Gutters By Dale'`);
+      eq(row.copy.friendAction, 'book your gutter job', 'what she typed');
+      eq(row.copy.inquiryNoun, 'gutter inquiry', 'and the second line');
+      eq(Object.keys(row.copy).length, 2, 'only the boxes she filled');
+      return '2 of 9 lines stored, the rest left to the generic wording';
+    });
+
+    await check('Every empty box shows the wording that runs instead, so nothing looks missing', async () => {
+      await openAddLead(repPage);
+      await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
+      const holders = await repPage.$$eval('#leadForm details.wording [name^=copy_]', (els) =>
+        els.map((e) => ({ name: e.name, placeholder: e.placeholder })));
+      eq(holders.length, 9, 'nine lines');
+      assert(holders.every((h) => h.placeholder && h.placeholder.length > 2), `a box with no fallback shown: ${JSON.stringify(holders)}`);
+      const all = holders.map((h) => h.placeholder).join(' ').toLowerCase();
+      assert(!all.includes('shed'), `shed wording offered to a non-shed business: ${all}`);
+      return 'nine boxes, each showing its trade-neutral fallback';
+    });
+
+    await check('The lead row says how much is in their own words, and reopens for editing', async () => {
+      const rowText = await repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }).textContent();
+      assert(/2 of 9 in their own words/.test(rowText), `row: ${rowText}`);
+      await repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }).locator('[data-wording]').click();
+      await repPage.waitForSelector('#wordingForm');
+      eq(await repPage.inputValue('#wordingForm [name=copy_friendAction]'), 'book your gutter job', 'reopens with what she typed');
+      // A line added on the second visit, which is the normal way this gets filled.
+      await repPage.fill('#wordingForm [name=copy_offerHow]', 'Have us do your gutters and you both get {reward}.');
+      await repPage.evaluate(() => { document.getElementById('appMsg').textContent = ''; });
+      await repPage.click('#saveWording');
+      await repPage.waitForFunction(() => document.getElementById('appMsg').textContent.includes('Wording saved'));
+      // closeDialog() only closes the dialog; its markup stays in the DOM.
+      await repPage.waitForSelector('#wordingForm', { state: 'hidden' });
+      const [row] = await sql(`select copy from rep_leads where company_name = 'Gutters By Dale'`);
+      eq(Object.keys(row.copy).length, 3, 'now three lines');
+      eq(row.copy.offerHow, 'Have us do your gutters and you both get {reward}.', 'the line added later');
+      return 'row shows 2 of 9, dialog reopens, a third line added later';
+    });
+
+    await check('Clearing every box drops the lead back to the generic wording', async () => {
+      await repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }).locator('[data-wording]').click();
+      await repPage.waitForSelector('#wordingForm');
+      for (const k of ['friendAction', 'inquiryNoun', 'offerHow']) {
+        await repPage.fill(`#wordingForm [name=copy_${k}]`, '');
+      }
+      await repPage.evaluate(() => { document.getElementById('appMsg').textContent = ''; });
+      await repPage.click('#saveWording');
+      await repPage.waitForFunction(() => document.getElementById('appMsg').textContent.includes('Wording saved'));
+      // closeDialog() only closes the dialog; its markup stays in the DOM.
+      await repPage.waitForSelector('#wordingForm', { state: 'hidden' });
+      const [row] = await sql(`select copy from rep_leads where company_name = 'Gutters By Dale'`);
+      eq(row.copy, null, 'emptied back to null, not nine blank strings');
+      // The dialog closes before the list behind it finishes redrawing, so
+      // wait for the row itself rather than reading it mid-redraw.
+      await repPage.waitForFunction(() => {
+        const tr = [...document.querySelectorAll('#tab-leads tr')].find((r) => r.textContent.includes('Gutters By Dale'));
+        return tr && tr.textContent.includes('nothing written yet');
+      }, { timeout: 10000 });
+      return 'cleared to null; the row says so';
+    });
+
     await check('Marking her own lead won is a plain confirmation and builds nothing', async () => {
       const tenantsBefore = (await sql('select count(*)::int n from tenants'))[0].n;
       await repPage.locator('#tab-leads tr', { hasText: 'Her Own Prospect' }).locator('[data-win]').click();
