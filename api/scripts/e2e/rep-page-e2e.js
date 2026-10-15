@@ -202,15 +202,59 @@ async function main() {
     await page.fill('#email', u.email);
     await page.fill('#password', PASSWORD);
     await page.click('#loginBtn');
-    if (expectApp) await page.waitForSelector('#app:not(.hide) nav.tabs button', { timeout: 8000 });
+    if (!expectApp) return;
+    await page.waitForSelector('#app:not(.hide) nav.tabs button', { timeout: 8000 });
+    // Signing in draws the first tab, which fetches and then redraws it. Let
+    // that finish: a check that starts typing into a form the page is about
+    // to replace is testing the race, not the feature.
+    await page.waitForLoadState('networkidle').catch(() => {});
   }
   const tabNames = (page) => page.$$eval('#tabs button', (bs) => bs.map((b) => b.textContent));
   // The add-a-lead panel starts open only while there are no leads, so set it
   // open rather than clicking the summary, which toggles whichever way it was.
+  // Open the add-a-lead panel and fill it, as one step that survives the tab
+  // redrawing underneath it. The page restores what was typed across a
+  // redraw, but a redraw already in flight when the panel is opened restores
+  // the state it captured BEFORE that — so this checks the values actually
+  // stuck, and starts over if they did not.
+  async function addLead(page, fields) {
+    await page.waitForSelector('#tab-leads details');
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await page.evaluate(() => {
+        const d = document.querySelector('#tab-leads details');
+        if (d) d.open = true;
+      });
+      const visible = await page.waitForSelector('#leadForm [name=company_name]', { state: 'visible', timeout: 4000 }).catch(() => null);
+      if (!visible) continue;
+      for (const [name, value] of Object.entries(fields)) {
+        const el = await page.$(`#leadForm [name="${name}"]`);
+        if (!el) break;
+        if (await el.evaluate((n) => n.tagName) === 'SELECT') await el.selectOption({ label: value }).catch(() => {});
+        else await el.fill(String(value)).catch(() => {});
+      }
+      await page.waitForTimeout(150);
+      const stuck = await page.evaluate((f) => {
+        const form = document.getElementById('leadForm');
+        if (!form || !form.offsetParent) return false;
+        return Object.keys(f).every((name) => {
+          const el = form.querySelector(`[name="${name}"]`);
+          return el && String(el.value || '').length > 0;
+        });
+      }, fields);
+      if (stuck) return;
+    }
+    throw new Error('could not fill the add-a-lead form: the tab kept redrawing under it');
+  }
+
   async function openAddLead(page) {
     await page.waitForSelector('#tab-leads details');
-    await page.evaluate(() => { document.querySelector('#tab-leads details').open = true; });
-    await page.waitForSelector('#leadForm [name=company_name]', { state: 'visible' });
+    await page.waitForFunction(() => {
+      const d = document.querySelector('#tab-leads details');
+      if (!d) return false;
+      d.open = true;
+      const input = document.querySelector('#leadForm [name=company_name]');
+      return Boolean(input && input.offsetParent !== null);
+    }, { timeout: 15000 });
   }
   const eqArr = (a, b, what) => assert(JSON.stringify(a) === JSON.stringify(b), `${what}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
   const eq = (a, b, what) => assert(JSON.stringify(a) === JSON.stringify(b), `${what}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
@@ -567,11 +611,12 @@ async function main() {
       await adminPage.click('[data-tab=leads]');
       await adminPage.waitForSelector('#tab-leads [data-files]');
       // Make a lead with a website, so the brand guess has somewhere to look.
-      await openAddLead(adminPage);
-      await adminPage.fill('#leadForm [name=company_name]', 'Hill Country Barns');
-      await adminPage.fill('#leadForm [name=email]', 'owner@hillcountry.test');
-      await adminPage.fill('#leadForm [name=contact_name]', 'Dale');
-      await adminPage.fill('#leadForm [name=website]', `${AUTH_BASE}/prospect-site`);
+      await addLead(adminPage, {
+        company_name: 'Hill Country Barns',
+        email: 'owner@hillcountry.test',
+        contact_name: 'Dale',
+        website: `${AUTH_BASE}/prospect-site`,
+      });
       await adminPage.click('#leadForm button[type=submit]');
       await adminPage.waitForFunction(() => document.getElementById('tab-leads').textContent.includes('Hill Country Barns'));
 
@@ -689,6 +734,92 @@ async function main() {
       return 'no To build tab for either';
     });
     await adminPage.context().close();
+
+    // ======================================================================
+    section('Following the emailed link, the way a real rep does');
+    // The thing that actually broke in production: Supabase hands the session
+    // back in the URL's FRAGMENT, which never reaches a server. A page that
+    // does not read it shows a sign-in form to someone who has no password
+    // yet. These checks walk that exact path.
+    await check('Landing on /reps from the link shows a "choose a password" box, not a sign-in form', async () => {
+      // A rep of this section's own, because Bob was switched off earlier and
+      // a switched-off rep cannot be invited — correctly.
+      const adminToken = auth.mintToken(USERS.admin);
+      const callApi = async (path, body) => {
+        const r = await fetch(`${API_ORIGIN}/api${path}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+          body: JSON.stringify(body || {}),
+        });
+        return { status: r.status, body: await r.json().catch(() => null) };
+      };
+      const made = await callApi('/reps', { name: 'Dana Rep', email: 'dana@x.test' });
+      eq(made.status, 201, 'rep created');
+      const invited = await callApi(`/reps/${made.body.id}/invite`);
+      eq(invited.status, 200, `invite: ${JSON.stringify(invited.body)}`);
+
+      // Dana's account now exists with NO password, exactly as after an invite.
+      const token = auth.mintToken({ id: auth.userIdFor('dana@x.test'), email: 'dana@x.test' });
+
+      const p = await newPage('from-link');
+      await p.goto(`${PAGE}#access_token=${token}&refresh_token=r1&type=recovery&expires_in=3600`);
+      await p.waitForSelector('#setPwBox:not(.hide)', { timeout: 10000 });
+      assert(await p.isHidden('#loginBox'), 'the sign-in form is out of the way');
+      assert(await p.isHidden('#app'), 'and the app is not open yet');
+      assert((await p.textContent('#setPwWho')).includes('dana@x.test'), 'it says who they are');
+
+      // The session must not be left sitting in the address bar.
+      const url = p.url();
+      assert(!url.includes('access_token'), `the token is still in the URL: ${url}`);
+      global.__linkPage = p;
+      return 'set-password box shown, address bar cleaned';
+    });
+
+    await check('Mismatched passwords are caught before anything is sent', async () => {
+      const p = global.__linkPage;
+      await p.fill('#newPw', 'danas-new-password');
+      await p.fill('#newPw2', 'something-else');
+      await p.click('#setPwBtn');
+      await p.waitForFunction(() => document.getElementById('setPwMsg').textContent.includes('do not match'));
+      // And the account still has no password.
+      const signIn = await fetch(`${AUTH_BASE}/auth/v1/token?grant_type=password`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'dana@x.test', password: 'danas-new-password' }),
+      });
+      eq(signIn.status, 400, 'still no password set');
+      return 'told plainly, nothing sent';
+    });
+
+    await check('Choosing a password signs them straight in, and works again next time', async () => {
+      const p = global.__linkPage;
+      await p.fill('#newPw', 'danas-new-password');
+      await p.fill('#newPw2', 'danas-new-password');
+      await p.click('#setPwBtn');
+      await p.waitForSelector('#app:not(.hide) nav.tabs button', { timeout: 10000 });
+      const tabs = await tabNames(p);
+      eqArr(tabs, ['My leads', 'My dealers', 'My money'], 'she lands in her own pipeline');
+
+      // And the password really is set: an ordinary sign-in works now.
+      const signIn = await fetch(`${AUTH_BASE}/auth/v1/token?grant_type=password`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'dana@x.test', password: 'danas-new-password' }),
+      });
+      eq(signIn.status, 200, 'she can sign in normally from now on');
+      await p.context().close();
+      return 'straight into his pipeline; the password works on its own afterwards';
+    });
+
+    await check('An expired or already-used link says so instead of failing silently', async () => {
+      const p = await newPage('bad-link');
+      await p.goto(`${PAGE}#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired`);
+      await p.waitForFunction(() => document.getElementById('loginMsg').classList.contains('show'));
+      const msg = await p.textContent('#loginMsg');
+      assert(/invalid or has expired/i.test(msg), `message: ${msg}`);
+      assert(/fresh link/i.test(msg), 'and says what to do about it');
+      assert(!p.url().includes('error'), 'the address bar is cleaned');
+      await p.context().close();
+      return msg;
+    });
 
     section('Page health');
     await check('No script errors or failed API calls were logged in the browser', async () => {

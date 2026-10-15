@@ -122,6 +122,36 @@ function createAuthStandIn({ onUserCreated } = {}) {
     res.json({ properties: { action_link: `http://127.0.0.1/auth/v1/verify?token=${token}&type=${req.body.type}` } });
   });
 
+  // The two endpoints a page calls while someone is choosing a password after
+  // following an emailed link: who am I, and here is my new password.
+  function userFromBearer(req) {
+    const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
+    if (!token) return null;
+    try {
+      const claims = jwt.verify(token, publicKey.export({ type: 'spki', format: 'pem' }), { algorithms: ['ES256'] });
+      return [...usersByEmail.values()].find((u) => u.id === claims.sub) || null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  app.get('/auth/v1/user', (req, res) => {
+    const user = userFromBearer(req);
+    if (!user) return res.status(401).json({ msg: 'invalid claim: missing sub claim' });
+    res.json({ id: user.id, email: user.email });
+  });
+
+  app.put('/auth/v1/user', (req, res) => {
+    const user = userFromBearer(req);
+    if (!user) return res.status(401).json({ msg: 'invalid claim: missing sub claim' });
+    const password = String((req.body && req.body.password) || '');
+    // Supabase's own minimum, so a page that does not check gets the same
+    // refusal here that it would get in production.
+    if (password.length < 6) return res.status(422).json({ msg: 'Password should be at least 6 characters' });
+    user.password = password;
+    res.json({ id: user.id, email: user.email });
+  });
+
   function addUser({ id, email, password }) {
     usersByEmail.set(email.toLowerCase(), { id, email, password });
   }
