@@ -372,7 +372,7 @@ async function renderLeads(){
       '<td class="num"><button class="btn small secondary" data-files="' + x.id + '">Files</button> ' +
         (x.status === 'won' ? (x.build_status === 'awaiting_approval' ? '<span class="muted">waiting on Joseph</span>' : '') :
         '<button class="btn small" data-win="' + x.id + '">Mark won</button> ' +
-        (x.status === 'open' ? '<button class="btn small secondary" data-lost="' + x.id + '">Lost</button>' : '<button class="btn small secondary" data-reopen="' + x.id + '">Reopen</button>')) + '</td></tr>'
+        '<button class="btn small danger" data-lost="' + x.id + '">Lost</button>') + '</td></tr>'
     ).join('') || '<tr><td colspan="7" class="muted" style="padding:18px">No leads yet.</td></tr>') +
     '</tbody></table></div>';
 
@@ -393,8 +393,7 @@ async function renderLeads(){
   form.addEventListener('submit', (e) => { e.preventDefault(); submitLead(form, false); });
   $('tab-leads').querySelectorAll('[data-win]').forEach((b) => b.addEventListener('click', () => winLeadDialog(b.dataset.win)));
   $('tab-leads').querySelectorAll('[data-files]').forEach((b) => b.addEventListener('click', () => filesDialog(b.dataset.files)));
-  $('tab-leads').querySelectorAll('[data-lost]').forEach((b) => b.addEventListener('click', () => leadStatus(b.dataset.lost, 'lost')));
-  $('tab-leads').querySelectorAll('[data-reopen]').forEach((b) => b.addEventListener('click', () => leadStatus(b.dataset.reopen, 'open')));
+  $('tab-leads').querySelectorAll('[data-lost]').forEach((b) => b.addEventListener('click', () => lostDialog(b.dataset.lost)));
 }
 function todayYmd(){ return new Date().toLocaleDateString('en-CA', { timeZone: TZ }); }
 function formData(form){ const o = {}; new FormData(form).forEach((v, k) => { o[k] = typeof v === 'string' ? v.trim() : v; }); return o; }
@@ -424,7 +423,34 @@ async function submitLead(form, confirmDuplicate){
     } else flash(err.message);
   }
 }
-async function leadStatus(id, status){ try{ await patch('/rep-leads/' + id, { status }); await renderLeads(); }catch(err){ flash(err.message); } }
+// Lost removes the lead for good: the company, the contact, the notes and any
+// files on it. Worth a real dialog rather than a browser confirm, because it
+// cannot be undone and the list is where someone's work lives.
+function lostDialog(id){
+  const lead = state.leads.find((x) => x.id === id);
+  const files = '';
+  openDialog(
+    '<h3>Lost ' + esc(lead.company_name) + '?</h3>' +
+    '<p>This removes them completely \u2014 the company, the contact, the notes and anything uploaded. It cannot be undone.</p>' +
+    '<p class="muted">Nobody is holding the company after this, so any rep is free to work them again later.</p>' +
+    files +
+    '<div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Keep them</button>' +
+    '<button class="btn danger" id="confirmLost" type="button">Remove them</button></div>'
+  );
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('confirmLost').addEventListener('click', async () => {
+    const btn = $('confirmLost');
+    btn.disabled = true; btn.textContent = 'Removing\u2026';
+    try{
+      const out = await api('/rep-leads/' + id, { method:'DELETE' });
+      closeDialog();
+      flash(out.deleted + ' removed.', true);
+      await renderLeads();
+    }catch(err){
+      closeDialog(); flash(err.message);
+    }
+  });
+}
 
 // Marking a lead won. For a rep this is a plain confirmation: the credit is
 // theirs, and Joseph builds the dealer afterwards. For Joseph and the helper

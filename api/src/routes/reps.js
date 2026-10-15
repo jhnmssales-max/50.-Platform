@@ -473,6 +473,57 @@ router.patch('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
   res.json(lead);
 }));
 
+// Losing a lead deletes it outright — the company, the contact, the notes and
+// any brand files the rep dropped on it. That is what "lost" is meant to do
+// here: a dead prospect leaves no trace and stops cluttering the list.
+//
+// Two things this deliberately will NOT do:
+//   - A WON lead can never be deleted this way. It is the record of who closed
+//     a dealer, and the dealer itself points back at it.
+//   - It does not quietly keep the company reserved. Once it is gone the
+//     duplicate check no longer knows about it, so any rep is free to work
+//     that company again — which is the right answer for a prospect nobody
+//     managed to close.
+//
+// Who may delete: RLS decides, under the signed-in user, exactly as for every
+// other read of this lead — a rep can only reach their own. The delete itself
+// then runs as the service role, because rep_leads grants no DELETE to a
+// signed-in role at all; the authorization already happened a line earlier.
+router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+
+  const lead = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { rep: true });
+    const { rows: [l] } = await client.query(
+      'select id, company_name, status, build_status from rep_leads where id = $1',
+      [id]
+    );
+    // Not theirs, or not there: RLS has already made those the same thing.
+    if (!l) throw httpError(404, 'No such lead');
+    if (l.status === 'won') {
+      throw httpError(409, 'That lead was won, so it cannot be deleted — it is the record of who closed them.', 'won_cannot_delete');
+    }
+    const { rows: files } = await client.query('select storage_path from rep_lead_files where lead_id = $1', [id]);
+    return { ...l, files };
+  });
+
+  await withServiceRole(async (client) => {
+    // rep_lead_files cascades on the lead's delete, so the rows go with it.
+    await assertRowsAffected(
+      client,
+      await client.query(`delete from rep_leads where id = $1 and status <> 'won'`, [id]),
+      { table: 'rep_leads', id }
+    );
+  });
+
+  // The stored files afterwards, and best effort: the rows are the record, and
+  // a leftover object in a bucket nobody has a link to is litter, not a leak.
+  // It must never turn a delete that already happened into an error.
+  for (const f of lead.files) await storage.remove(f.storage_path).catch(() => {});
+
+  res.json({ ok: true, deleted: lead.company_name, files_removed: lead.files.length });
+}));
+
 const winBody = z.object({
   closed_by_rep_id: uuid.optional(),
   onboarded_by_rep_id: uuid.nullable().optional(),

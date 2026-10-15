@@ -320,12 +320,17 @@ async function main() {
       await page.click('#addAnyway');
       await page.waitForFunction(() => document.querySelectorAll('#tab-leads tbody tr').length === 2);
     });
-    await check('Mark the duplicate lost, then reopen it', async () => {
-      const lostBtn = page.locator('[data-lost]').first();
-      await lostBtn.click();
-      await page.waitForSelector('.pill.lost');
-      await page.click('[data-reopen]');
-      await page.waitForFunction(() => !document.querySelector('.pill.lost'));
+    await check('Lost removes the duplicate for good, after saying so', async () => {
+      const before = await page.$$eval('#tab-leads tbody tr', (r) => r.length);
+      await page.locator('[data-lost]').first().click();
+      await page.waitForSelector('#confirmLost');
+      const words = await page.textContent('#dlg');
+      assert(/cannot be undone/.test(words), `dialog: ${words}`);
+      assert(/free to work them again/.test(words), 'it says the company is no longer held');
+      await page.click('#confirmLost');
+      await page.waitForFunction((n) => document.querySelectorAll('#tab-leads tbody tr').length === n - 1, before);
+      eq((await sql(`select count(*)::int n from rep_leads where lower(company_name) like 'acme%'`))[0].n, 1, 'one Acme left, not two');
+      return `${before} leads, then ${before - 1}; the row is gone from the database too`;
     });
     await check('Mark the lead won: Alice closed, Bob onboarded, linked to Dealer A', async () => {
       await page.locator('[data-win]').first().click();

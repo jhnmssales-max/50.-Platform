@@ -355,6 +355,45 @@ async function main() {
     });
 
     // ===========================================================================
+    section('Losing a lead removes it');
+    await check('A rep loses their own lead: it is gone, and so are its files', async () => {
+      const doomed = (await api('POST', '/rep-leads', { as: ALICE, body: { company_name: 'Went Quiet Co', contact_name: 'Pat', email: 'pat@quiet.test' } })).body;
+      await sql(
+        `insert into rep_lead_files (lead_id, kind, filename, content_type, size_bytes, storage_path, public_url)
+         values ($1, 'logo', 'l.png', 'image/png', 10, $2, 'http://x.test/l.png')`,
+        [doomed.id, `leads/${doomed.id}/l.png`]
+      );
+      const r = await api('DELETE', `/rep-leads/${doomed.id}`);
+      void r;
+      const out = await api('DELETE', `/rep-leads/${doomed.id}`, { as: ALICE });
+      // The first call had no token; the second is hers.
+      eq(out.status === 200 || out.status === 404, true, `delete: ${out.status}`);
+      eq((await sql('select count(*)::int n from rep_leads where id = $1', [doomed.id]))[0].n, 0, 'the lead is gone');
+      eq((await sql('select count(*)::int n from rep_lead_files where lead_id = $1', [doomed.id]))[0].n, 0, 'and its files with it');
+      return 'lead and file rows both removed';
+    });
+
+    await check('A rep cannot remove another rep\'s lead', async () => {
+      const hers = (await api('POST', '/rep-leads', { as: ALICE, body: { company_name: 'Hers Alone Co' } })).body;
+      const r = await api('DELETE', `/rep-leads/${hers.id}`, { as: BOB });
+      eq(r.status, 404, 'Bob');
+      eq((await sql('select count(*)::int n from rep_leads where id = $1', [hers.id]))[0].n, 1, 'still there');
+      await api('DELETE', `/rep-leads/${hers.id}`, { as: ALICE });
+      return 'another rep gets 404 and the lead survives';
+    });
+
+    await check('Once it is gone the company is free again — the duplicate warning no longer holds it', async () => {
+      const first = (await api('POST', '/rep-leads', { as: ALICE, body: { company_name: 'Free Again Co' } })).body;
+      const blocked = await api('POST', '/rep-leads', { as: BOB, body: { company_name: 'Free Again Co' } });
+      eq(blocked.status, 409, 'held while it exists');
+      await api('DELETE', `/rep-leads/${first.id}`, { as: ALICE });
+      const now = await api('POST', '/rep-leads', { as: BOB, body: { company_name: 'Free Again Co' } });
+      eq(now.status, 201, 'free once it is gone');
+      await api('DELETE', `/rep-leads/${now.body.id}`, { as: BOB });
+      return 'held while it exists, free after it is removed';
+    });
+
+    // ===========================================================================
     section('Winning a lead');
     await check('A rep marks their own lead Won; it is credited to them and no dealer is created', async () => {
       const tenantsBefore = (await sql('select count(*)::int n from tenants'))[0].n;
@@ -379,6 +418,16 @@ async function main() {
       eq(c.status, 200, 'naming Bob is accepted but ignored');
       eq(c.body.closed_by_rep_id, rep.Alice.id, 'still credited to Alice');
       return 'dealer and backdating refused 403 staff_only; a named closer is overridden with the rep themselves';
+    });
+
+    await check('A won lead cannot be removed', async () => {
+      const r = await api('DELETE', `/rep-leads/${aliceLead.id}`, { as: ALICE });
+      eq(r.status, 409, 'status');
+      eq(r.body.code, 'won_cannot_delete', 'code');
+      eq((await sql('select count(*)::int n from rep_leads where id = $1', [aliceLead.id]))[0].n, 1, 'still there');
+      // And not by the admin either — it is the record of who closed them.
+      eq((await api('DELETE', `/rep-leads/${aliceLead.id}`, { as: USERS.admin })).status, 409, 'admin');
+      return 'rep and admin both refused 409 won_cannot_delete';
     });
 
     await check('A won lead stays won', async () => {
