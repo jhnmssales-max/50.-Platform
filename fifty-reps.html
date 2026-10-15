@@ -69,6 +69,7 @@
   .notice{background:var(--warn-bg);border:1px solid #E8D79C;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:14px;}
   .neg{color:var(--danger);}
   dialog{border:0;border-radius:14px;padding:22px;max-width:560px;width:calc(100% - 32px);box-shadow:0 20px 60px rgba(0,0,0,.35);}
+  dialog.wide{max-width:900px;}
   dialog::backdrop{background:rgba(0,0,0,.45);}
   .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap;}
   .inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
@@ -101,7 +102,11 @@
   .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px;}
   .legend span{display:inline-flex;align-items:center;gap:6px;}
   .legend i{width:10px;height:10px;border-radius:2px;display:inline-block;}
-  .reportgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;align-items:start;}
+  /* A twelve-month bar chart needs 520px before months start dropping off the
+     end, so a column narrower than that is not a column worth having: the grid
+     stacks instead. 260px fitted two charts into a dialog and cut November and
+     December off both. */
+  .reportgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,560px),1fr));gap:14px;align-items:start;}
   @media print{ header.top,nav.tabs,.noprint{display:none!important;} body{background:#fff;} }
 </style>
 </head>
@@ -327,8 +332,8 @@ async function start(){
   // No Reps tab (there is only them) and no Money tab (that is everyone's).
   const tabs = state.isRep
     ? [['leads','My leads'],['dealers','My dealers'],['mymoney','My money']]
-    : [['leads','Leads'],['reps','Reps'],['dealers','Dealers']];
-  if(state.isAdmin) tabs.push(['builds','Build dashboards'], ['money','Money'], ['company','Company']);
+    : [['leads','Leads'],['reps','Reps'],['dealers','Companies']];
+  if(state.isAdmin) tabs.push(['builds','Build dashboards'], ['money','Money'], ['company','Finances']);
   $('tabs').innerHTML = tabs.map(([k,l]) => '<button type="button" data-tab="' + k + '">' + l + '</button>').join('');
   $('tabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
   showTab(state.tab);
@@ -353,7 +358,14 @@ async function showTab(tab){
 }
 
 /* ---------- dialog ---------- */
-function openDialog(html){ const d = $('dlg'); d.innerHTML = html; if(!d.open) d.showModal(); return d; }
+function openDialog(html, { wide = false } = {}){
+  const d = $('dlg');
+  d.innerHTML = html;
+  // Reports are sheets of twelve months and several charts; forms are not.
+  d.classList.toggle('wide', wide);
+  if(!d.open) d.showModal();
+  return d;
+}
 function closeDialog(){ const d = $('dlg'); if(d.open) d.close(); }
 
 /* ---------- the wording a dealer's own customers read ---------- */
@@ -1127,7 +1139,7 @@ async function buildDialog(leadId){
 // the same numbers. Nothing here is modelled: every figure is a count or a sum
 // of rows that exist.
 async function repReport(repId, year){
-  openDialog('<h3>Loading…</h3>');
+  openDialog('<h3>Loading…</h3>', { wide: true });
   let d;
   try{ d = await api('/reports/rep/' + repId + (year ? '?year=' + year : '')); }
   catch(err){ closeDialog(); return flash(err.message); }
@@ -1188,7 +1200,7 @@ async function repReport(repId, year){
       ', ' + now.awaiting_build + ' waiting to be built, ' + dollars(now.owed_cents) + ' owed.</p>' +
 
     '<div class="actions noprint"><button class="btn secondary" id="cancelDlg" type="button">Close</button></div>'
-  );
+  , { wide: true });
   $('cancelDlg').addEventListener('click', closeDialog);
   $('printReport').addEventListener('click', () => window.print());
   $('repYear').addEventListener('change', (e) => repReport(repId, e.target.value));
@@ -1200,7 +1212,7 @@ async function repReport(repId, year){
 // been worth. Deliberately the same furniture as a rep's year — same charts,
 // same print button — so Joseph is reading one kind of page, not three.
 async function companyReport(tenantId, year){
-  openDialog('<h3>Loading…</h3>');
+  openDialog('<h3>Loading…</h3>', { wide: true });
   let d;
   try{ d = await api('/reports/tenant/' + tenantId + (year ? '?year=' + year : '')); }
   catch(err){ closeDialog(); return flash(err.message); }
@@ -1284,7 +1296,7 @@ async function companyReport(tenantId, year){
     (d.caveats || []).map((x) => '<p class="muted">' + esc(x) + '</p>').join('') +
 
     '<div class="actions noprint"><button class="btn secondary" id="cancelDlg" type="button">Close</button></div>'
-  );
+  , { wide: true });
   $('cancelDlg').addEventListener('click', closeDialog);
   $('printReport').addEventListener('click', () => window.print());
   $('coYear').addEventListener('change', (e) => companyReport(tenantId, e.target.value));
@@ -1299,7 +1311,7 @@ async function renderCompany(year){
   const unpriced = d.expenses.filter((e) => e.amount_cents === 0).length;
 
   $('tab-company').innerHTML =
-    '<div class="head"><h2>Company</h2><div class="inline"><label style="margin:0">Year</label>' +
+    '<div class="head"><h2>Finances</h2><div class="inline"><label style="margin:0">Year</label>' +
       '<select id="coYear" style="width:auto">' + [d.year + 1, d.year, d.year - 1, d.year - 2].map((y) =>
         '<option value="' + y + '"' + (y === d.year ? ' selected' : '') + '>' + y + '</option>').join('') + '</select>' +
       '<button class="btn small secondary noprint" id="printCo" type="button">Print</button></div></div>' +

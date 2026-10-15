@@ -282,7 +282,7 @@ async function main() {
     await check('Admin signs in and sees all five of his tabs', async () => {
       await signIn(page, USERS.admin);
       const t = await tabNames(page);
-      assert(JSON.stringify(t) === JSON.stringify(['Leads', 'Reps', 'Dealers', 'Build dashboards', 'Money', 'Company']), `tabs: ${t}`);
+      assert(JSON.stringify(t) === JSON.stringify(['Leads', 'Reps', 'Companies', 'Build dashboards', 'Money', 'Finances']), `tabs: ${t}`);
       return `${await page.textContent('#who')}`;
     });
     await check('Add two reps (Alice, Bob) on the Reps tab', async () => {
@@ -497,6 +497,13 @@ async function main() {
       assert(bars > 0, `no bar has any height — the chart drew nothing. Dialog said: ${shown}`);
       const rows = await page.$$eval('#dlg table tbody tr', (els) => els.length);
       eq(rows, 13, 'twelve months and a total row');
+      // The month chart needs 520px of its own; a form-width dialog left
+      // November and December off the end. Nothing here may overflow.
+      const overflow = await page.$$eval('#dlg svg.chart', (els) => els.map((e) => ({
+        w: Math.round(e.getBoundingClientRect().width),
+        room: Math.round(e.parentElement.clientWidth),
+      })));
+      for (const o of overflow) assert(o.w <= o.room, `a chart is ${o.w}px in ${o.room}px of room`);
       // Every month is drawn, December included — it sits right at the edge of
       // the dialog, which is exactly where a month quietly goes missing.
       const labels = await page.$$eval('#dlg svg.chart text', (els) => els.map((e) => e.textContent));
@@ -540,12 +547,12 @@ async function main() {
 
     // ======================================================================
     section('Helper: sees no money, anywhere');
-    await check('Helper signs in: tabs are Leads, Reps, Dealers only (no Money)', async () => {
+    await check('Helper signs in: tabs are Leads, Reps, Companies only (no Money)', async () => {
       const hp = await newPage('helper');
       global.__helper = hp;
       await signIn(hp, USERS.helper);
       const t = await tabNames(hp);
-      assert(JSON.stringify(t) === JSON.stringify(['Leads', 'Reps', 'Dealers']), `tabs: ${t}`);
+      assert(JSON.stringify(t) === JSON.stringify(['Leads', 'Reps', 'Companies']), `tabs: ${t}`);
       assert(/helper/.test(await hp.textContent('#who')), 'who');
     });
     await check('No dollar sign appears on any tab, and the Reps table has no earned / owe columns', async () => {
@@ -1004,7 +1011,7 @@ async function main() {
       return `${charts} charts, ${bars} bars with height`;
     });
 
-    await check('The Company tab shows money in, money out and profit, and says what is estimated', async () => {
+    await check('The Finances tab shows money in, money out and profit, and says what is estimated', async () => {
       await coPage.click('[data-tab=company]');
       await coPage.waitForSelector('#tab-company svg.chart');
       const text = (await coPage.textContent('#tab-company')).replace(/\s+/g, ' ');
@@ -1037,12 +1044,12 @@ async function main() {
       return `profit ${profitBefore} -> ${profitAfter} after pricing Postmark at $15`;
     });
 
-    await check('Neither the helper nor a rep can open the Company tab', async () => {
+    await check('Neither the helper nor a rep can open the Finances tab', async () => {
       for (const who of [USERS.helper, { email: 'alice@x.test' }]) {
         const p = await newPage('no-company');
         await signIn(p, who);
         const t = await tabNames(p);
-        assert(!t.includes('Company'), `${who.email} sees: ${t}`);
+        assert(!t.includes('Finances'), `${who.email} sees: ${t}`);
         await p.context().close();
       }
       // And not by asking the API directly either.
@@ -1054,7 +1061,7 @@ async function main() {
       void out;
       const r = await fetch(`${API_ORIGIN}/api/reports/company`, { headers: { Authorization: `Bearer ${auth.mintToken(USERS.helper)}` } });
       eq(r.status, 403, 'helper, straight at the API');
-      return 'no Company tab for either; the API refuses the helper too';
+      return 'no Finances tab for either; the API refuses the helper too';
     });
     await coPage.context().close();
 

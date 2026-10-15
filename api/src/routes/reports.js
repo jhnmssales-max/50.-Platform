@@ -424,11 +424,19 @@ router.get('/reports/tenant/:id', requireAuth, wrap(async (req, res) => {
     // Ordered and rewarded are counted by when each actually happened, not by
     // when the referral first came in — a referral that lands in March and
     // orders in May belongs to May's orders and March's referrals.
+    // A rewarded referral ordered — nobody sends gift cards for a sale that
+    // did not happen. But ordered_at is only stamped when a referral passes
+    // THROUGH 'ordered' (see routes/referrals.js), and marking one straight
+    // from 'new' to 'rewarded' is the natural thing to do when the sale is
+    // already closed. Counting ordered_at alone therefore reported companies
+    // with rewards paid and nothing ordered. Fall back to rewarded_at, which
+    // is the date the order was confirmed in that case.
     const { rows: ordered } = await sc.query(
-      `select to_char(ordered_at at time zone '${tz}', 'YYYY-MM') as month, count(*)::int as ordered
+      `select to_char(coalesce(ordered_at, rewarded_at) at time zone '${tz}', 'YYYY-MM') as month, count(*)::int as ordered
        from referrals
-       where tenant_id = $1 and ordered_at is not null
-         and (ordered_at at time zone '${tz}') >= $2::date and (ordered_at at time zone '${tz}') < $3::date
+       where tenant_id = $1 and coalesce(ordered_at, rewarded_at) is not null
+         and (coalesce(ordered_at, rewarded_at) at time zone '${tz}') >= $2::date
+         and (coalesce(ordered_at, rewarded_at) at time zone '${tz}') < $3::date
        group by 1`,
       [id, ...bounds]
     );
@@ -476,6 +484,7 @@ router.get('/reports/tenant/:id', requireAuth, wrap(async (req, res) => {
          (select count(*)::int from referral_links where tenant_id = $1 and kind = 'invite') as invites_total,
          (select count(*)::int from referrals where tenant_id = $1 and status in ('new', 'contacted')) as awaiting_answer,
          (select count(*)::int from referrals where tenant_id = $1 and status = 'ordered') as ordered_not_rewarded,
+         (select count(*)::int from referrals where tenant_id = $1 and rewarded_at is not null and ordered_at is null) as rewarded_without_order_date,
          (select max(submitted_at) from referrals where tenant_id = $1) as last_referral_at`,
       [id]
     );
@@ -534,6 +543,7 @@ router.get('/reports/tenant/:id', requireAuth, wrap(async (req, res) => {
       invites_total: data.now.invites_total,
       awaiting_answer: data.now.awaiting_answer,
       ordered_not_rewarded: data.now.ordered_not_rewarded,
+      rewarded_without_order_date: data.now.rewarded_without_order_date,
       last_referral_at: data.now.last_referral_at,
     },
     // Two different questions, so two different rates. How many invited people
