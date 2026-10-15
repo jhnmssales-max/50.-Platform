@@ -279,10 +279,10 @@ async function main() {
     // ======================================================================
     section('Admin: the whole flow');
     const page = await newPage('admin');
-    await check('Admin signs in and sees Leads, Reps, Dealers, To build and Money tabs', async () => {
+    await check('Admin signs in and sees Leads, Reps, Dealers, Build dashboards and Money tabs', async () => {
       await signIn(page, USERS.admin);
       const t = await tabNames(page);
-      assert(JSON.stringify(t) === JSON.stringify(['Leads', 'Reps', 'Dealers', 'To build', 'Money']), `tabs: ${t}`);
+      assert(JSON.stringify(t) === JSON.stringify(['Leads', 'Reps', 'Dealers', 'Build dashboards', 'Money']), `tabs: ${t}`);
       return `${await page.textContent('#who')}`;
     });
     await check('Add two reps (Alice, Bob) on the Reps tab', async () => {
@@ -557,10 +557,10 @@ async function main() {
       await repPage.locator('#tab-leads tr', { hasText: 'Her Own Prospect' }).locator('[data-win]').click();
       await repPage.waitForSelector('#confirmWin');
       const dlg = await repPage.textContent('#dlg');
-      assert(/Joseph sets their 50\. account up/.test(dlg), `dialog: ${dlg}`);
+      assert(/Joseph builds their dashboard/.test(dlg), `dialog: ${dlg}`);
       assert(!(await repPage.$('#winForm')), 'a rep is not offered the staff form');
       await repPage.click('#confirmWin');
-      await repPage.waitForFunction(() => document.getElementById('appMsg').textContent.includes('Joseph will take it from here'));
+      await repPage.waitForFunction(() => document.getElementById('appMsg').textContent.includes('Joseph builds their dashboard'));
       const [lead] = await sql(`select status, closed_by_rep_id, tenant_id from rep_leads where company_name = 'Her Own Prospect'`);
       assert(lead.status === 'won' && lead.tenant_id === null, JSON.stringify(lead));
       eq((await sql('select count(*)::int n from tenants'))[0].n, tenantsBefore, 'no dealer created');
@@ -651,7 +651,7 @@ async function main() {
     });
 
     let hillLeadId;
-    await check('Marking it won puts it on the To build tab, and no dealer exists yet', async () => {
+    await check('Marking it won puts it on the Build dashboards tab, and no dealer exists yet', async () => {
       const tenantsBefore = (await sql('select count(*)::int n from tenants'))[0].n;
       await adminPage.locator('#tab-leads tr', { hasText: 'Hill Country Barns' }).locator('[data-win]').click();
       await adminPage.waitForSelector('#winForm');
@@ -699,7 +699,7 @@ async function main() {
       await adminPage.fill('#buildForm [name=reward]', '25');
       const mailBefore = sentMail.length;
       await adminPage.click('#doBuild');
-      await adminPage.waitForFunction(() => document.getElementById('appMsg').textContent.includes('is built'));
+      await adminPage.waitForFunction(() => document.getElementById('appMsg').textContent.includes('dashboard is built'));
       const [t] = await sql(`select slug, name, branding, reward_amount_cents from tenants where slug like 'hill-country%'`);
       eq(t.branding.primaryColor, '#123456', 'Joseph\'s correction went in, not the guess');
       eq(t.reward_amount_cents, 2500, 'the $25 card');
@@ -723,15 +723,15 @@ async function main() {
       return `built; ${stillWaiting.length} other(s) still waiting, untouched`;
     });
 
-    await check('The helper and a rep never see the To build tab at all', async () => {
+    await check('The helper and a rep never see the Build dashboards tab at all', async () => {
       for (const who of [USERS.helper, { email: 'alice@x.test' }]) {
         const p = await newPage('no-builds');
         await signIn(p, who);
         const t = await tabNames(p);
-        assert(!t.includes('To build'), `${who.email} sees: ${t}`);
+        assert(!t.includes('Build dashboards'), `${who.email} sees: ${t}`);
         await p.context().close();
       }
-      return 'no To build tab for either';
+      return 'no Build dashboards tab for either';
     });
     await adminPage.context().close();
 

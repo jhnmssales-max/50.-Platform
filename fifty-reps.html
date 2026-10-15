@@ -299,7 +299,7 @@ async function start(){
   const tabs = state.isRep
     ? [['leads','My leads'],['dealers','My dealers'],['mymoney','My money']]
     : [['leads','Leads'],['reps','Reps'],['dealers','Dealers']];
-  if(state.isAdmin) tabs.push(['builds','To build'], ['money','Money']);
+  if(state.isAdmin) tabs.push(['builds','Build dashboards'], ['money','Money']);
   $('tabs').innerHTML = tabs.map(([k,l]) => '<button type="button" data-tab="' + k + '">' + l + '</button>').join('');
   $('tabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
   showTab(state.tab);
@@ -435,7 +435,7 @@ function winLeadDialog(id){
   if(state.isRep){
     openDialog(
       '<h3>Mark ' + esc(lead.company_name) + ' won</h3>' +
-      '<p>This records that you closed them. Joseph sets their 50. account up from here, and you get an email when it is live.</p>' +
+      '<p>This records that you closed them. Joseph builds their dashboard from here, and you get an email when it is live.</p>' +
       '<p class="muted">It cannot be undone, so only do this once they have actually said yes.</p>' +
       '<div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Not yet</button>' +
       '<button class="btn" id="confirmWin" type="button">Yes, they said yes</button></div>'
@@ -444,7 +444,7 @@ function winLeadDialog(id){
     $('confirmWin').addEventListener('click', async () => {
       try{
         await post('/rep-leads/' + id + '/win', {});
-        closeDialog(); flash('Marked won. Joseph will take it from here.', true); await renderLeads();
+        closeDialog(); flash('Marked won. Joseph builds their dashboard from here.', true); await renderLeads();
       }catch(err){ flash(err.message); closeDialog(); }
     });
     return;
@@ -667,14 +667,14 @@ async function renderDealers(){
   }));
 }
 
-/* ---------- To build (admin only) ---------- */
+/* ---------- Build dashboards (admin only) ---------- */
 // Every won lead that does not have a 50. account yet. Nothing a rep typed or
 // uploaded reaches a dealer's page without passing through here first.
 async function renderBuilds(){
   const q = await api('/rep-builds');
   state.builds = q.builds;
   $('tab-builds').innerHTML =
-    '<div class="head"><h2>To build</h2><span class="muted">' + q.builds.length + ' waiting</span></div>' +
+    '<div class="head"><h2>Build dashboards</h2><span class="muted">' + q.builds.length + ' waiting</span></div>' +
     (q.builds.length
       ? '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th><th>Closed by</th><th>Won</th><th>Files</th><th></th></tr></thead><tbody>' +
         q.builds.map((b) =>
@@ -684,9 +684,9 @@ async function renderBuilds(){
           '<td>' + esc(b.closed_by_name || '—') + '</td>' +
           '<td>' + esc(plainDate(b.closed_on)) + '</td>' +
           '<td class="num">' + b.file_count + '</td>' +
-          '<td class="num"><button class="btn" data-build="' + b.id + '">Review and build</button></td></tr>'
+          '<td class="num"><button class="btn" data-build="' + b.id + '">Build dashboard</button></td></tr>'
         ).join('') + '</tbody></table></div>'
-      : '<div class="notice">Nothing waiting. When a rep marks a company won it lands here for you to check before anything is built.</div>');
+      : '<div class="notice">Nothing waiting. When a rep marks a company won it lands here, for you to check before their dashboard is built.</div>');
   $('tab-builds').querySelectorAll('[data-build]').forEach((x) => x.addEventListener('click', () => buildDialog(x.dataset.build)));
 }
 
@@ -727,7 +727,7 @@ async function buildDialog(leadId){
     : esc(guess.reason || 'Nothing could be read, so these are 50.\u2019s own colours.');
 
   openDialog(
-    '<h3>Build ' + esc(lead.company_name) + '</h3>' +
+    '<h3>Build ' + esc(lead.company_name) + '\u2019s dashboard</h3>' +
     '<div class="notice">' + whereFrom + '</div>' +
     '<form id="buildForm">' +
       '<div class="row"><div><label>Their name, as customers see it</label><input name="name" required maxlength="200" value="' + esc(lead.company_name) + '"></div>' +
@@ -756,10 +756,11 @@ async function buildDialog(leadId){
         '<div style="padding:14px"><span class="muted">Their customers see this, in their colours.</span></div>' +
       '</div>' +
 
+      '<p class="muted" style="margin:14px 0 0">Building it emails ' + esc(lead.contact_name || 'their contact') + ' a link to set their password, and tells the rep it is live.</p>' +
       '<div class="actions">' +
         '<button type="button" class="btn secondary" id="cancelDlg">Not yet</button>' +
         '<button type="button" class="btn danger" id="declineBuild">Do not build</button>' +
-        '<button class="btn" type="submit" id="doBuild">Build it and email them</button>' +
+        '<button class="btn" type="submit" id="doBuild">Build dashboard</button>' +
       '</div></form>'
   );
 
@@ -792,7 +793,7 @@ async function buildDialog(leadId){
   $('buildForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = $('doBuild');
-    btn.disabled = true; btn.textContent = 'Building…';
+    btn.disabled = true; btn.textContent = 'Building\u2026';
     const d = formData(e.target);
     const brand = {};
     $('dlg').querySelectorAll('[data-hex]').forEach((inp) => { if(/^#[0-9a-fA-F]{6}$/.test(inp.value)) brand[inp.dataset.hex] = inp.value; });
@@ -805,12 +806,12 @@ async function buildDialog(leadId){
       closeDialog();
       const trouble = (out.emailed && out.emailed.problems) || [];
       flash(trouble.length
-        ? out.name + ' is built, but: ' + trouble.join(' ')
-        : out.name + ' is built. ' + out.admin_email + ' has their sign-in link, and the rep knows it is live.', trouble.length === 0);
+        ? out.name + '\u2019s dashboard is built, but: ' + trouble.join(' ')
+        : out.name + '\u2019s dashboard is built. ' + out.admin_email + ' has their sign-in link, and the rep knows it is live.', trouble.length === 0);
       await renderBuilds();
     }catch(err){
       flash(err.message);
-      btn.disabled = false; btn.textContent = 'Build it and email them';
+      btn.disabled = false; btn.textContent = 'Build dashboard';
     }
   });
 }
