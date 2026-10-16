@@ -54,7 +54,18 @@
   .row > *{flex:1 1 180px;min-width:0;}
   .head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:6px 0 12px;}
   .tablewrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;}
-  table{border-collapse:collapse;width:100%;min-width:640px;}
+  /* separate, not collapse: a collapsed table will not paint borders on a
+     sticky cell, and the last column has to be sticky — see below. Every
+     border here is a per-cell border-bottom, so this looks the same. */
+  table{border-collapse:separate;border-spacing:0;width:100%;min-width:640px;}
+  /* The last column holds the buttons — Resend login, Save, Mark won. On a
+     narrow window the table is wider than its card, and those buttons were
+     the part that got cut off, so the one thing you came to click was the one
+     thing you had to go looking for. Pinned to the right edge instead, with a
+     hairline so the columns sliding under it still read as a table. */
+  .tablewrap tr > *:last-child{position:sticky;right:0;background:var(--card);}
+  .tablewrap tr > *:last-child::after{content:'';position:absolute;left:0;top:0;bottom:0;
+    width:1px;background:var(--line);}
   th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;}
   td{padding:10px 12px;border-bottom:1px solid #F0EBE1;vertical-align:middle;}
   tr:last-child td{border-bottom:0;}
