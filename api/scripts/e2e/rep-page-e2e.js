@@ -697,11 +697,13 @@ async function main() {
       // nobody.
       const [{ a }] = await sql('select count(*)::int as a from rep_assignments where tenant_id = $1', [houseCo.id]);
       eq(a, 0, 'an assignment naming nobody was left behind');
-      // Tidy the fixture away: later checks count the companies on the page,
-      // and a leftover here makes this test the reason they fail.
+      // Tidy the fixtures away: later checks count the companies on the page,
+      // and a leftover here makes this test the reason they fail. Order
+      // matters — 'Closer Rep' was CLOSED rather than deleted, so their row
+      // still exists and the lead still points at it. The lead goes first.
       await sql('delete from tenants where id = $1', [houseCo.id]);
-      await sql(`delete from reps where name = 'Closer Rep'`);
       await sql(`delete from rep_leads where company_name = 'Something They Closed'`);
+      await sql(`delete from reps where name = 'Closer Rep'`);
       return 'rep with a closed lead -> closed and scrubbed; unused rep -> deleted, assignment cleared, in one row';
     });
 
