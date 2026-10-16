@@ -105,11 +105,20 @@ function createAuthStandIn({ onUserCreated } = {}) {
     res.json({ id: user.id, email: user.email });
   });
 
+  // Deliberately does NOT honor `filter`, and does honor `page`/`per_page`.
+  //
+  // This used to treat `filter` as an exact email match, which made a lookup
+  // that only worked here pass every test while failing on real Supabase:
+  // GoTrue does not promise that parameter across versions, so the caller must
+  // be able to find an account by reading pages. Pretending otherwise hid a
+  // bug where no rep who already had a login could ever be sent a fresh link.
   app.get('/auth/v1/admin/users', (req, res) => {
     if (!serviceRole(req, res)) return;
-    const filter = String(req.query.filter || '').trim().toLowerCase();
-    const list = [...usersByEmail.values()].filter((u) => !filter || String(u.email).toLowerCase() === filter);
-    res.json({ users: list.map((u) => ({ id: u.id, email: u.email })) });
+    const all = [...usersByEmail.values()];
+    const perPage = Math.max(1, Math.min(1000, Number(req.query.per_page) || 50));
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const slice = all.slice((page - 1) * perPage, page * perPage);
+    res.json({ users: slice.map((u) => ({ id: u.id, email: u.email })) });
   });
 
   app.post('/auth/v1/admin/generate_link', (req, res) => {
