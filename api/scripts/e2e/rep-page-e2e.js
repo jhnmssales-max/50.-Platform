@@ -125,6 +125,27 @@ async function main() {
   await db.connect();
   const sql = async (t, p) => (await db.query(t, p)).rows;
   recordAuthUser = (u) => db.query('insert into auth.users (id, email) values ($1, $2) on conflict (id) do nothing', [u.id, u.email]);
+  // `db` connects as the database owner, which is not an authenticated session:
+  // is_platform_admin() reads auth.uid(), so a security-definer function called
+  // through `sql` refuses every time. This runs one as a given signed-in user,
+  // the way src/db.js's withUserTransaction does for a real request.
+  async function sqlAs(user, text, params) {
+    const c = new Client({ connectionString: dbUrl(DB) });
+    await c.connect();
+    try {
+      await c.query('begin');
+      await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: user.id })]);
+      await c.query('set local role authenticated');
+      const { rows } = await c.query(text, params);
+      await c.query('commit');
+      return rows;
+    } catch (err) {
+      await c.query('rollback').catch(() => {});
+      throw err;
+    } finally {
+      await c.end().catch(() => {});
+    }
+  }
 
   const files = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort();
   await db.query(fs.readFileSync(path.join(__dirname, 'supabase-stand-in.sql'), 'utf8'));
@@ -607,8 +628,11 @@ async function main() {
       );
       // Built from that lead, and never paid a penny: no billing_events row.
       await sql(`update rep_leads set tenant_id = $2, build_status = 'built', built_at = now() where id = $1`, [lead.id, fresh.id]);
+      // users.id references auth.users(id), so the auth row has to exist first.
+      const ownerId = '9f000000-0000-4000-8000-00000000f001';
+      await sql(`insert into auth.users (id, email) values ($1,'owner@false-start-co.test')`, [ownerId]);
       await sql(`insert into users (id, tenant_id, email, name, role)
-                 values (gen_random_uuid(), $1, 'owner@false-start-co.test', 'Owner', 'admin')`, [fresh.id]);
+                 values ($1, $2, 'owner@false-start-co.test', 'Owner', 'admin')`, [ownerId, fresh.id]);
 
       await page.click('[data-tab=dealers]');
       await page.waitForFunction(() => document.querySelector('#tab-dealers').textContent.includes('False Start Co'), { timeout: 10000 });
@@ -646,7 +670,7 @@ async function main() {
       const [withHistory] = await sql(`insert into reps (name, email) values ('Closer Rep','closer@x.test') returning id`);
       await sql(`insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on)
                  values ('Something They Closed', $1, $1, 'won', current_date)`, [withHistory.id]);
-      const [{ outcome: o1 }] = await sql(`select outcome from remove_rep($1, 'left the company')`, [withHistory.id]);
+      const [{ outcome: o1 }] = await sqlAs(USERS.admin, `select outcome from remove_rep($1, 'left the company')`, [withHistory.id]);
       eq(o1, 'closed', 'a rep with a lead to their name was not kept');
       const [kept] = await sql('select active, closed_at, email, user_id from reps where id = $1', [withHistory.id]);
       eq(kept.active, false, 'still active'); assert(kept.closed_at, 'closed_at not set');
@@ -664,7 +688,7 @@ async function main() {
       );
       await sql(`insert into rep_assignments (tenant_id, closer_rep_id, onboarder_rep_id, effective_from)
                  values ($1, $2, $2, now())`, [houseCo.id, unused.id]);
-      const rows = await sql(`select * from remove_rep($1, 'added by mistake')`, [unused.id]);
+      const rows = await sqlAs(USERS.admin, `select * from remove_rep($1, 'added by mistake')`, [unused.id]);
       eq(rows.length, 1, `remove_rep answered with ${rows.length} rows, not 1`);
       eq(rows[0].outcome, 'deleted', 'an unused rep was kept');
       const [{ n }] = await sql('select count(*)::int as n from reps where id = $1', [unused.id]);
@@ -673,6 +697,11 @@ async function main() {
       // nobody.
       const [{ a }] = await sql('select count(*)::int as a from rep_assignments where tenant_id = $1', [houseCo.id]);
       eq(a, 0, 'an assignment naming nobody was left behind');
+      // Tidy the fixture away: later checks count the companies on the page,
+      // and a leftover here makes this test the reason they fail.
+      await sql('delete from tenants where id = $1', [houseCo.id]);
+      await sql(`delete from reps where name = 'Closer Rep'`);
+      await sql(`delete from rep_leads where company_name = 'Something They Closed'`);
       return 'rep with a closed lead -> closed and scrubbed; unused rep -> deleted, assignment cleared, in one row';
     });
 
@@ -710,6 +739,11 @@ async function main() {
     await check('Searching narrows a list to what matches, across every field on the row', async () => {
       await page.click('[data-tab=dealers]');
       await page.waitForSelector('#tab-dealers tr[data-search]');
+      // Opening the tab refetches and redraws. waitForSelector above matches
+      // the rows ALREADY in the DOM from the last visit, so without this the
+      // baseline below can be read before the new list lands and come out one
+      // row short of what clearing the box then restores.
+      await page.waitForLoadState('networkidle').catch(() => {});
       const visible = () => page.$$eval('#tab-dealers tbody tr[data-search]', (rows) =>
         rows.filter((r) => !r.hidden).map((r) => r.querySelector('b, [data-company]').textContent));
 
