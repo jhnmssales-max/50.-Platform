@@ -909,14 +909,24 @@ function repDialog(id){
 
 /* ---------- Dealers ---------- */
 async function renderDealers(){
-  const d = await api('/rep-dealers');
+  const d = await api('/rep-dealers' + (state.showClosed ? '?closed=1' : ''));
   state.dealers = d.dealers;
+  // Asked for separately so the count can be offered without listing them.
+  if(!state.isRep && state.closedCount == null){
+    try{ state.closedCount = (await api('/rep-dealers?closed=1')).dealers.filter((x) => x.closed_at).length; }
+    catch(err){ state.closedCount = 0; }
+  }
   if(!state.isRep) await loadReps();
   $('tab-dealers').innerHTML =
     '<div class="head"><h2>' + (state.isRep ? 'My dealers' : 'Companies') + '</h2><span class="muted">' +
       (state.isRep ? 'The companies you signed'
         : (state.dealers.filter((x) => !x.billing_exempt).length + ' paying \u00b7 ' +
-           state.dealers.filter((x) => x.billing_exempt).length + ' in-house')) + '</span></div>' +
+           state.dealers.filter((x) => x.billing_exempt && !x.closed_at).length + ' in-house' +
+           (state.closedCount ? ' \u00b7 ' + state.closedCount + ' closed' : ''))) + '</span></div>' +
+    (!state.isRep && state.closedCount
+      ? '<p class="muted" style="margin:-6px 0 10px"><button type="button" class="linkish" id="toggleClosed">' +
+        (state.showClosed ? 'Hide closed companies' : 'Show closed companies (' + state.closedCount + ')') + '</button></p>'
+      : '') +
     (state.isRep
       ? '<div class="notice">These are the companies you are on. A dealer only starts earning you royalties once they have paid and their customers start referring.</div>'
       : '<div class="notice">A change counts from now on: payments that cleared before it stay with whoever was on the dealer then. Dealers with nobody on them are house accounts and pay no one.' +
@@ -927,11 +937,14 @@ async function renderDealers(){
       (state.isRep ? '<th>My role</th>' : '<th>Closed by</th><th>Onboarded by</th>' + (state.isAdmin ? '<th>Start date</th>' : '') + '<th></th>') +
       '</tr></thead><tbody>' +
     (state.dealers.map((x) =>
-      '<tr data-tenant="' + x.tenant_id + '" data-search="' + searchable([x.name, x.slug, x.billing_exempt ? 'in-house' : 'paying', x.activated ? 'activated' : 'not yet']) + '"><td>' +
+      '<tr data-tenant="' + x.tenant_id + '"' + (x.closed_at ? ' style="opacity:.6"' : '') +
+        ' data-search="' + searchable([x.name, x.slug, x.billing_exempt ? 'in-house' : 'paying',
+          x.activated ? 'activated' : 'not yet', x.closed_at ? 'closed' : '']) + '"><td>' +
         // The name is the way in, the same way a rep's name opens their year.
         (state.isRep ? '<b>' + esc(x.name) + '</b>'
           : '<button type="button" class="linkish" data-company="' + x.tenant_id + '">' + esc(x.name) + '</button>') +
-        (x.billing_exempt ? '<div class="muted">In-house \u00b7 no fees</div>' : '') + '</td>' +
+        (x.billing_exempt ? '<div class="muted">In-house \u00b7 no fees</div>' : '') +
+        (x.closed_at ? '<div class="muted">Closed ' + esc(plainDate(String(x.closed_at).slice(0,10))) + '</div>' : '') + '</td>' +
       // An in-house company never pays the $500, so "not yet" would read as a
       // dealer who is overdue rather than one who was never billed.
       '<td>' + (x.billing_exempt ? '<span class="muted">\u2014</span>'
@@ -941,7 +954,7 @@ async function renderDealers(){
         // An in-house company pays nothing, so there is no payment for a rep
         // to be credited with and nothing to assign. Showing the dropdowns
         // would invite a change that could never pay anyone.
-        : (x.billing_exempt
+        : ((x.billing_exempt || x.closed_at)
           ? '<td class="muted">—</td><td class="muted">—</td>' +
             (state.isAdmin ? '<td class="muted">—</td>' : '') + '<td></td>'
           : '<td><select data-field="closer">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
@@ -956,6 +969,10 @@ async function renderDealers(){
   wireSearch('tab-dealers', 'dealers');
   $('tab-dealers').querySelectorAll('[data-delco]').forEach((b) =>
     b.addEventListener('click', () => deleteCompanyDialog(b.dataset.delco)));
+  if($('toggleClosed')) $('toggleClosed').addEventListener('click', async () => {
+    state.showClosed = !state.showClosed;
+    await renderDealers();
+  });
   $('tab-dealers').querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', async () => {
     const tr = b.closest('tr');
     const closer = tr.querySelector('[data-field=closer]').value || null;
@@ -1327,30 +1344,51 @@ function confirmDeleteDialog({ title, name, lead, goes, stays, button, onConfirm
   });
 }
 
-function deleteCompanyDialog(tenantId){
+async function deleteCompanyDialog(tenantId){
   const c = state.dealers.find((x) => x.tenant_id === tenantId);
   if(!c) return flash('That company is gone.');
-  if(c.billing_exempt) return flash('That is one of your own companies. It cannot be deleted here.');
+  if(c.billing_exempt) return flash('That is one of your own companies. It cannot be removed here.');
+  if(c.closed_at) return flash(c.name + ' is already closed.');
+
+  // What happens depends on whether they ever traded, so the dialog says which
+  // it will be before the button is pressed rather than reporting it after.
+  // The database decides for real, under the row lock; this only has to match
+  // what the person is about to see.
+  let traded = Boolean(c.activated);
+  try{
+    const r = await api('/reports/tenant/' + tenantId);
+    traded = traded || Boolean(r.totals.paid_cents);
+  }catch(err){ /* fall back to whether they ever paid the $500 */ }
+
   confirmDeleteDialog({
-    title: 'Remove ' + c.name,
+    title: (traded ? 'Close ' : 'Delete ') + c.name,
     name: c.name,
-    lead: 'Their card is taken off file first, so nothing can be charged to it again — no renewal, no 30% fee, nothing.',
-    goes: [
-      'Every customer of theirs, with their names and email addresses',
-      'Every referral, referral link and gift-card record',
-      'Their logins — nobody there can sign in again',
-      'Their branding, wording and sending address',
-    ],
-    stays: 'What they have already paid you stays in your books, with no name on it, so your Finances tab and past years still add up. ' +
-      'The lead that brought them in stays too, so your rep keeps credit for signing them.',
-    button: 'Remove this company',
+    lead: traded
+      ? 'They traded with you, so their payments have to stay in your books. Their card comes off file first \u2014 no renewal, no 30% fee, nothing more can be charged \u2014 and they move out of this list into <b>closed</b>.'
+      : 'They never traded: no payment taken, nothing earned from them. There is nothing to keep, so this removes them completely \u2014 row and all.',
+    goes: traded
+      ? [
+        'Every customer and referral name, email and phone number \u2014 wiped, though the counts stay so their year still reads',
+        'Their logins \u2014 nobody there can sign in again',
+        'Their saved card, renewal date and sending address',
+      ]
+      : [
+        'The company, and every trace of it',
+        'Every customer, referral, link and login',
+        'Their branding, wording and sending address',
+      ],
+    stays: traded
+      ? 'Their name and everything they paid you stay in your books, so Finances and past years still add up. Their report still opens, with the numbers but no names. The lead that brought them in keeps your rep\u2019s credit.'
+      : 'Nothing \u2014 there is nothing of theirs in your books. The lead that brought them in stays, so your rep keeps credit for the work.',
+    button: traded ? 'Close this company' : 'Delete this company',
     onConfirm: async (body) => {
       const out = await api('/rep-dealers/' + tenantId, { method:'DELETE', body: JSON.stringify(body) });
       closeDialog();
-      flash(out.name + ' is gone. ' +
-        (out.card_detached ? 'Their card is off file. ' : 'There was no card on file. ') +
-        out.customers_deleted + ' customer' + (out.customers_deleted === 1 ? '' : 's') + ' and ' +
-        out.referrals_deleted + ' referral' + (out.referrals_deleted === 1 ? '' : 's') + ' deleted.', true);
+      flash(out.outcome === 'deleted'
+        ? out.name + ' is deleted \u2014 nothing of theirs is left.'
+        : out.name + ' is closed. ' + (out.card_detached ? 'Their card is off file. ' : 'There was no card on file. ') +
+          out.customers_affected + ' customer' + (out.customers_affected === 1 ? '' : 's') + ' anonymised; their numbers still open from the closed list.', true);
+      state.closedCount = null; // one more, or one fewer company — recount
       await renderDealers();
     },
   });
@@ -1359,28 +1397,36 @@ function deleteCompanyDialog(tenantId){
 function deleteRepDialog(repId){
   const r = state.reps.find((x) => x.id === repId);
   if(!r) return flash('That rep is gone.');
+  if(r.closed_at) return flash(r.name + ' has already been removed.');
   const owed = r.owed_cents || 0;
   if(owed !== 0){
     return flash(owed > 0
-      ? 'You still owe ' + r.name + ' ' + dollars(owed) + '. Pay them or reverse the earnings first, then delete them.'
-      : r.name + ' has been overpaid by ' + dollars(Math.abs(owed)) + '. Settle that first, then delete them.');
+      ? 'You still owe ' + r.name + ' ' + dollars(owed) + '. Pay them or reverse the earnings first, then remove them.'
+      : r.name + ' has been overpaid by ' + dollars(Math.abs(owed)) + '. Settle that first, then remove them.');
   }
+  // Same rule as a company: someone who never earned anything leaves nothing
+  // behind, so they go completely.
+  const earned = Boolean(r.earned_this_month_cents) || Boolean(r.companies_closed) || Boolean(r.companies_onboarded);
   confirmDeleteDialog({
-    title: 'Remove ' + r.name,
+    title: (earned ? 'Remove ' : 'Delete ') + r.name,
     name: r.name,
-    lead: 'Their balance is settled, so nothing is owed either way.',
+    lead: earned
+      ? 'Their balance is settled, so nothing is owed either way. What they earned has to stay in your money history, so their name stays on it.'
+      : 'They never earned anything, so there is nothing of theirs in your money history. This removes them completely.',
     goes: [
-      'Their login — they cannot sign in again',
-      'Their name, email, phone and notes',
+      'Their login \u2014 they cannot sign in again',
+      'Their email, phone and notes',
       'Their place on every dealer, so nothing from here on earns them anything',
-    ],
-    stays: 'What they earned and what you paid them stays in your money history, so your statements still add up. ' +
-      'The leads they brought in stay in the pipeline.',
-    button: 'Remove this rep',
+    ].concat(earned ? [] : ['Their name, and the rep record itself']),
+    stays: earned
+      ? 'What they earned and what you paid them stays in your money history, under their name, so your statements still add up. The leads they brought in stay in the pipeline.'
+      : 'The leads they brought in stay in the pipeline, with nobody on them.',
+    button: earned ? 'Remove this rep' : 'Delete this rep',
     onConfirm: async (body) => {
       const out = await api('/reps/' + repId, { method:'DELETE', body: JSON.stringify(body) });
       closeDialog();
-      flash(out.name + ' is gone.' + (out.dealers_released ? ' Taken off ' + out.dealers_released + ' dealer' + (out.dealers_released === 1 ? '' : 's') + '.' : ''), true);
+      flash(out.name + (out.outcome === 'deleted' ? ' is deleted \u2014 nothing of theirs is left.' : ' is removed. What they earned stays in your money history.') +
+        (out.dealers_released ? ' Taken off ' + out.dealers_released + ' dealer' + (out.dealers_released === 1 ? '' : 's') + '.' : ''), true);
       await loadReps();
       await renderReps();
     },

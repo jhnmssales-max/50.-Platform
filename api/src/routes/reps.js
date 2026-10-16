@@ -627,9 +627,12 @@ router.post('/rep-leads/:id/win', requireAuth, wrap(async (req, res) => {
 // Joseph and the helper see every dealer; a rep sees only the ones they are
 // on. rep_dealer_list() decides that, not this handler.
 router.get('/rep-dealers', requireAuth, wrap(async (req, res) => {
+  // Closed companies are left out unless asked for, and the function itself
+  // refuses to hand one to a rep however this is called.
+  const includeClosed = req.query.closed === '1' || req.query.closed === 'true';
   const rows = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { rep: true });
-    const { rows } = await client.query('select * from rep_dealer_list()');
+    const { rows } = await client.query('select * from rep_dealer_list($1)', [includeClosed]);
     return rows;
   });
   res.json({
@@ -645,6 +648,7 @@ router.get('/rep-dealers', requireAuth, wrap(async (req, res) => {
       // Good Steward, North Mountain and 50.'s own tenant: live programs that
       // pay no setup, renewal or 30% fee. Staff see them; a rep never does.
       billing_exempt: d.billing_exempt === true,
+      closed_at: d.closed_at || null,
     })),
   });
 }));
@@ -675,7 +679,7 @@ router.delete('/rep-dealers/:id', requireAuth, wrap(async (req, res) => {
   const company = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { admin: true });
     const { rows: [t] } = await client.query(
-      'select tenant_id, name, billing_exempt from rep_dealer_list() where tenant_id = $1',
+      'select tenant_id, name, billing_exempt, closed_at from rep_dealer_list(true) where tenant_id = $1',
       [id]
     );
     if (!t) throw httpError(404, 'No such company');
@@ -710,20 +714,22 @@ router.delete('/rep-dealers/:id', requireAuth, wrap(async (req, res) => {
     }
   }
 
+  // Which of the two happens is decided in the database, under the row lock,
+  // from what is actually in the books right now.
   const out = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { admin: true });
-    const { rows: [r] } = await client.query('select * from delete_company($1, $2)', [id, body.reason || null]);
+    const { rows: [r] } = await client.query('select * from remove_company($1, $2)', [id, body.reason || null]);
     return r;
   });
 
   res.json({
-    deleted: true,
+    outcome: out.outcome,
     name: company.name,
     card_detached: card.detached,
     card_note: card.reason || null,
-    customers_deleted: out.deleted_customers,
-    referrals_deleted: out.deleted_referrals,
-    logins_revoked: out.deleted_logins,
+    customers_affected: out.customers_affected,
+    referrals_affected: out.referrals_affected,
+    logins_revoked: out.logins_revoked,
   });
 }));
 
@@ -733,9 +739,9 @@ router.delete('/reps/:id', requireAuth, wrap(async (req, res) => {
 
   const out = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { admin: true });
-    const { rows: [rep] } = await client.query('select id, name, deleted_at from reps where id = $1', [id]);
+    const { rows: [rep] } = await client.query('select id, name, closed_at from reps where id = $1', [id]);
     if (!rep) throw httpError(404, 'No such rep');
-    if (rep.deleted_at) throw httpError(409, 'That rep has already been deleted');
+    if (rep.closed_at) throw httpError(409, 'That rep has already been removed');
     if (body.confirm_name !== rep.name) {
       throw httpError(400, `Type the rep's name exactly to confirm. Expected "${rep.name}".`, 'name_mismatch');
     }
@@ -752,16 +758,16 @@ router.delete('/reps/:id', requireAuth, wrap(async (req, res) => {
       const owed = (bal.owed_cents / 100).toFixed(2);
       throw httpError(409,
         bal.owed_cents > 0
-          ? `You still owe ${rep.name} $${owed}. Record the payment, or reverse the earnings, then delete them.`
-          : `${rep.name} has been overpaid by $${Math.abs(bal.owed_cents / 100).toFixed(2)}. Settle that first, then delete them.`,
+          ? `You still owe ${rep.name} $${owed}. Record the payment, or reverse the earnings, then remove them.`
+          : `${rep.name} has been overpaid by $${Math.abs(bal.owed_cents / 100).toFixed(2)}. Settle that first, then remove them.`,
         'balance_not_settled');
     }
 
-    const { rows: [r] } = await client.query('select * from delete_rep($1, $2)', [id, body.reason || null]);
+    const { rows: [r] } = await client.query('select * from remove_rep($1, $2)', [id, body.reason || null]);
     return { name: rep.name, ...r };
   });
 
-  res.json({ deleted: true, name: out.name, dealers_released: out.released_dealers });
+  res.json({ outcome: out.outcome, name: out.name, dealers_released: out.dealers_released });
 }));
 
 const assignBody = z.object({
@@ -992,7 +998,7 @@ router.get('/reps/:id/statement', requireAuth, wrap(async (req, res) => {
     const { rows: lines } = await client.query(
       `select e.id, e.earned_at, e.role, e.kind, e.amount_cents, e.detail, e.reverses_earning_id, d.name as dealer_name
        from rep_earnings e
-       left join rep_dealer_list() d on d.tenant_id = e.tenant_id
+       left join rep_dealer_list(true) d on d.tenant_id = e.tenant_id
        where e.rep_id = $1
          and e.earned_at >= (${win}::timestamp at time zone '${BILLING_TIME_ZONE}')
          and e.earned_at < ((${win} + interval '1 month')::timestamp at time zone '${BILLING_TIME_ZONE}')
