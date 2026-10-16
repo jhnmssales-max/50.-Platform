@@ -717,6 +717,40 @@ async function main() {
       return 'rep with a closed lead -> closed and scrubbed; unused rep -> deleted, assignment cleared, in one row';
     });
 
+    // The dialog must not promise one outcome while the database does the
+    // other. This is the exact shape that caught it in production: a rep with a
+    // won lead to their name but no earnings and no CURRENT dealer, because the
+    // dealer was deleted. Guessing from the dealer counts reads that as "never
+    // did anything" and offers to delete them outright.
+    await check('A rep whose only dealer was deleted is still offered as Remove, not Delete', async () => {
+      const [stranded] = await sql(`insert into reps (name, email) values ('Stranded Rep','stranded@x.test') returning id`);
+      await sql(`insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on)
+                 values ('Deleted Their Dealer', $1, $1, 'won', current_date)`, [stranded.id]);
+
+      await page.click('[data-tab=reps]');
+      await page.waitForFunction(() => document.querySelector('#tab-reps').textContent.includes('Stranded Rep'), { timeout: 10000 });
+      const row = page.locator('#tab-reps tr', { hasText: 'Stranded Rep' });
+      eq(await row.locator('[data-delrep]').count(), 1, 'no Remove button on the rep');
+      await row.locator('[data-delrep]').click();
+      await page.waitForFunction(
+        () => { const d = document.getElementById('dlg'); return d && d.open && /Stranded Rep/.test(d.textContent); },
+        null, { timeout: 8000 }
+      );
+      const heading = await page.$eval('#dlg h3', (h) => h.textContent.trim());
+      assert(/^Remove /.test(heading), `the dialog offers "${heading}" for a rep the database will keep`);
+      const body = (await page.textContent('#dlg')).replace(/\s+/g, ' ');
+      assert(!/with nobody on them/i.test(body), 'the dialog still promises leads with nobody on them, which a won lead forbids');
+      assert(/name stays on the leads/i.test(body), `the dialog does not say the name stays: ${body.slice(0, 220)}`);
+      await page.click('#cancelDlg');
+
+      // And the database agrees with what the dialog just said.
+      const [{ outcome }] = await sqlAs(USERS.admin, `select outcome from remove_rep($1, 'checking the wording matches')`, [stranded.id]);
+      eq(outcome, 'closed', 'the database disagreed with the dialog');
+      await sql(`delete from rep_leads where company_name = 'Deleted Their Dealer'`);
+      await sql('delete from reps where id = $1', [stranded.id]);
+      return `dialog said "${heading}", database said "${outcome}"`;
+    });
+
     await check('An in-house company has no Remove button at all', async () => {
       const gss = page.locator(`tr[data-tenant="${tenants['good-steward-structures'].id}"]`);
       eq(await gss.locator('[data-delco]').count(), 0, 'in-house row offers a Remove button');

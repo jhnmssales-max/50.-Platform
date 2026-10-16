@@ -1694,24 +1694,29 @@ function deleteRepDialog(repId){
       ? 'You still owe ' + r.name + ' ' + dollars(owed) + '. Pay them or reverse the earnings first, then remove them.'
       : r.name + ' has been overpaid by ' + dollars(Math.abs(owed)) + '. Settle that first, then remove them.');
   }
-  // Same rule as a company: someone who never earned anything leaves nothing
-  // behind, so they go completely.
-  const earned = Boolean(r.earned_this_month_cents) || Boolean(r.companies_closed) || Boolean(r.companies_onboarded);
+  // has_history comes from the API, which computes it with the same three
+  // tests remove_rep() makes. It is NOT guessed from the money or the dealer
+  // counts: those count current assignments, which disappear when a company is
+  // deleted, while the rep's leads deliberately stay. Guessing that way told
+  // Joseph it would delete Ben outright — "the leads stay in the pipeline, with
+  // nobody on them" — when the database would have closed him and kept his
+  // name on those leads, which is the only thing a won lead permits.
+  const keep = r.has_history !== false;
   confirmDeleteDialog({
-    title: (earned ? 'Remove ' : 'Delete ') + r.name,
+    title: (keep ? 'Remove ' : 'Delete ') + r.name,
     name: r.name,
-    lead: earned
-      ? 'Their balance is settled, so nothing is owed either way. What they earned has to stay in your money history, so their name stays on it.'
-      : 'They never earned anything, so there is nothing of theirs in your money history. This removes them completely.',
+    lead: keep
+      ? 'Their balance is settled, so nothing is owed either way. Their name has to stay on the leads they closed and on anything they earned, so the record keeps adding up.'
+      : 'Nothing anywhere points at them \u2014 no money, no leads. This removes them completely.',
     goes: [
       'Their login \u2014 they cannot sign in again',
       'Their email, phone and notes',
       'Their place on every dealer, so nothing from here on earns them anything',
-    ].concat(earned ? [] : ['Their name, and the rep record itself']),
-    stays: earned
-      ? 'What they earned and what you paid them stays in your money history, under their name, so your statements still add up. The leads they brought in stay in the pipeline.'
-      : 'The leads they brought in stay in the pipeline, with nobody on them.',
-    button: earned ? 'Remove this rep' : 'Delete this rep',
+    ].concat(keep ? [] : ['Their name, and the rep record itself']),
+    stays: keep
+      ? 'Their name stays on the leads they brought in or closed, and on what they earned and what you paid them, so your statements and your pipeline both still read correctly. They stop counting as active.'
+      : 'Nothing \u2014 there is nothing of theirs to keep.',
+    button: keep ? 'Remove this rep' : 'Delete this rep',
     onConfirm: async (body) => {
       const out = await api('/reps/' + repId, { method:'DELETE', body: JSON.stringify(body) });
       closeDialog();
