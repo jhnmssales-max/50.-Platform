@@ -94,6 +94,10 @@
     margin:16px 0 0;padding-top:10px;border-top:1px solid var(--line);}
   .stagehead:first-of-type{border-top:0;padding-top:0;margin-top:8px;}
   .hint{color:var(--muted);font-size:12px;margin:4px 0 0;}
+  .searchrow{display:flex;align-items:center;gap:10px;margin:0 0 10px;}
+  .searchbox{flex:1 1 260px;max-width:420px;min-width:0;padding:9px 12px;border:1px solid var(--line);
+    border-radius:10px;background:var(--card);font:inherit;color:var(--charcoal);}
+  .searchbox:focus{outline:2px solid var(--secondary);outline-offset:-1px;}
   .linkish{background:none;border:0;padding:0;font:inherit;cursor:pointer;color:var(--primary);
     font-weight:600;border-bottom:1px solid var(--line);}
   .linkish:hover{border-bottom-color:var(--primary);}
@@ -458,6 +462,59 @@ function wordingSummary(copy){
   return n + ' of ' + COPY_FIELDS.length + ' in their own words';
 }
 
+/* ---------- finding something in a long list ---------- */
+// Filters the rows already on the page rather than asking the API again:
+// instant, keeps the cursor where it is, and every list here is already
+// loaded in full. Each row carries a data-search attribute built from the
+// fields worth matching, rather than matching the row's text — a Companies
+// row contains a dropdown listing every rep, so matching its text would make
+// a rep's name match every company.
+const SEARCH = { leads:'', dealers:'', reps:'' };
+
+function searchBox(key, placeholder){
+  return '<div class="searchrow">' +
+    '<input type="search" class="searchbox" data-search-for="' + key + '" placeholder="' + esc(placeholder) + '" ' +
+      'value="' + esc(SEARCH[key] || '') + '" autocomplete="off" spellcheck="false">' +
+    '<span class="muted" data-search-count="' + key + '"></span></div>';
+}
+
+function searchable(parts){
+  return esc(parts.filter(Boolean).join(' ').toLowerCase());
+}
+
+// Every word has to appear somewhere in the row, in any order — so "silver
+// roof" finds Silver Run Home Improvements (roofing) without needing the
+// words adjacent or in the right order.
+function applySearch(tabId, key){
+  const q = (SEARCH[key] || '').trim().toLowerCase();
+  const words = q ? q.split(/\s+/) : [];
+  const rows = $(tabId).querySelectorAll('tbody tr[data-search]');
+  let shown = 0;
+  rows.forEach((tr) => {
+    const hay = tr.getAttribute('data-search') || '';
+    const hit = words.every((w) => hay.includes(w));
+    tr.hidden = !hit;
+    if(hit) shown += 1;
+  });
+  const count = $(tabId).querySelector('[data-search-count="' + key + '"]');
+  if(count){
+    count.textContent = !q ? ''
+      : (shown ? shown + ' of ' + rows.length : 'nothing matches “' + q + '”');
+  }
+}
+
+function wireSearch(tabId, key){
+  const box = $(tabId).querySelector('[data-search-for="' + key + '"]');
+  if(!box) return;
+  box.addEventListener('input', () => { SEARCH[key] = box.value; applySearch(tabId, key); });
+  // Typing filters rows already on the page and never redraws the tab, so the
+  // cursor is never taken away mid-search. A redraw from something else —
+  // adding a lead, saving an assignment — rebuilds the box with the query
+  // still in it, and deliberately does not grab focus back: someone may have
+  // been typing in the form above it.
+  applySearch(tabId, key);
+}
+
 /* ---------- Leads ---------- */
 async function renderLeads(){
   // Anything half-typed into the add-a-lead form, and whether it was open at
@@ -500,9 +557,10 @@ async function renderLeads(){
       '</details>' +
       '<div class="actions"><button class="btn" type="submit">Add lead</button></div></form>' +
       '<div id="dupBox"></div></details>' +
+    searchBox('leads', state.isRep ? 'Search your leads \u2014 company, contact, email, phone' : 'Search leads \u2014 company, contact, email, phone') +
     '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th>' + (state.isRep ? '' : '<th>Brought in by</th>') + '<th>Found</th><th>Status</th>' + (state.isRep ? '' : '<th>Won by</th>') + '<th></th></tr></thead><tbody>' +
     (state.leads.map((x) =>
-      '<tr><td><b>' + esc(x.company_name) + '</b>' +
+      '<tr data-search="' + searchable([x.company_name, x.contact_name, x.phone, x.email, x.website, x.notes, x.status]) + '"><td><b>' + esc(x.company_name) + '</b>' +
         (x.website ? '<div class="muted">' + esc(x.website) + '</div>' : '') +
         (x.notes ? '<div class="muted">' + esc(x.notes) + '</div>' : '') +
         '<div class="muted">Wording: ' + esc(wordingSummary(x.copy)) + '</div></td>' +
@@ -516,7 +574,7 @@ async function renderLeads(){
         (x.status === 'won' ? (x.build_status === 'awaiting_approval' ? '<span class="muted">waiting on Joseph</span>' : '') :
         '<button class="btn small" data-win="' + x.id + '">Mark won</button> ' +
         '<button class="btn small danger" data-lost="' + x.id + '">Lost</button>') + '</td></tr>'
-    ).join('') || '<tr><td colspan="7" class="muted" style="padding:18px">No leads yet.</td></tr>') +
+    ).join('') || '<tr data-empty-row><td colspan="7" class="muted" style="padding:18px">No leads yet.</td></tr>') +
     '</tbody></table></div>';
 
   const form = $('leadForm');
@@ -535,6 +593,7 @@ async function renderLeads(){
       if(el) el.focus();
     }
   }
+  wireSearch('tab-leads', 'leads');
   form.addEventListener('submit', (e) => { e.preventDefault(); submitLead(form, false); });
   $('tab-leads').querySelectorAll('[data-win]').forEach((b) => b.addEventListener('click', () => winLeadDialog(b.dataset.win)));
   $('tab-leads').querySelectorAll('[data-files]').forEach((b) => b.addEventListener('click', () => filesDialog(b.dataset.files)));
@@ -772,10 +831,11 @@ async function renderReps(){
   const adminCols = state.isAdmin;
   $('tab-reps').innerHTML =
     '<div class="head"><h2>Reps</h2><button class="btn" id="addRepBtn" type="button">Add a rep</button></div>' +
+    searchBox('reps', 'Search reps \u2014 name, email, phone') +
     '<div class="tablewrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Login</th><th class="num">Companies closed</th><th class="num">Onboarded</th><th class="num">Leads found</th>' +
     (adminCols ? '<th class="num">Earned this month</th><th class="num">You owe</th>' : '') + '<th></th></tr></thead><tbody>' +
     (state.reps.map((r) =>
-      '<tr><td><a href="#" data-report="' + r.id + '" style="color:var(--primary);font-weight:600;text-decoration:none;border-bottom:1px solid var(--line)">' + esc(r.name) + '</a> ' +
+      '<tr data-search="' + searchable([r.name, r.email, r.phone, r.notes, r.active ? '' : 'inactive']) + '"><td><a href="#" data-report="' + r.id + '" style="color:var(--primary);font-weight:600;text-decoration:none;border-bottom:1px solid var(--line)">' + esc(r.name) + '</a> ' +
         (r.active ? '' : '<span class="pill off">inactive</span>') + '</td>' +
       '<td>' + esc(r.phone || '') + '<div class="muted">' + esc(r.email || '') + '</div></td>' +
       '<td>' + (r.has_login ? '<span class="pill closed">can sign in</span>' : '<span class="pill off">no login</span>') + '</td>' +
@@ -784,7 +844,8 @@ async function renderReps(){
       '<td class="num">' +
         (state.isAdmin && r.active && r.email ? '<button class="btn small" data-invite="' + r.id + '">' + (r.has_login ? 'Resend login' : 'Send login') + '</button> ' : '') +
         '<button class="btn small secondary" data-edit="' + r.id + '">Edit</button></td></tr>'
-    ).join('') || '<tr><td colspan="8" class="muted" style="padding:18px">No reps yet.</td></tr>') + '</tbody></table></div>';
+    ).join('') || '<tr data-empty-row><td colspan="8" class="muted" style="padding:18px">No reps yet.</td></tr>') + '</tbody></table></div>';
+  wireSearch('tab-reps', 'reps');
   $('addRepBtn').addEventListener('click', () => repDialog(null));
   $('tab-reps').querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => repDialog(b.dataset.edit)));
   $('tab-reps').querySelectorAll('[data-invite]').forEach((b) => b.addEventListener('click', () => inviteRep(b.dataset.invite, b)));
@@ -859,11 +920,12 @@ async function renderDealers(){
       : '<div class="notice">A change counts from now on: payments that cleared before it stay with whoever was on the dealer then. Dealers with nobody on them are house accounts and pay no one.' +
         (state.isAdmin ? ' As admin you can also pick a start date to credit a payment that cleared earlier.' : '') +
         ' <b>In-house</b> companies are yours \u2014 they run a live program but pay no setup, renewal or 30% fee, so no rep is ever on one.</div>') +
+    searchBox('dealers', state.isRep ? 'Search your dealers' : 'Search companies') +
     '<div class="tablewrap"><table><thead><tr><th>' + (state.isRep ? 'Dealer' : 'Company') + '</th><th>Activated</th>' +
       (state.isRep ? '<th>My role</th>' : '<th>Closed by</th><th>Onboarded by</th>' + (state.isAdmin ? '<th>Start date</th>' : '') + '<th></th>') +
       '</tr></thead><tbody>' +
     (state.dealers.map((x) =>
-      '<tr data-tenant="' + x.tenant_id + '"><td>' +
+      '<tr data-tenant="' + x.tenant_id + '" data-search="' + searchable([x.name, x.slug, x.billing_exempt ? 'in-house' : 'paying', x.activated ? 'activated' : 'not yet']) + '"><td>' +
         // The name is the way in, the same way a rep's name opens their year.
         (state.isRep ? '<b>' + esc(x.name) + '</b>'
           : '<button type="button" class="linkish" data-company="' + x.tenant_id + '">' + esc(x.name) + '</button>') +
@@ -885,9 +947,10 @@ async function renderDealers(){
             (state.isAdmin ? '<td><input type="date" data-field="from" style="min-width:140px" title="Leave blank to start now"></td>' : '') +
             '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button></td>'))  +
       '</tr>'
-    ).join('') || '<tr><td colspan="6" class="muted" style="padding:18px">' + (state.isRep ? 'None yet. They show up here once Joseph has built them.' : 'No dealers yet.') + '</td></tr>') + '</tbody></table></div>';
+    ).join('') || '<tr data-empty-row><td colspan="6" class="muted" style="padding:18px">' + (state.isRep ? 'None yet. They show up here once Joseph has built them.' : 'No companies yet.') + '</td></tr>') + '</tbody></table></div>';
   $('tab-dealers').querySelectorAll('[data-company]').forEach((b) =>
     b.addEventListener('click', () => companyReport(b.dataset.company)));
+  wireSearch('tab-dealers', 'dealers');
   $('tab-dealers').querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', async () => {
     const tr = b.closest('tr');
     const closer = tr.querySelector('[data-field=closer]').value || null;

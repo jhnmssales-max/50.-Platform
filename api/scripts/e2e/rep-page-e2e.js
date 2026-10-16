@@ -561,6 +561,63 @@ async function main() {
       return `table overflows at 900px wide; the button still ends at the card edge (${fits.right} vs ${fits.edge})`;
     });
 
+    await check('Searching narrows a list to what matches, across every field on the row', async () => {
+      await page.click('[data-tab=dealers]');
+      await page.waitForSelector('#tab-dealers tr[data-search]');
+      const visible = () => page.$$eval('#tab-dealers tbody tr[data-search]', (rows) =>
+        rows.filter((r) => !r.hidden).map((r) => r.querySelector('b, [data-company]').textContent));
+
+      const all = await visible();
+      assert(all.length >= 4, `expected several companies, got ${all.length}`);
+
+      // By name.
+      await page.fill('#tab-dealers .searchbox', 'roofing');
+      await page.waitForTimeout(80);
+      eq(await visible(), ['Dealer A Roofing'], 'searching a name');
+      assert(/1 of /.test(await page.textContent('#tab-dealers [data-search-count]')), 'no count shown');
+
+      // Case does not matter, and neither does word order.
+      await page.fill('#tab-dealers .searchbox', 'ROOFING a dealer');
+      await page.waitForTimeout(80);
+      eq(await visible(), ['Dealer A Roofing'], 'words in any order, any case');
+
+      // A rep's name must NOT match a company: every Companies row carries a
+      // dropdown listing every rep, which is exactly why rows are matched on
+      // their own fields rather than on their text.
+      await page.fill('#tab-dealers .searchbox', 'Alice Rep');
+      await page.waitForTimeout(80);
+      eq((await visible()).length, 0, 'a rep name leaked through the dropdowns');
+      assert(/nothing matches/.test(await page.textContent('#tab-dealers [data-search-count]')), 'no empty message');
+
+      // Clearing brings everything back.
+      await page.fill('#tab-dealers .searchbox', '');
+      await page.waitForTimeout(80);
+      eq((await visible()).length, all.length, 'clearing did not restore the list');
+      eq(await page.textContent('#tab-dealers [data-search-count]'), '', 'count still shown when not searching');
+      return `${all.length} companies; name, case and word order all match; a rep name does not`;
+    });
+
+    await check('A search survives the list redrawing underneath it, without stealing the cursor', async () => {
+      await page.click('[data-tab=leads]');
+      await page.waitForSelector('#tab-leads tr[data-search]');
+      await page.fill('#tab-leads .searchbox', 'acme');
+      await page.waitForTimeout(80);
+      const before = await page.$$eval('#tab-leads tbody tr[data-search]', (r) => r.filter((x) => !x.hidden).length);
+      assert(before >= 1, 'nothing matched acme to begin with');
+
+      // Something else redraws the tab entirely.
+      await page.evaluate(() => renderLeads());
+      await page.waitForTimeout(250);
+      eq(await page.inputValue('#tab-leads .searchbox'), 'acme', 'the query was lost in the redraw');
+      const after = await page.$$eval('#tab-leads tbody tr[data-search]', (r) => r.filter((x) => !x.hidden).length);
+      eq(after, before, 'the filter was not re-applied after the redraw');
+      // And it did not take focus from whatever was being typed into.
+      const focused = await page.evaluate(() => document.activeElement && document.activeElement.className);
+      assert(!/searchbox/.test(String(focused)), 'the search box grabbed focus on a redraw');
+      await page.fill('#tab-leads .searchbox', '');
+      return 'query and filter both survive a redraw; focus is left alone';
+    });
+
     await check('Signing out clears the session', async () => {
       await page.click('#signOutBtn');
       await page.waitForSelector('#loginBox:not(.hide)');
@@ -739,6 +796,27 @@ async function main() {
         return tr && tr.textContent.includes('nothing written yet');
       }, { timeout: 10000 });
       return 'cleared to null; the row says so';
+    });
+
+    await check('A rep gets the same search on her own leads and her own dealers', async () => {
+      await repPage.click('[data-tab=leads]');
+      await repPage.waitForSelector('#tab-leads .searchbox');
+      const ph = await repPage.getAttribute('#tab-leads .searchbox', 'placeholder');
+      assert(/your leads/i.test(ph), `a rep is offered: ${ph}`);
+
+      await repPage.fill('#tab-leads .searchbox', 'acme');
+      await repPage.waitForTimeout(80);
+      const names = await repPage.$$eval('#tab-leads tbody tr[data-search]', (rows) =>
+        rows.filter((r) => !r.hidden).map((r) => r.querySelector('b').textContent));
+      assert(names.length >= 1 && names.every((n) => /acme/i.test(n)), `matched: ${JSON.stringify(names)}`);
+      await repPage.fill('#tab-leads .searchbox', '');
+
+      await repPage.click('[data-tab=dealers]');
+      await repPage.waitForSelector('#tab-dealers .searchbox');
+      // Put her back where the next check expects to find her.
+      await repPage.click('[data-tab=leads]');
+      await repPage.waitForSelector('#tab-leads tr[data-search]');
+      return 'a rep searches her own leads and her own dealers, with her own wording';
     });
 
     await check('Marking her own lead won is a plain confirmation and builds nothing', async () => {
