@@ -15,6 +15,7 @@
 const { runAnnualRenewalCycle } = require('./annualRenewal');
 const { runBillingEmailCycle } = require('./billingEmails');
 const { runRepEarningsCycle } = require('./repEarnings');
+const { runFollowupReminderCycle } = require('./followupReminders');
 
 const INTERVAL_MS = 60 * 60 * 1000;
 const FIRST_RUN_DELAY_MS = 2 * 60 * 1000;
@@ -44,6 +45,15 @@ async function tick() {
     await runRepEarningsCycle();
   } catch (err) {
     console.error('REP_EARNINGS scheduled cycle failed:', err.message);
+  }
+  // The morning follow-up digest (workers/followupReminders.js). It decides
+  // for itself that it is after 7am Eastern and that today's has not gone
+  // out yet, so riding the hourly tick costs one cheap query the rest of the
+  // day. No `force`: a cycle before 7am is meant to do nothing.
+  try {
+    await runFollowupReminderCycle();
+  } catch (err) {
+    console.error('FOLLOWUP_REMINDERS scheduled cycle failed:', err.message);
   }
 }
 
