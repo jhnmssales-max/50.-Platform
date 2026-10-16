@@ -843,13 +843,15 @@ async function renderReps(){
       (adminCols ? '<td class="num">' + dollarCell(r.earned_this_month_cents) + '</td><td class="num"><b>' + dollarCell(r.owed_cents) + '</b></td>' : '') +
       '<td class="num">' +
         (state.isAdmin && r.active && r.email ? '<button class="btn small" data-invite="' + r.id + '">' + (r.has_login ? 'Resend login' : 'Send login') + '</button> ' : '') +
-        '<button class="btn small secondary" data-edit="' + r.id + '">Edit</button></td></tr>'
+        '<button class="btn small secondary" data-edit="' + r.id + '">Edit</button>' +
+        (state.isAdmin ? ' <button class="btn small danger" data-delrep="' + r.id + '">Remove</button>' : '') + '</td></tr>'
     ).join('') || '<tr data-empty-row><td colspan="8" class="muted" style="padding:18px">No reps yet.</td></tr>') + '</tbody></table></div>';
   wireSearch('tab-reps', 'reps');
   $('addRepBtn').addEventListener('click', () => repDialog(null));
   $('tab-reps').querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => repDialog(b.dataset.edit)));
   $('tab-reps').querySelectorAll('[data-invite]').forEach((b) => b.addEventListener('click', () => inviteRep(b.dataset.invite, b)));
   $('tab-reps').querySelectorAll('[data-report]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); repReport(a.dataset.report); }));
+  $('tab-reps').querySelectorAll('[data-delrep]').forEach((b) => b.addEventListener('click', () => deleteRepDialog(b.dataset.delrep)));
 }
 // Emails the rep a one-time link to choose their own password. No password is
 // created or shown here, or anywhere — not even to Joseph.
@@ -945,12 +947,15 @@ async function renderDealers(){
           : '<td><select data-field="closer">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
             '<td><select data-field="onboarder">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
             (state.isAdmin ? '<td><input type="date" data-field="from" style="min-width:140px" title="Leave blank to start now"></td>' : '') +
-            '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button></td>'))  +
+            '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button>' +
+              (state.isAdmin ? ' <button class="btn small danger" data-delco="' + x.tenant_id + '">Remove</button>' : '') + '</td>'))  +
       '</tr>'
     ).join('') || '<tr data-empty-row><td colspan="6" class="muted" style="padding:18px">' + (state.isRep ? 'None yet. They show up here once Joseph has built them.' : 'No companies yet.') + '</td></tr>') + '</tbody></table></div>';
   $('tab-dealers').querySelectorAll('[data-company]').forEach((b) =>
     b.addEventListener('click', () => companyReport(b.dataset.company)));
   wireSearch('tab-dealers', 'dealers');
+  $('tab-dealers').querySelectorAll('[data-delco]').forEach((b) =>
+    b.addEventListener('click', () => deleteCompanyDialog(b.dataset.delco)));
   $('tab-dealers').querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', async () => {
     const tr = b.closest('tr');
     const closer = tr.querySelector('[data-field=closer]').value || null;
@@ -1278,6 +1283,108 @@ async function repReport(repId, year){
   $('cancelDlg').addEventListener('click', closeDialog);
   $('printReport').addEventListener('click', () => window.print());
   $('repYear').addEventListener('change', (e) => repReport(repId, e.target.value));
+}
+
+/* ---------- removing a company or a rep for good ---------- */
+// The dialog's job is to make the consequence impossible to misread before
+// the button works: what disappears, what stays, and that the card stops.
+// The name has to be typed exactly, so this cannot happen on a misclick.
+function confirmDeleteDialog({ title, name, lead, goes, stays, button, onConfirm }){
+  openDialog(
+    '<h3>' + esc(title) + '</h3>' +
+    '<p>' + lead + '</p>' +
+    '<div class="notice"><b>Gone for good</b><ul style="margin:6px 0 0;padding-left:18px">' +
+      goes.map((x) => '<li>' + x + '</li>').join('') + '</ul></div>' +
+    '<p class="muted"><b>Kept:</b> ' + stays + '</p>' +
+    '<form id="delForm">' +
+      '<label>Type <b>' + esc(name) + '</b> to confirm</label>' +
+      '<input name="confirm_name" autocomplete="off" spellcheck="false" placeholder="' + esc(name) + '">' +
+      '<label>Why? (optional, kept with the record)</label>' +
+      '<input name="reason" maxlength="500">' +
+      '<div class="actions">' +
+        '<button type="button" class="btn secondary" id="cancelDlg">Keep it</button>' +
+        '<button class="btn danger" type="submit" id="doDelete" disabled>' + esc(button) + '</button>' +
+      '</div></form>'
+  );
+  const form = $('delForm');
+  const typed = form.querySelector('[name=confirm_name]');
+  const go = $('doDelete');
+  // Exact, trimmed only at the ends — a name is not a password, but it is not
+  // a yes/no either.
+  typed.addEventListener('input', () => { go.disabled = typed.value.trim() !== name; });
+  typed.focus();
+  $('cancelDlg').addEventListener('click', closeDialog);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if(typed.value.trim() !== name) return;
+    go.disabled = true; go.textContent = 'Removing…';
+    try{
+      await onConfirm({ confirm_name: typed.value.trim(), reason: form.querySelector('[name=reason]').value.trim() || undefined });
+    }catch(err){
+      flash(err.message);
+      go.disabled = false; go.textContent = button;
+    }
+  });
+}
+
+function deleteCompanyDialog(tenantId){
+  const c = state.dealers.find((x) => x.tenant_id === tenantId);
+  if(!c) return flash('That company is gone.');
+  if(c.billing_exempt) return flash('That is one of your own companies. It cannot be deleted here.');
+  confirmDeleteDialog({
+    title: 'Remove ' + c.name,
+    name: c.name,
+    lead: 'Their card is taken off file first, so nothing can be charged to it again — no renewal, no 30% fee, nothing.',
+    goes: [
+      'Every customer of theirs, with their names and email addresses',
+      'Every referral, referral link and gift-card record',
+      'Their logins — nobody there can sign in again',
+      'Their branding, wording and sending address',
+    ],
+    stays: 'What they have already paid you stays in your books, with no name on it, so your Finances tab and past years still add up. ' +
+      'The lead that brought them in stays too, so your rep keeps credit for signing them.',
+    button: 'Remove this company',
+    onConfirm: async (body) => {
+      const out = await api('/rep-dealers/' + tenantId, { method:'DELETE', body: JSON.stringify(body) });
+      closeDialog();
+      flash(out.name + ' is gone. ' +
+        (out.card_detached ? 'Their card is off file. ' : 'There was no card on file. ') +
+        out.customers_deleted + ' customer' + (out.customers_deleted === 1 ? '' : 's') + ' and ' +
+        out.referrals_deleted + ' referral' + (out.referrals_deleted === 1 ? '' : 's') + ' deleted.', true);
+      await renderDealers();
+    },
+  });
+}
+
+function deleteRepDialog(repId){
+  const r = state.reps.find((x) => x.id === repId);
+  if(!r) return flash('That rep is gone.');
+  const owed = r.owed_cents || 0;
+  if(owed !== 0){
+    return flash(owed > 0
+      ? 'You still owe ' + r.name + ' ' + dollars(owed) + '. Pay them or reverse the earnings first, then delete them.'
+      : r.name + ' has been overpaid by ' + dollars(Math.abs(owed)) + '. Settle that first, then delete them.');
+  }
+  confirmDeleteDialog({
+    title: 'Remove ' + r.name,
+    name: r.name,
+    lead: 'Their balance is settled, so nothing is owed either way.',
+    goes: [
+      'Their login — they cannot sign in again',
+      'Their name, email, phone and notes',
+      'Their place on every dealer, so nothing from here on earns them anything',
+    ],
+    stays: 'What they earned and what you paid them stays in your money history, so your statements still add up. ' +
+      'The leads they brought in stay in the pipeline.',
+    button: 'Remove this rep',
+    onConfirm: async (body) => {
+      const out = await api('/reps/' + repId, { method:'DELETE', body: JSON.stringify(body) });
+      closeDialog();
+      flash(out.name + ' is gone.' + (out.dealers_released ? ' Taken off ' + out.dealers_released + ' dealer' + (out.dealers_released === 1 ? '' : 's') + '.' : ''), true);
+      await loadReps();
+      await renderReps();
+    },
+  });
 }
 
 /* ---------- one company's year ---------- */

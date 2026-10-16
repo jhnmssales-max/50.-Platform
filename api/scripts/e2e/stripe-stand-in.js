@@ -448,6 +448,29 @@ ${session.cancel_url ? `<p><a id="cancelLink" href="${escapeHtml(session.cancel_
   // ---- test controls (/__control) --------------------------------------
   app.use('/__control', express.json());
 
+  // Taking a card off file, which is what deleting a company does first.
+  // Detaching one that is already gone answers 404 with resource_missing, the
+  // way Stripe does, because the caller has to treat that as "nothing left to
+  // charge" rather than as a reason to abandon the deletion.
+  const detached = new Set();
+  app.post('/v1/payment_methods/:id/detach', (req, res) => {
+    const id = req.params.id;
+    if (detached.has(id)) {
+      return res.status(404).json({ error: { type: 'invalid_request_error', code: 'resource_missing', message: `No such PaymentMethod: '${id}'` } });
+    }
+    if (failDetach) {
+      return res.status(402).json({ error: { type: 'card_error', message: 'Stand-in was told to refuse this detach' } });
+    }
+    detached.add(id);
+    res.json({ id, object: 'payment_method', customer: null });
+  });
+  let failDetach = false;
+  app.post('/__control/fail-detach', (req, res) => {
+    failDetach = Boolean(req.body && req.body.fail);
+    res.json({ failDetach });
+  });
+  app.get('/__control/detached', (req, res) => res.json({ detached: [...detached] }));
+
   app.post('/__control/hold-webhooks', (req, res) => {
     state.holdWebhooks = !!req.body.hold;
     res.json({ hold: state.holdWebhooks });

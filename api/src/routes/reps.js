@@ -10,6 +10,7 @@ const dealerBuildEmails = require('../lib/dealerBuildEmails');
 const repInviteEmail = require('../lib/repInviteEmail');
 const { sendEmail } = require('../lib/postmark');
 const tenantCopy = require('../lib/tenantCopy');
+const stripeLib = require('../lib/stripe');
 
 // The sales-rep program (see the rep_program migration and workers/repEarnings.js).
 //
@@ -646,6 +647,121 @@ router.get('/rep-dealers', requireAuth, wrap(async (req, res) => {
       billing_exempt: d.billing_exempt === true,
     })),
   });
+}));
+
+// ---------------------------------------------------------------------------
+// Removing a company, and removing a rep
+// ---------------------------------------------------------------------------
+// Order matters more than anything else here: Stripe first, database second.
+//
+// The expensive failure is not a half-deleted row, it is a company that looks
+// deleted on the page while its card is still on file and still gets charged
+// $100 next year. So the saved card is detached before anything is removed,
+// and if Stripe refuses, nothing is deleted at all and the answer says so —
+// leaving a company that is still visible and still cancellable, which is the
+// recoverable side of the failure.
+const deleteBody = z.object({
+  // Typed into the dialog and checked against the real name here as well as
+  // in the page, so this cannot be driven by accident from anywhere else.
+  confirm_name: z.string().trim().min(1).max(200),
+  reason: z.string().trim().max(500).optional(),
+});
+
+router.delete('/rep-dealers/:id', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  const body = parseOr400(deleteBody, req.body || {});
+
+  // What it is, and whether it may be deleted at all — before Stripe is touched.
+  const company = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+    const { rows: [t] } = await client.query(
+      'select tenant_id, name, billing_exempt from rep_dealer_list() where tenant_id = $1',
+      [id]
+    );
+    if (!t) throw httpError(404, 'No such company');
+    if (t.billing_exempt) {
+      throw httpError(403, `${t.name} is one of your own companies — it runs a live referral program and cannot be deleted here.`, 'in_house');
+    }
+    if (body.confirm_name !== t.name) {
+      throw httpError(400, `Type the company name exactly to confirm. Expected "${t.name}".`, 'name_mismatch');
+    }
+    return t;
+  });
+
+  // The card, read with the service role because a tenant's billing columns
+  // are its own and RLS gives 50. staff nothing of another tenant's row.
+  const saved = await withServiceRole(async (sc) => {
+    const { rows: [r] } = await sc.query(
+      'select stripe_customer_id, stripe_payment_method_id from tenants where id = $1',
+      [id]
+    );
+    return r || {};
+  });
+
+  let card = { detached: false, reason: 'no saved card' };
+  if (saved.stripe_payment_method_id) {
+    try {
+      card = await stripeLib.detachPaymentMethod(saved.stripe_payment_method_id);
+    } catch (err) {
+      throw httpError(502,
+        `${company.name} was NOT deleted: their saved card could not be removed at Stripe (${err.message}). ` +
+        'Nothing has been changed — try again, or detach the card in Stripe first.',
+        'card_still_attached');
+    }
+  }
+
+  const out = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+    const { rows: [r] } = await client.query('select * from delete_company($1, $2)', [id, body.reason || null]);
+    return r;
+  });
+
+  res.json({
+    deleted: true,
+    name: company.name,
+    card_detached: card.detached,
+    card_note: card.reason || null,
+    customers_deleted: out.deleted_customers,
+    referrals_deleted: out.deleted_referrals,
+    logins_revoked: out.deleted_logins,
+  });
+}));
+
+router.delete('/reps/:id', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  const body = parseOr400(deleteBody, req.body || {});
+
+  const out = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+    const { rows: [rep] } = await client.query('select id, name, deleted_at from reps where id = $1', [id]);
+    if (!rep) throw httpError(404, 'No such rep');
+    if (rep.deleted_at) throw httpError(409, 'That rep has already been deleted');
+    if (body.confirm_name !== rep.name) {
+      throw httpError(400, `Type the rep's name exactly to confirm. Expected "${rep.name}".`, 'name_mismatch');
+    }
+
+    // The balance is checked inside delete_rep() as well — that is the one
+    // that counts. This is here only so the refusal reads like a sentence
+    // rather than a database error.
+    const { rows: [bal] } = await client.query(
+      `select (coalesce((select sum(amount_cents) from rep_earnings where rep_id = $1), 0)
+             - coalesce((select sum(amount_cents) from rep_payouts where rep_id = $1), 0))::int as owed_cents`,
+      [id]
+    );
+    if (bal.owed_cents !== 0) {
+      const owed = (bal.owed_cents / 100).toFixed(2);
+      throw httpError(409,
+        bal.owed_cents > 0
+          ? `You still owe ${rep.name} $${owed}. Record the payment, or reverse the earnings, then delete them.`
+          : `${rep.name} has been overpaid by $${Math.abs(bal.owed_cents / 100).toFixed(2)}. Settle that first, then delete them.`,
+        'balance_not_settled');
+    }
+
+    const { rows: [r] } = await client.query('select * from delete_rep($1, $2)', [id, body.reason || null]);
+    return { name: rep.name, ...r };
+  });
+
+  res.json({ deleted: true, name: out.name, dealers_released: out.released_dealers });
 }));
 
 const assignBody = z.object({

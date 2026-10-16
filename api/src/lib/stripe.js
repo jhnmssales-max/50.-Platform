@@ -409,6 +409,28 @@ async function retrievePaymentReceiptDetails(paymentIntentId) {
 // Returns the parsed event on success; throws on a missing/malformed
 // header, a signature mismatch, or a timestamp outside the tolerance
 // window (replay protection, same 5-minute default Stripe's own SDKs use).
+// Taking a saved card off a customer, so nothing can be charged to it again.
+//
+// Deliberately forgiving: a card that was already detached, or a customer
+// Stripe no longer has, both mean the same thing as success — there is nothing
+// left to charge — and the caller is in the middle of deleting a company. A
+// 404 or an "already detached" must not be the thing that stops a removal and
+// leaves the dealer half-deleted with a live card on file.
+async function detachPaymentMethod(paymentMethodId) {
+  const id = String(paymentMethodId || '').trim();
+  if (!id) return { detached: false, reason: 'no saved card' };
+  try {
+    await stripeRequest(`/payment_methods/${encodeURIComponent(id)}/detach`, {});
+    return { detached: true };
+  } catch (err) {
+    const message = String(err && err.message ? err.message : err);
+    if (err && (err.stripeStatus === 404 || /resource_missing|already been detached|No such PaymentMethod/i.test(message))) {
+      return { detached: false, reason: 'already gone from Stripe' };
+    }
+    throw err;
+  }
+}
+
 function verifyWebhookSignature(rawBody, signatureHeader, webhookSecret, toleranceSeconds = 300) {
   if (!webhookSecret) {
     throw new Error('STRIPE_WEBHOOK_SECRET is not set — see .env.example');
@@ -458,5 +480,6 @@ module.exports = {
   chargeOffSession,
   retrievePaymentIntent,
   retrievePaymentReceiptDetails,
+  detachPaymentMethod,
   verifyWebhookSignature,
 };

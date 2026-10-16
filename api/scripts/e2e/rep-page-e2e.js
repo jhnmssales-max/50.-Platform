@@ -538,6 +538,50 @@ async function main() {
       return 'paying: money chart shown; in-house: no money chart, and it says why';
     });
 
+    await check('Removing a company needs its name typed exactly, and says what goes and what stays', async () => {
+      // A dealer of its own: deleting one the later checks still work with
+      // would make this test the reason they fail.
+      const [doomed] = await sql(
+        `insert into tenants (slug, name, billing_required, billing_status)
+         values ('page-doomed-co','Page Doomed Co', true, 'active') returning id`
+      );
+      await page.click('[data-tab=dealers]');
+      await page.waitForFunction(() => document.querySelector('#tab-dealers').textContent.includes('Page Doomed Co'), { timeout: 10000 });
+      await page.locator(`tr[data-tenant="${doomed.id}"]`).locator('[data-delco]').click();
+      await page.waitForSelector('#delForm');
+
+      const text = (await page.textContent('#dlg')).replace(/\s+/g, ' ');
+      assert(/card is taken off file/i.test(text), `does not say the card stops: ${text.slice(0, 200)}`);
+      assert(/customer/i.test(text) && /logins/i.test(text), 'does not say what is deleted');
+      assert(/still add up|already paid/i.test(text), 'does not say the money is kept');
+
+      // The button is dead until the name matches, and a near miss is a miss.
+      eq(await page.isDisabled('#doDelete'), true, 'enabled before anything was typed');
+      await page.fill('#delForm [name=confirm_name]', 'Page Doomed');
+      eq(await page.isDisabled('#doDelete'), true, 'enabled on a partial name');
+      await page.fill('#delForm [name=confirm_name]', 'page doomed co');
+      eq(await page.isDisabled('#doDelete'), true, 'enabled on the wrong case');
+      await page.fill('#delForm [name=confirm_name]', 'Page Doomed Co');
+      eq(await page.isDisabled('#doDelete'), false, 'still disabled on the exact name');
+
+      await page.click('#doDelete');
+      await page.waitForFunction(() => /is gone/.test(document.getElementById('appMsg').textContent), { timeout: 15000 });
+      // Off the page, and nothing left to charge in the database.
+      await page.waitForFunction(() => !document.querySelector('#tab-dealers').textContent.includes('Page Doomed Co'), { timeout: 10000 });
+      const [t] = await sql('select name, billing_status, renewal_due_at, deleted_at from tenants where id = $1', [doomed.id]);
+      eq(t.name, 'Deleted company', 'scrubbed'); eq(t.billing_status, 'suspended', 'suspended');
+      eq(t.renewal_due_at, null, 'nothing due'); assert(t.deleted_at, 'deleted_at');
+      return 'partial and wrong-case names refused; exact name removes it and it leaves the list';
+    });
+
+    await check('An in-house company has no Remove button at all', async () => {
+      const gss = page.locator(`tr[data-tenant="${tenants['good-steward-structures'].id}"]`);
+      eq(await gss.locator('[data-delco]').count(), 0, 'in-house row offers a Remove button');
+      const payer = page.locator(`tr[data-tenant="${tenants['dealer-a'].id}"]`);
+      eq(await payer.locator('[data-delco]').count(), 1, 'a paying dealer has no Remove button');
+      return 'Remove on the paying dealer, none on the in-house one';
+    });
+
     await check('At a narrow window the Resend login button is still reachable without scrolling', async () => {
       await page.click('[data-tab=reps]');
       await page.waitForSelector('#tab-reps [data-invite]');
