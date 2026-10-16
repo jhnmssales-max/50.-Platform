@@ -78,15 +78,52 @@ async function createPasswordlessUser(email) {
   throw err;
 }
 
-async function findUserByEmail(email) {
+// Finding an account that already exists, which is the whole of a resend.
+//
+// This used to ask for `?per_page=1&filter=<email>` and trust the answer. The
+// `filter` parameter is not honored the same way across GoTrue versions — and
+// `per_page=1` means that when it is ignored, the single row that comes back
+// is simply the newest account on the project, which almost never matches.
+// The lookup returned nothing, createPasswordlessUser rethrew Supabase's
+// "already been registered", and every rep who already had a login could
+// never be sent a fresh link. Tests did not catch it because the stand-in
+// implemented `filter` as an exact match, which is the one behaviour real
+// Supabase does not guarantee.
+//
+// So: still ask with the filter, because it is one request when it works, but
+// never depend on it — fall back to reading actual pages and matching the
+// address here, where the comparison is ours and exact.
+const USERS_PER_PAGE = 200;
+const MAX_USER_PAGES = 25;
+
+async function listUserPage(params) {
   const key = serviceRoleKey();
-  const url = `${authBase()}/admin/users?per_page=1&filter=${encodeURIComponent(String(email).trim())}`;
+  const url = `${authBase()}/admin/users?${params}`;
   const res = await fetch(url, { headers: { Accept: 'application/json', apikey: key, Authorization: `Bearer ${key}` } });
   if (!res.ok) return null;
   const json = await res.json().catch(() => ({}));
-  const users = Array.isArray(json) ? json : json.users || [];
-  const match = users.find((u) => String(u.email || '').toLowerCase() === String(email).trim().toLowerCase());
-  return match ? match.id : null;
+  return Array.isArray(json) ? json : json.users || [];
+}
+
+async function findUserByEmail(email) {
+  const wanted = String(email || '').trim().toLowerCase();
+  if (!wanted) return null;
+  const matches = (users) => (users || []).find((u) => String(u.email || '').toLowerCase() === wanted) || null;
+
+  const filtered = await listUserPage(`per_page=${USERS_PER_PAGE}&filter=${encodeURIComponent(wanted)}`);
+  const quick = matches(filtered);
+  if (quick) return quick.id;
+
+  // A short project is one page; the cap stops an unbounded crawl if a version
+  // ever ignores paging and hands back the same page forever.
+  for (let page = 1; page <= MAX_USER_PAGES; page += 1) {
+    const users = await listUserPage(`page=${page}&per_page=${USERS_PER_PAGE}`);
+    if (!users || users.length === 0) return null;
+    const hit = matches(users);
+    if (hit) return hit.id;
+    if (users.length < USERS_PER_PAGE) return null;
+  }
+  return null;
 }
 
 // The one-time link the person follows to choose their own password. Supabase
