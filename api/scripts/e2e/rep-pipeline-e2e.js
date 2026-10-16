@@ -833,6 +833,127 @@ async function main() {
     });
 
     // ===========================================================================
+    // ===========================================================================
+    section('Removing a company, and removing a rep');
+    await check('A company that traded is closed: names wiped, counts and money kept', async () => {
+      const [doomed] = await sql(
+        `insert into tenants (slug, name, billing_required, billing_status, activation_paid_at, activation_livemode,
+                              stripe_customer_id, annual_fee_cents, renewal_due_at)
+         values ('doomed-co','Doomed Co', true, 'active', now(), true, 'cus_doomed', 10000, now() + interval '30 days')
+         returning id`
+      );
+      const [cust] = await sql(`insert into customers (tenant_id, name, email) values ($1,'Real Person','rp@doomed.test') returning id`, [doomed.id]);
+      const [link] = await sql(`insert into referral_links (tenant_id, code, kind, customer_id) values ($1,'doomed-1','share',$2) returning id`, [doomed.id, cust.id]);
+      await sql(`insert into referrals (tenant_id, referral_link_id, name, email) values ($1,$2,'Friend','friend@doomed.test')`, [doomed.id, link.id]);
+      await sql(`insert into billing_events (tenant_id, event_type, amount_cents, status, livemode, stripe_payment_intent_id)
+                 values ($1,'activation_charge',50000,'succeeded',true,'pi_doomed')`, [doomed.id]);
+      // What the Finances tab says before any of this, so the point of keeping
+      // the payment can be checked where Joseph actually reads it.
+      const financesBefore = (await api('GET', '/reports/company', { as: USERS.admin })).body.totals.revenue_cents;
+      const [u] = await sql(`insert into auth.users (id, email) values (gen_random_uuid(),'owner@doomed.test') returning id`);
+      await sql(`insert into users (id, tenant_id, email, name, role) values ($1,$2,'owner@doomed.test','Owner','admin')`, [u.id, doomed.id]);
+      const revenueBefore = (await sql(`select coalesce(sum(amount_cents),0)::int n from billing_events`))[0].n;
+
+      const r = await api('DELETE', `/rep-dealers/${doomed.id}`, { as: USERS.admin, body: { confirm_name: 'Doomed Co', reason: 'test' } });
+      eq(r.status, 200, `delete: ${JSON.stringify(r.body)}`);
+      eq(r.body.outcome, 'closed', 'they traded, so they are closed rather than deleted');
+      eq(r.body.customers_affected, 1, 'customers anonymised');
+      eq(r.body.referrals_affected, 1, 'referrals anonymised');
+      eq(r.body.logins_revoked, 1, 'logins revoked');
+
+      // The people are unidentifiable, but the rows — and so the counts on
+      // their report — are still there.
+      const [cust2] = await sql('select name, email, phone from customers where tenant_id = $1', [doomed.id]);
+      eq(cust2.name, 'Removed', 'customer name wiped');
+      assert(/@removed\.invalid$/.test(cust2.email), `email: ${cust2.email}`);
+      eq(cust2.phone, null, 'phone wiped');
+      const [ref2] = await sql('select name, email from referrals where tenant_id = $1', [doomed.id]);
+      eq(ref2.name, 'Removed', 'referral name wiped');
+      eq((await sql('select count(*)::int n from customers where tenant_id = $1', [doomed.id]))[0].n, 1, 'the customer row stays');
+      eq((await sql('select count(*)::int n from referrals where tenant_id = $1', [doomed.id]))[0].n, 1, 'the referral row stays');
+      eq((await sql('select count(*)::int n from users where tenant_id = $1', [doomed.id]))[0].n, 0, 'logins');
+
+      // The money is not — in the table, and on the page that reads it.
+      eq((await sql(`select coalesce(sum(amount_cents),0)::int n from billing_events`))[0].n, revenueBefore, 'revenue unchanged');
+      const financesAfter = (await api('GET', '/reports/company', { as: USERS.admin })).body.totals.revenue_cents;
+      eq(financesAfter, financesBefore, 'the Finances tab still shows what they paid');
+
+      // Nothing about the row can be charged or recognised.
+      const [t] = await sql('select name, billing_status, annual_fee_cents, renewal_due_at, stripe_payment_method_id, closed_at from tenants where id = $1', [doomed.id]);
+      eq(t.name, 'Doomed Co', 'the name is kept — a nameless line in the books is worth less');
+      eq(t.billing_status, 'suspended', 'billing suspended');
+      eq(t.annual_fee_cents, 0, 'no annual fee');
+      eq(t.renewal_due_at, null, 'nothing due');
+      assert(t.closed_at, 'closed_at not set');
+
+      // Out of the list by default, there when asked for, and their report
+      // still opens with the numbers.
+      const list = await api('GET', '/rep-dealers', { as: USERS.admin });
+      assert(!list.body.dealers.some((d) => d.tenant_id === doomed.id), 'a closed company is in the default list');
+      const withClosed = await api('GET', '/rep-dealers?closed=1', { as: USERS.admin });
+      assert(withClosed.body.dealers.some((d) => d.tenant_id === doomed.id && d.closed_at), 'not in the closed list either');
+      const report = await api('GET', `/reports/tenant/${doomed.id}`, { as: USERS.admin });
+      eq(report.status, 200, 'a closed company still opens');
+      eq(report.body.totals.referrals, 1, 'and still shows what they did');
+      return 'closed: names wiped, counts and $500 kept, nothing to charge, hidden unless asked for';
+    });
+
+    await check('A company that never traded is deleted outright, row and all', async () => {
+      const [never] = await sql(
+        `insert into tenants (slug, name, billing_required) values ('never-started','Never Started Co', true) returning id`
+      );
+      const [c] = await sql(`insert into customers (tenant_id, name, email) values ($1,'Someone','s@never.test') returning id`, [never.id]);
+      await sql(`insert into referral_links (tenant_id, code, kind, customer_id) values ($1,'never-1','share',$2)`, [never.id, c.id]);
+
+      const r = await api('DELETE', `/rep-dealers/${never.id}`, { as: USERS.admin, body: { confirm_name: 'Never Started Co' } });
+      eq(r.status, 200, `delete: ${JSON.stringify(r.body)}`);
+      eq(r.body.outcome, 'deleted', 'nothing in the books, so nothing is kept');
+      eq((await sql('select count(*)::int n from tenants where id = $1', [never.id]))[0].n, 0, 'the row itself is gone');
+      eq((await sql('select count(*)::int n from customers where tenant_id = $1', [never.id]))[0].n, 0, 'customers');
+      const withClosed = await api('GET', '/rep-dealers?closed=1', { as: USERS.admin });
+      assert(!withClosed.body.dealers.some((d) => d.tenant_id === never.id), 'still listed somewhere');
+      return 'no billing events, no earnings -> the tenant row is deleted, not kept';
+    });
+
+    await check('The name has to be typed exactly, and an in-house company cannot be removed at all', async () => {
+      const [other] = await sql(
+        `insert into tenants (slug, name, billing_required) values ('typo-co','Typo Co', true) returning id`
+      );
+      const wrong = await api('DELETE', `/rep-dealers/${other.id}`, { as: USERS.admin, body: { confirm_name: 'typo co' } });
+      eq(wrong.status, 400, 'wrong name'); eq(wrong.body.code, 'name_mismatch', 'code');
+      eq((await sql('select count(*)::int n from tenants where id = $1', [other.id]))[0].n, 1, 'nothing happened');
+
+      const inHouse = await api('DELETE', `/rep-dealers/${tenants['good-steward-structures'].id}`, {
+        as: USERS.admin, body: { confirm_name: 'Good Steward Structures' },
+      });
+      eq(inHouse.status, 403, 'in-house'); eq(inHouse.body.code, 'in_house', 'code');
+      eq((await sql(`select closed_at from tenants where slug = 'good-steward-structures'`))[0].closed_at, null, 'GSS untouched');
+      return 'wrong name -> 400 name_mismatch; in-house -> 403 in_house, both untouched';
+    });
+
+    await check('A rep who is owed money cannot be deleted; one who is square can', async () => {
+      const owed = await api('DELETE', `/reps/${rep.Alice.id}`, { as: USERS.admin, body: { confirm_name: 'Alice Rep' } });
+      eq(owed.status, 409, 'owed rep'); eq(owed.body.code, 'balance_not_settled', 'code');
+      assert(/still owe/i.test(owed.body.error), `message: ${owed.body.error}`);
+      eq((await sql('select closed_at from reps where id = $1', [rep.Alice.id]))[0].closed_at, null, 'Alice untouched');
+
+      const square = (await api('POST', '/reps', { as: USERS.admin, body: { name: 'Square Rep', email: 'square@reps.test' } })).body;
+      const gone = await api('DELETE', `/reps/${square.id}`, { as: USERS.admin, body: { confirm_name: 'Square Rep' } });
+      eq(gone.status, 200, `delete: ${JSON.stringify(gone.body)}`);
+      eq(gone.body.outcome, 'deleted', 'never earned anything, so nothing is kept');
+      eq((await sql('select count(*)::int n from reps where id = $1', [square.id]))[0].n, 0, 'the rep row is gone');
+      return 'owed -> 409 balance_not_settled; a rep who never earned -> deleted outright';
+    });
+
+    await check('Only the admin can remove anything', async () => {
+      for (const who of [USERS.helper, ALICE]) {
+        eq((await api('DELETE', `/reps/${rep.Bob.id}`, { as: who, body: { confirm_name: 'Bob Rep' } })).status, 403, `rep delete as ${who.email}`);
+        eq((await api('DELETE', `/rep-dealers/${tenants['dealer-a'].id}`, { as: who, body: { confirm_name: 'Dealer A Roofing' } })).status, 403, `company delete as ${who.email}`);
+      }
+      eq((await sql('select closed_at from reps where id = $1', [rep.Bob.id]))[0].closed_at, null, 'Bob untouched');
+      return 'helper and rep both refused, nothing changed';
+    });
+
     section('Everyone else is still shut out');
     await check('A dealer\'s own admin gets 403 on every rep route, reps included', async () => {
       for (const [m, p] of [['GET', '/reps'], ['GET', '/rep-leads'], ['GET', '/rep-dealers'], ['GET', '/rep-money/overview'], ['GET', '/rep-settings']]) {

@@ -435,6 +435,42 @@ async function main() {
       process.env.POSTMARK_SERVER_TOKEN = saved;
       return 'charge recorded as succeeded even though the receipt email could not be sent';
     });
+
+    // ===========================================================================
+    section('Taking a card off file');
+    // This is the first thing deleting a company does, and the one step whose
+    // failure costs real money: a company that looks deleted but still has a
+    // live card would be charged $100 again next year.
+    await check('Detaching a saved card works, and detaching one that is already gone is not an error', async () => {
+      const stripeLib = require(path.join(REPO_ROOT, 'api', 'src', 'lib', 'stripe.js'));
+      const first = await stripeLib.detachPaymentMethod('pm_to_remove');
+      eq(first.detached, true, 'first detach');
+
+      // Stripe answers 404 resource_missing the second time. The caller is
+      // mid-deletion, and "there is nothing left to charge" is success.
+      const again = await stripeLib.detachPaymentMethod('pm_to_remove');
+      eq(again.detached, false, 'second detach');
+      assert(/already gone/i.test(again.reason), `reason: ${again.reason}`);
+
+      // No card on file at all is the same story, without a request.
+      const none = await stripeLib.detachPaymentMethod(null);
+      eq(none.detached, false, 'no card'); assert(/no saved card/i.test(none.reason), `reason: ${none.reason}`);
+      return 'detached; already-detached tolerated; no card tolerated';
+    });
+
+    await check('A card Stripe refuses to detach is thrown, so the company is not deleted with a live card', async () => {
+      await fetch(`${STRIPE_BASE}/__control/fail-detach`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fail: true }),
+      });
+      const stripeLib = require(path.join(REPO_ROOT, 'api', 'src', 'lib', 'stripe.js'));
+      let threw = null;
+      try { await stripeLib.detachPaymentMethod('pm_stubborn'); } catch (err) { threw = err.message; }
+      assert(threw, 'a refused detach was swallowed — a company could be deleted with a live card');
+      await fetch(`${STRIPE_BASE}/__control/fail-detach`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fail: false }),
+      });
+      return `refusal surfaced: ${String(threw).slice(0, 60)}`;
+    });
   } finally {
     await db.end().catch(() => {});
     await pool.end().catch(() => {});

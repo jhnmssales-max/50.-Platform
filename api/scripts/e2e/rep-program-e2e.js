@@ -561,7 +561,7 @@ async function main() {
       const q = (user, text, params) => withUserTransaction(user.id, (c) => c.query(text, params));
       eq((await q(USERS.dealerAdmin, 'select id from reps')).rowCount, 0, 'dealer sees reps');
       eq((await q(USERS.dealerAdmin, 'select id from rep_leads')).rowCount, 0, 'dealer sees leads');
-      eq((await q(USERS.dealerAdmin, 'select * from rep_dealer_list()')).rowCount, 0, 'dealer sees the dealer list');
+      eq((await q(USERS.dealerAdmin, 'select * from rep_dealer_list(false)')).rowCount, 0, 'dealer sees the dealer list');
       assert((await q(USERS.helper, 'select id from reps')).rowCount > 0, 'helper cannot see reps');
       for (const t of ['rep_earnings', 'rep_payouts', 'rep_settings']) eq((await q(USERS.helper, `select * from ${t}`)).rowCount, 0, `helper sees ${t}`);
       assert((await q(USERS.admin, 'select * from rep_earnings')).rowCount > 0, 'admin cannot see earnings');

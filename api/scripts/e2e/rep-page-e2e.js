@@ -538,6 +538,65 @@ async function main() {
       return 'paying: money chart shown; in-house: no money chart, and it says why';
     });
 
+    await check('Removing a company needs its name typed exactly, and says what goes and what stays', async () => {
+      // A dealer of its own: deleting one the later checks still work with
+      // would make this test the reason they fail.
+      const [doomed] = await sql(
+        `insert into tenants (slug, name, billing_required, billing_status, activation_paid_at, activation_livemode)
+         values ('page-doomed-co','Page Doomed Co', true, 'active', now(), true) returning id`
+      );
+      // They paid, so this is the closing path — the one with more to say and
+      // more that must not be lost.
+      await sql(`insert into billing_events (tenant_id, event_type, amount_cents, status, livemode, stripe_payment_intent_id)
+                 values ($1,'activation_charge',50000,'succeeded',true,'pi_page_doomed')`, [doomed.id]);
+      await page.click('[data-tab=dealers]');
+      await page.waitForFunction(() => document.querySelector('#tab-dealers').textContent.includes('Page Doomed Co'), { timeout: 10000 });
+      await page.locator(`tr[data-tenant="${doomed.id}"]`).locator('[data-delco]').click();
+      await page.waitForSelector('#delForm');
+
+      const text = (await page.textContent('#dlg')).replace(/\s+/g, ' ');
+      assert(/card comes off file/i.test(text), `does not say the card stops: ${text.slice(0, 200)}`);
+      assert(/customer/i.test(text) && /logins/i.test(text), 'does not say what goes');
+      assert(/still add up/i.test(text), 'does not say the money is kept');
+      // It traded, so the dialog must offer closing rather than deleting.
+      assert(/Close this company/i.test(text), `offers the wrong outcome: ${text.slice(0, 200)}`);
+
+      // The button is dead until the name matches, and a near miss is a miss.
+      eq(await page.isDisabled('#doDelete'), true, 'enabled before anything was typed');
+      await page.fill('#delForm [name=confirm_name]', 'Page Doomed');
+      eq(await page.isDisabled('#doDelete'), true, 'enabled on a partial name');
+      await page.fill('#delForm [name=confirm_name]', 'page doomed co');
+      eq(await page.isDisabled('#doDelete'), true, 'enabled on the wrong case');
+      await page.fill('#delForm [name=confirm_name]', 'Page Doomed Co');
+      eq(await page.isDisabled('#doDelete'), false, 'still disabled on the exact name');
+
+      await page.click('#doDelete');
+      await page.waitForFunction(() => /is closed/.test(document.getElementById('appMsg').textContent), { timeout: 15000 });
+      // Off the page, and nothing left to charge in the database.
+      await page.waitForFunction(() => !document.querySelector('#tab-dealers').textContent.includes('Page Doomed Co'), { timeout: 10000 });
+      const [t] = await sql('select name, billing_status, renewal_due_at, closed_at from tenants where id = $1', [doomed.id]);
+      eq(t.name, 'Page Doomed Co', 'the name is kept'); eq(t.billing_status, 'suspended', 'suspended');
+      eq(t.renewal_due_at, null, 'nothing due'); assert(t.closed_at, 'closed_at');
+
+      // And it is reachable again through the toggle, greyed out.
+      await page.waitForSelector('#toggleClosed');
+      await page.click('#toggleClosed');
+      await page.waitForFunction(() => document.querySelector('#tab-dealers').textContent.includes('Page Doomed Co'), { timeout: 10000 });
+      const closedRow = page.locator(`tr[data-tenant="${doomed.id}"]`);
+      assert(/Closed /.test(await closedRow.textContent()), 'the closed row does not say so');
+      eq(await closedRow.locator('[data-delco]').count(), 0, 'a closed company still offers Remove');
+      eq(await closedRow.locator('[data-save]').count(), 0, 'a closed company still offers Save');
+      return 'partial and wrong-case names refused; exact name closes it, and it returns under the toggle';
+    });
+
+    await check('An in-house company has no Remove button at all', async () => {
+      const gss = page.locator(`tr[data-tenant="${tenants['good-steward-structures'].id}"]`);
+      eq(await gss.locator('[data-delco]').count(), 0, 'in-house row offers a Remove button');
+      const payer = page.locator(`tr[data-tenant="${tenants['dealer-a'].id}"]`);
+      eq(await payer.locator('[data-delco]').count(), 1, 'a paying dealer has no Remove button');
+      return 'Remove on the paying dealer, none on the in-house one';
+    });
+
     await check('At a narrow window the Resend login button is still reachable without scrolling', async () => {
       await page.click('[data-tab=reps]');
       await page.waitForSelector('#tab-reps [data-invite]');

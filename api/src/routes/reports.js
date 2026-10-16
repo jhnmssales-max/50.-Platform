@@ -375,7 +375,7 @@ router.get('/reports/tenant/:id', requireAuth, wrap(async (req, res) => {
     // signed-in user may look at, so asking it keeps this endpoint honest
     // rather than giving staff a second, looser door into any tenant row.
     const { rows: [t] } = await client.query(
-      'select tenant_id, name, slug, activated, activated_on, billing_exempt from rep_dealer_list() where tenant_id = $1',
+      'select tenant_id, name, slug, activated, activated_on, billing_exempt, closed_at from rep_dealer_list(true) where tenant_id = $1',
       [id]
     );
     if (!t) throw httpError(404, 'No such company');
