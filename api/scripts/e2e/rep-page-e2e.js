@@ -279,10 +279,10 @@ async function main() {
     // ======================================================================
     section('Admin: the whole flow');
     const page = await newPage('admin');
-    await check('Admin signs in and sees all five of his tabs', async () => {
+    await check('Admin signs in and sees every one of his tabs', async () => {
       await signIn(page, USERS.admin);
       const t = await tabNames(page);
-      assert(JSON.stringify(t) === JSON.stringify(['Leads', 'Reps', 'Companies', 'Build dashboards', 'Money', 'Finances']), `tabs: ${t}`);
+      assert(JSON.stringify(t) === JSON.stringify(['Calendar', 'Leads', 'Reps', 'Companies', 'Build dashboards', 'Money', 'Finances']), `tabs: ${t}`);
       return `${await page.textContent('#who')}`;
     });
     await check('Add two reps (Alice, Bob) on the Reps tab', async () => {
@@ -686,12 +686,12 @@ async function main() {
 
     // ======================================================================
     section('Helper: sees no money, anywhere');
-    await check('Helper signs in: tabs are Leads, Reps, Companies only (no Money)', async () => {
+    await check('Helper signs in: tabs are Calendar, Leads, Reps, Companies only (no Money)', async () => {
       const hp = await newPage('helper');
       global.__helper = hp;
       await signIn(hp, USERS.helper);
       const t = await tabNames(hp);
-      assert(JSON.stringify(t) === JSON.stringify(['Leads', 'Reps', 'Companies']), `tabs: ${t}`);
+      assert(JSON.stringify(t) === JSON.stringify(['Calendar', 'Leads', 'Reps', 'Companies']), `tabs: ${t}`);
       assert(/helper/.test(await hp.textContent('#who')), 'who');
     });
     await check('No dollar sign appears on any tab, and the Reps table has no earned / owe columns', async () => {
@@ -758,11 +758,11 @@ async function main() {
     });
 
     let repPage;
-    await check('Alice signs in and sees My leads, My dealers and My money — no Reps tab, no Money tab', async () => {
+    await check('Alice signs in and sees Calendar, My leads, My dealers and My money — no Reps tab, no Money tab', async () => {
       repPage = await newPage('rep');
       await signIn(repPage, { email: 'alice@x.test' });
       const t = await tabNames(repPage);
-      eqArr(t, ['My leads', 'My dealers', 'My money'], 'tabs');
+      eqArr(t, ['Calendar', 'My leads', 'My dealers', 'My money'], 'tabs');
       assert(/rep$/.test((await repPage.textContent('#who')).trim()), `who: ${await repPage.textContent('#who')}`);
       return (await repPage.textContent('#who')).trim();
     });
@@ -1123,7 +1123,7 @@ async function main() {
       await p.click('#setPwBtn');
       await p.waitForSelector('#app:not(.hide) nav.tabs button', { timeout: 10000 });
       const tabs = await tabNames(p);
-      eqArr(tabs, ['My leads', 'My dealers', 'My money'], 'she lands in her own pipeline');
+      eqArr(tabs, ['Calendar', 'My leads', 'My dealers', 'My money'], 'she lands in her own pipeline');
 
       // And the password really is set: an ordinary sign-in works now.
       const signIn = await fetch(`${AUTH_BASE}/auth/v1/token?grant_type=password`, {

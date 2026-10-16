@@ -77,6 +77,47 @@
   .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;}
   .stat b{display:block;font-size:24px;font-family:'Fraunces',serif;color:var(--primary);font-variant-numeric:tabular-nums;}
   .stat span{font-size:12px;color:var(--muted);}
+  /* ---- calendar ----
+     A month is a 7-column grid rather than a <table>: the cells are stacks of
+     chips, not data in columns, and a grid lets a busy day grow taller without
+     dragging every other cell in its row with it. At phone width the grid is
+     hidden entirely (see the media query at the end) and the list below it is
+     the whole tab, which is the right shape for reading between appointments. */
+  .calhead{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 14px;}
+  .calhead h3{flex:1 1 auto;}
+  .calgrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden;}
+  .calgrid .dow{background:var(--bg);padding:7px 8px;font-size:11px;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--muted);font-weight:700;text-align:center;}
+  .calgrid .day{background:var(--card);min-height:84px;padding:6px 7px;display:flex;flex-direction:column;gap:3px;}
+  .calgrid .day.out{background:#FBF9F5;}
+  .calgrid .day .dnum{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;}
+  .calgrid .day.today{box-shadow:inset 0 0 0 2px var(--secondary);}
+  .calgrid .day.today .dnum{color:var(--primary);font-weight:700;}
+  /* A chip has to stay inside its column at every width, so it wraps rather
+     than pushing the grid wider — min-width:0 on the cell is what allows it. */
+  .chip{font-size:12px;line-height:1.3;border-radius:6px;padding:2px 6px;text-align:left;
+    border:0;cursor:pointer;background:#E6F0FA;color:#1F4E7A;font-weight:600;
+    overflow-wrap:anywhere;width:100%;}
+  .chip.done{background:#EDE8DD;color:var(--muted);text-decoration:line-through;font-weight:500;}
+  .chip.late{background:#F8E7DA;color:#8A5A2B;}
+  .chip.mile{background:#EFEDE7;color:var(--muted);font-weight:500;cursor:default;}
+  .chip.mile.won{background:#E3F3EA;color:var(--ok);}
+  /* The actionable list under the grid. */
+  .duelist{display:flex;flex-direction:column;gap:8px;margin:6px 0 0;}
+  .due{display:flex;gap:10px;align-items:flex-start;background:var(--card);border:1px solid var(--line);
+    border-radius:10px;padding:10px 12px;}
+  .due.overdue{border-color:#E8C9A8;background:#FFFAF4;}
+  .due .when{flex:0 0 112px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;}
+  .due .what{flex:1 1 auto;min-width:0;}
+  .due .what b{font-weight:600;}
+  .due .what p{margin:2px 0 0;font-size:13px;color:var(--muted);overflow-wrap:anywhere;}
+  .due .btn{flex:0 0 auto;}
+  @media (max-width:560px){
+    .calgrid{display:none;}
+    .due{flex-wrap:wrap;}
+    .due .when{flex:1 1 100%;}
+  }
   .notice{background:var(--warn-bg);border:1px solid #E8D79C;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:14px;}
   .neg{color:var(--danger);}
   dialog{border:0;border-radius:14px;padding:22px;max-width:560px;width:calc(100% - 32px);box-shadow:0 20px 60px rgba(0,0,0,.35);}
@@ -167,6 +208,7 @@
   <nav class="tabs" id="tabs"></nav>
   <main>
     <div id="appMsg" class="msg"></div>
+    <section id="tab-calendar" class="hide"></section>
     <section id="tab-leads" class="hide"></section>
     <section id="tab-reps" class="hide"></section>
     <section id="tab-dealers" class="hide"></section>
@@ -187,7 +229,7 @@ const SUPABASE_URL = "https://jzjmuttqbtandwjmwwfn.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_RE92j36ZEVFvSBwV-Rl8hg_JyfxRT6a";
 
 const TZ = 'America/New_York';
-const state = { me: null, isAdmin: false, isRep: false, myRepId: null, reps: [], leads: [], dealers: [], builds: [], company: null, money: null, month: null, tab: 'leads', settings: null };
+const state = { me: null, isAdmin: false, isRep: false, myRepId: null, reps: [], leads: [], dealers: [], builds: [], company: null, money: null, month: null, tab: 'leads', settings: null, calMonth: null, calItems: [] };
 
 /* ---------- helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -345,9 +387,13 @@ async function start(){
   $('loginBox').classList.add('hide'); $('app').classList.remove('hide');
   // A rep runs their own pipeline: their leads, their dealers, their money.
   // No Reps tab (there is only them) and no Money tab (that is everyone's).
+  // Calendar sits first because it reads first — what you owe someone today,
+  // before the lists of everything. The page still OPENS on Leads, which is
+  // where everyone's habit already is; adding a tab should not move the
+  // furniture. Change state.tab's default to 'calendar' to open on it.
   const tabs = state.isRep
-    ? [['leads','My leads'],['dealers','My dealers'],['mymoney','My money']]
-    : [['leads','Leads'],['reps','Reps'],['dealers','Companies']];
+    ? [['calendar','Calendar'],['leads','My leads'],['dealers','My dealers'],['mymoney','My money']]
+    : [['calendar','Calendar'],['leads','Leads'],['reps','Reps'],['dealers','Companies']];
   if(state.isAdmin) tabs.push(['builds','Build dashboards'], ['money','Money'], ['company','Finances']);
   $('tabs').innerHTML = tabs.map(([k,l]) => '<button type="button" data-tab="' + k + '">' + l + '</button>').join('');
   $('tabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
@@ -360,8 +406,9 @@ async function loadReps(){ const d = await api('/reps'); state.reps = d.reps; st
 async function showTab(tab){
   state.tab = tab; clearFlash();
   $('tabs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  for(const k of ['leads','reps','dealers','money','mymoney','builds','company']) $('tab-' + k).classList.toggle('hide', k !== tab);
+  for(const k of ['calendar','leads','reps','dealers','money','mymoney','builds','company']) $('tab-' + k).classList.toggle('hide', k !== tab);
   try{
+    if(tab === 'calendar') await renderCalendar();
     if(tab === 'leads') await renderLeads();
     if(tab === 'reps') await renderReps();
     if(tab === 'dealers') await renderDealers();
@@ -382,6 +429,224 @@ function openDialog(html, { wide = false } = {}){
   return d;
 }
 function closeDialog(){ const d = $('dlg'); if(d.open) d.close(); }
+
+/* ---------- calendar ---------- */
+// Two views of the same fetch. The month grid is for seeing what happened and
+// what is coming; the list under it is the part you act on, and is all there is
+// at phone width. Milestones are read-only — they are a record of something
+// that already happened, not a task.
+//
+// Dates are handled as plain YYYY-MM-DD strings throughout and built from the
+// LOCAL date parts, never toISOString(), which is UTC: at 8pm Eastern that
+// would already be tomorrow and every item would land a day late.
+const CAL_KINDS = {
+  lead_won:     { verb: 'Signed up',  cls: 'won'  },
+  dealer_built: { verb: 'Dashboard built', cls: '' },
+  dealer_live:  { verb: 'Went live',  cls: 'won'  },
+};
+const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+function isoDay(d){
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function todayIso(){ return isoDay(new Date()); }
+function addDays(iso, n){
+  const [y, m, d] = iso.split('-').map(Number);
+  const x = new Date(y, m - 1, d + n);
+  return isoDay(x);
+}
+function prettyDay(iso){
+  const [y, m, d] = iso.split('-').map(Number);
+  const x = new Date(y, m - 1, d);
+  return DOW[x.getDay()] + ' ' + MONTHS[m - 1].slice(0, 3) + ' ' + d;
+}
+function clockOf(t){
+  if(!t) return '';
+  const [h, mi] = String(t).split(':');
+  const hr = Number(h);
+  return (hr % 12 === 0 ? 12 : hr % 12) + ':' + mi + (hr < 12 ? 'am' : 'pm');
+}
+function daysBetween(a, b){
+  return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
+}
+
+// The month being shown, as the 1st of it.
+function calMonthStart(){
+  if(!state.calMonth){ const n = new Date(); state.calMonth = isoDay(new Date(n.getFullYear(), n.getMonth(), 1)); }
+  return state.calMonth;
+}
+function shiftMonth(by){
+  const [y, m] = calMonthStart().split('-').map(Number);
+  state.calMonth = isoDay(new Date(y, m - 1 + by, 1));
+}
+
+async function loadCalendar(){
+  const start = calMonthStart();
+  const [y, m] = start.split('-').map(Number);
+  const first = new Date(y, m - 1, 1);
+  const gridFrom = addDays(start, -first.getDay());                 // back to Sunday
+  const gridTo = addDays(gridFrom, 41);                             // six weeks covers any month
+  // Widened so the list below can show things that fell due before the month
+  // on screen, and anything set a little way ahead. One request, not three.
+  const today = todayIso();
+  const from = gridFrom < addDays(today, -60) ? gridFrom : addDays(today, -60);
+  const to = gridTo > addDays(today, 60) ? gridTo : addDays(today, 60);
+  const d = await api('/rep-calendar?from=' + from + '&to=' + to);
+  state.calItems = d.items || [];
+  return { gridFrom, gridTo };
+}
+
+function calChip(it){
+  if(it.kind !== 'followup'){
+    const k = CAL_KINDS[it.kind] || { verb: it.kind, cls: '' };
+    return '<span class="chip mile ' + k.cls + '" title="' + esc(k.verb + ' — ' + it.title) + '">' + esc(it.title) + '</span>';
+  }
+  const late = !it.done && it.on_date < todayIso();
+  const cls = it.done ? 'done' : late ? 'late' : '';
+  return '<button type="button" class="chip ' + cls + '" data-fu="' + it.followup_id + '" title="' + esc(it.title) + '">'
+    + (it.at_time ? esc(clockOf(it.at_time)) + ' ' : '') + esc(it.title) + '</button>';
+}
+
+function calGrid(gridFrom){
+  const [y, m] = calMonthStart().split('-').map(Number);
+  const byDay = {};
+  for(const it of state.calItems){ (byDay[it.on_date] = byDay[it.on_date] || []).push(it); }
+  const today = todayIso();
+  let cells = DOW.map((d) => '<div class="dow">' + d + '</div>').join('');
+  for(let i = 0; i < 42; i += 1){
+    const iso = addDays(gridFrom, i);
+    const inMonth = Number(iso.split('-')[1]) === m && Number(iso.split('-')[0]) === y;
+    // Six rows always fit a month, but the last row is often entirely next
+    // month — drop it rather than show a blank stripe.
+    if(i >= 35 && !inMonth && !(byDay[iso] || []).length) continue;
+    cells += '<div class="day' + (inMonth ? '' : ' out') + (iso === today ? ' today' : '') + '">'
+      + '<span class="dnum">' + Number(iso.split('-')[2]) + '</span>'
+      + (byDay[iso] || []).map(calChip).join('')
+      + '</div>';
+  }
+  return '<div class="calgrid">' + cells + '</div>';
+}
+
+// Overdue first, then today, then the next fortnight. Done items are left out:
+// this is the list of what is left to do.
+function dueList(){
+  const today = todayIso();
+  const horizon = addDays(today, 14);
+  const open = state.calItems.filter((it) => it.kind === 'followup' && !it.done && it.on_date <= horizon);
+  open.sort((a, b) => (a.on_date < b.on_date ? -1 : a.on_date > b.on_date ? 1 : String(a.at_time || '99').localeCompare(String(b.at_time || '99'))));
+  if(!open.length){
+    return '<p class="muted" id="dueEmpty">Nothing due in the next two weeks. Add a follow-up and it will show up here, and in your 7am email on the day.</p>';
+  }
+  return '<div class="duelist">' + open.map((it) => {
+    const late = it.on_date < today;
+    const gap = daysBetween(it.on_date, today);
+    const when = late
+      ? prettyDay(it.on_date) + ' · ' + gap + ' day' + (gap === 1 ? '' : 's') + ' ago'
+      : it.on_date === today
+        ? 'Today' + (it.at_time ? ' · ' + clockOf(it.at_time) : '')
+        : prettyDay(it.on_date) + (it.at_time ? ' · ' + clockOf(it.at_time) : '');
+    return '<div class="due' + (late ? ' overdue' : '') + '" data-due="' + it.followup_id + '">'
+      + '<span class="when">' + esc(when) + '</span>'
+      + '<span class="what"><b>' + esc(it.title) + '</b>'
+      + (it.detail ? '<p>' + esc(it.detail) + '</p>' : '') + '</span>'
+      + '<button type="button" class="btn small secondary" data-tick="' + it.followup_id + '">Done</button>'
+      + '<button type="button" class="btn small secondary" data-fu="' + it.followup_id + '">Edit</button>'
+      + '</div>';
+  }).join('') + '</div>';
+}
+
+async function renderCalendar(){
+  const { gridFrom } = await loadCalendar();
+  const [y, m] = calMonthStart().split('-').map(Number);
+  const mine = state.calItems.filter((it) => it.kind === 'followup' && !it.done).length;
+  $('tab-calendar').innerHTML =
+    '<div class="calhead">'
+    + '<h3>' + MONTHS[m - 1] + ' ' + y + '</h3>'
+    + '<button type="button" class="btn small secondary" id="calPrev">&larr;</button>'
+    + '<button type="button" class="btn small secondary" id="calToday">This month</button>'
+    + '<button type="button" class="btn small secondary" id="calNext">&rarr;</button>'
+    + '<button type="button" class="btn small" id="calAdd">Add a follow-up</button>'
+    + '</div>'
+    + calGrid(gridFrom)
+    + '<h3 style="margin:22px 0 2px;">What is left to do</h3>'
+    + '<p class="muted">Your own follow-ups. A digest of whatever is due goes to '
+    + esc(state.me && state.me.email ? state.me.email : 'your email') + ' at 7am on the day.</p>'
+    + dueList()
+    + '<p class="muted" style="margin-top:18px;">The grey and green marks on the month are things that already happened — a lead signing up, a dashboard being built, a dealer going live. '
+    + (state.isRep ? 'Yours only.' : 'Every company’s.') + ' Follow-ups are only ever your own.</p>';
+
+  $('calPrev').addEventListener('click', () => { shiftMonth(-1); renderCalendar().catch((e) => flash(e.message)); });
+  $('calNext').addEventListener('click', () => { shiftMonth(1); renderCalendar().catch((e) => flash(e.message)); });
+  $('calToday').addEventListener('click', () => { state.calMonth = null; renderCalendar().catch((e) => flash(e.message)); });
+  $('calAdd').addEventListener('click', () => followupDialog(null));
+  $('tab-calendar').querySelectorAll('[data-fu]').forEach((b) => b.addEventListener('click', () => followupDialog(b.dataset.fu)));
+  $('tab-calendar').querySelectorAll('[data-tick]').forEach((b) => b.addEventListener('click', () => tickFollowup(b.dataset.tick, b)));
+}
+
+async function tickFollowup(id, btn){
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving...'; }
+  try{
+    await api('/rep-followups/' + id, { method: 'PATCH', body: JSON.stringify({ done: true }) });
+    await renderCalendar();
+    flash('Ticked off.', true);
+  }catch(err){
+    if(btn){ btn.disabled = false; btn.textContent = 'Done'; }
+    flash(err.message);
+  }
+}
+
+// One dialog for adding and for editing. `about` pre-fills what it is about
+// when the follow-up is being set from a lead or a company row, so the rep
+// does not retype the name.
+function followupDialog(id, about){
+  const it = id ? state.calItems.find((x) => x.followup_id === id) : null;
+  const titleVal = it ? it.title : (about && about.title) || '';
+  const noteVal = it ? (it.detail || '') : '';
+  const dateVal = it ? it.on_date : addDays(todayIso(), 1);
+  const timeVal = it && it.at_time ? String(it.at_time).slice(0, 5) : '';
+  openDialog(
+    '<h3>' + (it ? 'Follow-up' : 'Add a follow-up') + '</h3>'
+    + '<p class="muted">Only you see this. It appears on your calendar and in your 7am email on the day.</p>'
+    + '<label>What do you need to do?<input id="fuTitle" maxlength="200" placeholder="Call Dave back about the ramp" value="' + esc(titleVal) + '"></label>'
+    + '<div class="row"><label>On<input id="fuDate" type="date" value="' + esc(dateVal) + '"></label>'
+    + '<label>At (optional)<input id="fuTime" type="time" value="' + esc(timeVal) + '"></label></div>'
+    + '<label>Notes (optional)<textarea id="fuNote" rows="3" maxlength="2000" placeholder="What you agreed, what to bring up">' + esc(noteVal) + '</textarea></label>'
+    + '<div class="actions">'
+    + (it && !it.done ? '<button type="button" class="btn secondary" id="fuDone">Mark done</button>' : '')
+    + (it && it.done ? '<button type="button" class="btn secondary" id="fuUndone">Put it back</button>' : '')
+    + (it ? '<button type="button" class="btn danger" id="fuDel">Delete</button>' : '')
+    + '<button type="button" class="btn secondary" id="fuCancel">Cancel</button>'
+    + '<button type="button" class="btn" id="fuSave">Save</button>'
+    + '</div>'
+  );
+  $('fuCancel').addEventListener('click', closeDialog);
+
+  const finish = async (fn, okText) => {
+    const save = $('fuSave'); if(save) save.disabled = true;
+    try{ await fn(); closeDialog(); await renderCalendar(); flash(okText, true); }
+    catch(err){ if(save) save.disabled = false; flash(err.message); }
+  };
+
+  $('fuSave').addEventListener('click', () => {
+    const title = $('fuTitle').value.trim();
+    const due_on = $('fuDate').value;
+    if(!title){ flash('Say what you need to do.'); return; }
+    if(!due_on){ flash('Pick a date.'); return; }
+    const body = { title, due_on, due_time: $('fuTime').value || null, note: $('fuNote').value.trim() || null };
+    finish(
+      // api() hands `options` straight to fetch, so a body has to be a string
+      // already — an object there is sent as "[object Object]".
+      () => id
+        ? api('/rep-followups/' + id, { method: 'PATCH', body: JSON.stringify(body) })
+        : api('/rep-followups', { method: 'POST', body: JSON.stringify({ ...body, lead_id: (about && about.lead_id) || null, tenant_id: (about && about.tenant_id) || null }) }),
+      id ? 'Saved.' : 'Follow-up set.'
+    );
+  });
+  if($('fuDone')) $('fuDone').addEventListener('click', () => finish(() => api('/rep-followups/' + id, { method: 'PATCH', body: JSON.stringify({ done: true }) }), 'Ticked off.'));
+  if($('fuUndone')) $('fuUndone').addEventListener('click', () => finish(() => api('/rep-followups/' + id, { method: 'PATCH', body: JSON.stringify({ done: false }) }), 'Back on your list.'));
+  if($('fuDel')) $('fuDel').addEventListener('click', () => finish(() => api('/rep-followups/' + id, { method: 'DELETE' }), 'Deleted.'));
+}
 
 /* ---------- the wording a dealer's own customers read ---------- */
 // Same nine lines, in the same order, as api/src/lib/tenantCopy.js — keep the
@@ -571,6 +836,7 @@ async function renderLeads(){
       (state.isRep ? '' : '<td>' + (x.status === 'won' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>') +
       '<td class="num"><button class="btn small secondary" data-wording="' + x.id + '">Wording</button> ' +
         '<button class="btn small secondary" data-files="' + x.id + '">Files</button> ' +
+        '<button class="btn small secondary" data-leadfu="' + x.id + '">Follow up</button> ' +
         (x.status === 'won' ? (x.build_status === 'awaiting_approval' ? '<span class="muted">waiting on Joseph</span>' : '') :
         '<button class="btn small" data-win="' + x.id + '">Mark won</button> ' +
         '<button class="btn small danger" data-lost="' + x.id + '">Lost</button>') + '</td></tr>'
@@ -595,6 +861,16 @@ async function renderLeads(){
   }
   wireSearch('tab-leads', 'leads');
   form.addEventListener('submit', (e) => { e.preventDefault(); submitLead(form, false); });
+  // Pre-filled with the company name and tied to the lead, so a follow-up set
+  // from here needs one word typed and still points back at the right row.
+  $('tab-leads').querySelectorAll('[data-leadfu]').forEach((b) => b.addEventListener('click', () => {
+    const lead = state.leads.find((x) => x.id === b.dataset.leadfu);
+    followupDialog(null, {
+      title: lead ? 'Follow up with ' + lead.company_name : '',
+      lead_id: b.dataset.leadfu,
+      tenant_id: (lead && lead.tenant_id) || null,
+    });
+  }));
   $('tab-leads').querySelectorAll('[data-win]').forEach((b) => b.addEventListener('click', () => winLeadDialog(b.dataset.win)));
   $('tab-leads').querySelectorAll('[data-files]').forEach((b) => b.addEventListener('click', () => filesDialog(b.dataset.files)));
   $('tab-leads').querySelectorAll('[data-wording]').forEach((b) => b.addEventListener('click', () => wordingDialog(b.dataset.wording)));

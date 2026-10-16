@@ -16,6 +16,8 @@
     "rep-earnings:dry-run": "node src/workers/runRepEarnings.js --dry-run",
     "billing-emails": "node src/workers/runBillingEmails.js",
     "billing-emails:dry-run": "node src/workers/runBillingEmails.js --dry-run",
+    "followup-reminders": "node src/workers/runFollowupReminders.js",
+    "followup-reminders:dry-run": "node src/workers/runFollowupReminders.js --dry-run",
     "e2e:annual-renewal": "node scripts/e2e/annual-renewal-e2e.js",
     "e2e:billing-emails": "node scripts/e2e/billing-emails-e2e.js",
     "e2e:rep-program": "node scripts/e2e/rep-program-e2e.js",

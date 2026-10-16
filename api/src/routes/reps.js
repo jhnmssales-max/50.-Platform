@@ -1336,4 +1336,126 @@ router.post('/rep-leads/:id/decline-build', requireAuth, wrap(async (req, res) =
   res.json({ ok: true });
 }));
 
+// ---------------------------------------------------------------------------
+// Calendar: follow-ups someone set for themselves, plus what already happened
+// ---------------------------------------------------------------------------
+// A follow-up belongs to a LOGIN, not to a rep row, because current_rep_id()
+// is null for Joseph (he is the admin, not a rep) and he asked for a calendar
+// of his own. user_id is always taken from the signed-in token here and never
+// from the body, so one person cannot file a follow-up on another's calendar
+// — the RLS with-check on rep_followups refuses it anyway, this just fails
+// earlier and more clearly.
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must look like 2026-10-20');
+const clockTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must look like 09:30');
+
+const followupCreate = z.object({
+  due_on: isoDate,
+  due_time: clockTime.nullable().optional(),
+  title: z.string().trim().min(1).max(200),
+  note: optText(2000),
+  lead_id: uuid.nullable().optional(),
+  tenant_id: uuid.nullable().optional(),
+});
+
+// Every field optional: the page uses this one endpoint to reschedule, retitle
+// and tick off. `done` is a boolean rather than a timestamp so the caller
+// never has to agree with the server about what time it is.
+const followupPatch = z.object({
+  due_on: isoDate.optional(),
+  due_time: clockTime.nullable().optional(),
+  title: z.string().trim().min(1).max(200).optional(),
+  note: optText(2000),
+  done: z.boolean().optional(),
+});
+
+// The window the page asks for. Capped at roughly a year so a stray request
+// cannot ask the database to assemble every milestone ever recorded.
+router.get('/rep-calendar', requireAuth, wrap(async (req, res) => {
+  const { from, to } = parseOr400(z.object({ from: isoDate, to: isoDate }), {
+    from: req.query.from, to: req.query.to,
+  });
+  if (to < from) throw httpError(400, 'to must not be before from');
+  const span = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000;
+  if (span > 400) throw httpError(400, 'Ask for at most about a year at a time');
+
+  const items = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { rep: true });
+    // ::text on the way out, not because SQL needs it but because JSON does:
+    // node-postgres turns a Postgres `date` into a JS Date, which serializes
+    // as "2026-10-12T04:00:00.000Z". The page keys its month grid on plain
+    // YYYY-MM-DD, so an unconverted date silently matches no day at all.
+    const { rows } = await client.query(
+      `select kind, on_date::text as on_date, at_time::text as at_time,
+              title, detail, followup_id, lead_id, tenant_id, done
+         from rep_calendar($1::date, $2::date)`,
+      [from, to]
+    );
+    return rows;
+  });
+  res.json({ items });
+}));
+
+router.post('/rep-followups', requireAuth, wrap(async (req, res) => {
+  const body = parseOr400(followupCreate, req.body || {});
+  const row = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { rep: true });
+    const { rows: [r] } = await client.query(
+      `insert into rep_followups (user_id, due_on, due_time, title, note, lead_id, tenant_id)
+       values ($1, $2::date, $3::time, $4, $5, $6, $7)
+       returning id, due_on::text as due_on, due_time::text as due_time,
+                 title, note, lead_id, tenant_id, done_at`,
+      [req.userId, body.due_on, body.due_time || null, body.title,
+       body.note || null, body.lead_id || null, body.tenant_id || null]
+    );
+    return r;
+  });
+  res.status(201).json({ followup: row });
+}));
+
+router.patch('/rep-followups/:id', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  const body = parseOr400(followupPatch, req.body || {});
+  if (Object.keys(body).length === 0) throw httpError(400, 'Nothing to change');
+
+  const row = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { rep: true });
+    const sets = [];
+    const params = [];
+    const set = (frag, value) => { params.push(value); sets.push(`${frag} = $${params.length}`); };
+    if (body.due_on !== undefined) set('due_on', body.due_on);
+    if (body.due_time !== undefined) set('due_time', body.due_time || null);
+    if (body.title !== undefined) set('title', body.title);
+    if (body.note !== undefined) set('note', body.note || null);
+    // Ticking it off stamps the time here rather than taking one from the
+    // browser, whose clock is not ours to trust.
+    if (body.done !== undefined) sets.push(`done_at = ${body.done ? 'now()' : 'null'}`);
+    params.push(id);
+
+    const { rows, rowCount } = await client.query(
+      `update rep_followups set ${sets.join(', ')} where id = $${params.length}
+       returning id, due_on::text as due_on, due_time::text as due_time,
+                 title, note, lead_id, tenant_id, done_at`,
+      params
+    );
+    // RLS, not a WHERE clause, is what stops someone editing another person's
+    // follow-up: it simply is not there to update. A 404 is the honest answer
+    // and tells the caller nothing about whether it exists on someone else's
+    // calendar. (assertRowsAffected is deliberately not used here — it is for
+    // service-role writes, where 0 rows means something is broken.)
+    if (rowCount !== 1) throw httpError(404, 'That follow-up does not exist');
+    return rows[0];
+  });
+  res.json({ followup: row });
+}));
+
+router.delete('/rep-followups/:id', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { rep: true });
+    const { rowCount } = await client.query('delete from rep_followups where id = $1', [id]);
+    if (rowCount !== 1) throw httpError(404, 'That follow-up does not exist');
+  });
+  res.json({ ok: true });
+}));
+
 module.exports = router;
