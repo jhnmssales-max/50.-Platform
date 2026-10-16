@@ -130,6 +130,9 @@ function repRow(r) {
     active: r.active,
     notes: r.notes,
     created_at: r.created_at,
+    // Sent so the page can say "already removed" instead of offering a Remove
+    // that the database is going to refuse.
+    closed_at: r.closed_at,
     leads_brought_in: r.leads_brought_in,
     companies_closed: r.companies_closed,
     companies_onboarded: r.companies_onboarded,
@@ -146,7 +149,7 @@ router.get('/reps', requireAuth, wrap(async (req, res) => {
   const out = await withUserTransaction(req.userId, async (client) => {
     const ctx = await requirePlatform(client, req.userId, { rep: true });
     const { rows } = await client.query(
-      `select r.id, r.name, r.email, r.phone, r.active, r.notes, r.created_at, r.user_id,
+      `select r.id, r.name, r.email, r.phone, r.active, r.notes, r.created_at, r.user_id, r.closed_at,
               (select count(*)::int from rep_leads l where l.brought_in_by_rep_id = r.id) as leads_brought_in,
               (select count(*)::int from rep_assignments a where a.closer_rep_id = r.id and a.effective_to is null) as companies_closed,
               (select count(*)::int from rep_assignments a where a.onboarder_rep_id = r.id and a.effective_to is null) as companies_onboarded
@@ -159,6 +162,18 @@ router.get('/reps', requireAuth, wrap(async (req, res) => {
     const month = await currentMonth(client);
     const { rows: money } = await client.query(
       `select r.id,
+              -- The same three tests remove_rep() makes for v_has_history, in the
+              -- same order. The page decides from this and never from the money
+              -- or the dealer counts: those count CURRENT assignments, which go
+              -- when a company is deleted, while the leads deliberately stay. A
+              -- rep whose only dealer was deleted still has lead history, and a
+              -- dialog guessing from dealer counts would promise to delete them
+              -- while the database closed them instead.
+              (exists (select 1 from rep_earnings e2 where e2.rep_id = r.id)
+               or exists (select 1 from rep_payouts p2 where p2.rep_id = r.id)
+               or exists (select 1 from rep_leads l where l.brought_in_by_rep_id = r.id
+                           or l.closed_by_rep_id = r.id
+                           or l.onboarded_by_rep_id = r.id)) as has_history,
               coalesce((select sum(amount_cents) from rep_earnings e where e.rep_id = r.id), 0)::int
                 - coalesce((select sum(amount_cents) from rep_payouts p where p.rep_id = r.id), 0)::int as owed_cents,
               coalesce((select sum(amount_cents) from rep_earnings e where e.rep_id = r.id
@@ -173,7 +188,7 @@ router.get('/reps', requireAuth, wrap(async (req, res) => {
       // is calling, so byId may simply not have a rep the list mentions.
       reps: reps
         .filter((r) => byId[r.id])
-        .map((r) => ({ ...r, owed_cents: byId[r.id].owed_cents, earned_this_month_cents: byId[r.id].earned_this_month_cents })),
+        .map((r) => ({ ...r, owed_cents: byId[r.id].owed_cents, earned_this_month_cents: byId[r.id].earned_this_month_cents, has_history: byId[r.id].has_history })),
     };
   });
   res.json(out);
