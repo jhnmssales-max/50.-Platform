@@ -657,9 +657,19 @@ async function main() {
       assert(l.build_status !== 'built', `the lead is still marked built: ${l.build_status}`);
       eq(l.closed_by_rep_id, alice.id, 'the closer was dropped');
       assert(/removed/i.test(l.declined_reason || ''), `no reason recorded: ${l.declined_reason}`);
-      // And it is not left on the page as a closed company either.
-      const stillThere = await page.evaluate(() => document.querySelector('#tab-dealers').textContent.includes('False Start Co'));
-      eq(stillThere, false, 'a deleted company is still listed');
+      // And it is not left on the page as a closed company either. Waited for,
+      // not read straight away: the flash appears as soon as the request comes
+      // back, while the row goes on the redraw that follows.
+      await page.waitForFunction(
+        () => !document.querySelector('#tab-dealers').textContent.includes('False Start Co'),
+        null, { timeout: 10000 }
+      );
+
+      // Tidy the lead away. It survives a deletion on purpose, so that the rep
+      // keeps credit for closing it — which means it stays in her pipeline for
+      // every later check that counts what she can see. The assertions above
+      // have already proved it survived in the right state.
+      await sql('delete from rep_leads where id = $1', [lead.id]);
       return `tenant row gone; lead still won by Alice, build_status now ${l.build_status}`;
     });
 
