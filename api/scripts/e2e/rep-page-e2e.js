@@ -125,6 +125,27 @@ async function main() {
   await db.connect();
   const sql = async (t, p) => (await db.query(t, p)).rows;
   recordAuthUser = (u) => db.query('insert into auth.users (id, email) values ($1, $2) on conflict (id) do nothing', [u.id, u.email]);
+  // `db` connects as the database owner, which is not an authenticated session:
+  // is_platform_admin() reads auth.uid(), so a security-definer function called
+  // through `sql` refuses every time. This runs one as a given signed-in user,
+  // the way src/db.js's withUserTransaction does for a real request.
+  async function sqlAs(user, text, params) {
+    const c = new Client({ connectionString: dbUrl(DB) });
+    await c.connect();
+    try {
+      await c.query('begin');
+      await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: user.id })]);
+      await c.query('set local role authenticated');
+      const { rows } = await c.query(text, params);
+      await c.query('commit');
+      return rows;
+    } catch (err) {
+      await c.query('rollback').catch(() => {});
+      throw err;
+    } finally {
+      await c.end().catch(() => {});
+    }
+  }
 
   const files = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort();
   await db.query(fs.readFileSync(path.join(__dirname, 'supabase-stand-in.sql'), 'utf8'));
@@ -589,6 +610,113 @@ async function main() {
       return 'partial and wrong-case names refused; exact name closes it, and it returns under the toggle';
     });
 
+    // The check above only ever exercised the CLOSING path: its fixture had a
+    // billing event and no lead at all. Deleting — the other half — was broken
+    // from the day it shipped, because a real company is always built from a
+    // won lead, and rep_leads_built_has_dealer forbids a lead that is still
+    // 'built' with no tenant. This fixture is in the state every real one is.
+    await check('A company that never traded is deleted outright, lead and all', async () => {
+      const [alice] = await sql(`select id from reps where name = 'Alice Rep'`);
+      const [lead] = await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on, build_status)
+         values ('False Start Co', $1, $1, 'won', current_date, 'awaiting_approval') returning id`,
+        [alice.id]
+      );
+      const [fresh] = await sql(
+        `insert into tenants (slug, name, billing_required, billing_status)
+         values ('false-start-co','False Start Co', true, 'pending') returning id`
+      );
+      // Built from that lead, and never paid a penny: no billing_events row.
+      await sql(`update rep_leads set tenant_id = $2, build_status = 'built', built_at = now() where id = $1`, [lead.id, fresh.id]);
+      // users.id references auth.users(id), so the auth row has to exist first.
+      const ownerId = '9f000000-0000-4000-8000-00000000f001';
+      await sql(`insert into auth.users (id, email) values ($1,'owner@false-start-co.test')`, [ownerId]);
+      await sql(`insert into users (id, tenant_id, email, name, role)
+                 values ($1, $2, 'owner@false-start-co.test', 'Owner', 'admin')`, [ownerId, fresh.id]);
+
+      await page.click('[data-tab=dealers]');
+      await page.waitForFunction(() => document.querySelector('#tab-dealers').textContent.includes('False Start Co'), { timeout: 10000 });
+      await page.locator(`tr[data-tenant="${fresh.id}"]`).locator('[data-delco]').click();
+      await page.waitForSelector('#delForm');
+      const text = (await page.textContent('#dlg')).replace(/\s+/g, ' ');
+      // Never traded, so the dialog must offer deleting, not closing.
+      assert(/Delete/i.test(text) && !/Close this company/i.test(text), `offers the wrong outcome: ${text.slice(0, 220)}`);
+
+      await page.fill('#delForm [name=confirm_name]', 'False Start Co');
+      await page.click('#doDelete');
+      await page.waitForFunction(() => /deleted|removed/i.test(document.getElementById('appMsg').textContent), { timeout: 15000 });
+
+      // The tenant row is gone, not merely closed.
+      const [{ n }] = await sql('select count(*)::int as n from tenants where id = $1', [fresh.id]);
+      eq(n, 0, 'the company row survived a delete');
+      // The lead survives and still belongs to the rep who closed it, but is
+      // off the company and out of the build queue.
+      const [l] = await sql('select status, build_status, tenant_id, closed_by_rep_id, declined_reason from rep_leads where id = $1', [lead.id]);
+      eq(l.status, 'won', 'the rep lost credit for closing it');
+      eq(l.tenant_id, null, 'the lead still points at a company that no longer exists');
+      assert(l.build_status !== 'built', `the lead is still marked built: ${l.build_status}`);
+      eq(l.closed_by_rep_id, alice.id, 'the closer was dropped');
+      assert(/removed/i.test(l.declined_reason || ''), `no reason recorded: ${l.declined_reason}`);
+      // And it is not left on the page as a closed company either. Waited for,
+      // not read straight away: the flash appears as soon as the request comes
+      // back, while the row goes on the redraw that follows.
+      await page.waitForFunction(
+        () => !document.querySelector('#tab-dealers').textContent.includes('False Start Co'),
+        null, { timeout: 10000 }
+      );
+
+      // Tidy the lead away. It survives a deletion on purpose, so that the rep
+      // keeps credit for closing it — which means it stays in her pipeline for
+      // every later check that counts what she can see. The assertions above
+      // have already proved it survived in the right state.
+      await sql('delete from rep_leads where id = $1', [lead.id]);
+      return `tenant row gone; lead still won by Alice, build_status now ${l.build_status}`;
+    });
+
+    await check('Removing a rep who closed something keeps the row; one who never did is deleted', async () => {
+      // A rep with a won lead to their name. Nulling the closer on that lead
+      // is what rep_leads_won_has_closer forbids, so this one has to be CLOSED
+      // rather than deleted, however little money ever moved.
+      const [withHistory] = await sql(`insert into reps (name, email) values ('Closer Rep','closer@x.test') returning id`);
+      await sql(`insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on)
+                 values ('Something They Closed', $1, $1, 'won', current_date)`, [withHistory.id]);
+      const [{ outcome: o1 }] = await sqlAs(USERS.admin, `select outcome from remove_rep($1, 'left the company')`, [withHistory.id]);
+      eq(o1, 'closed', 'a rep with a lead to their name was not kept');
+      const [kept] = await sql('select active, closed_at, email, user_id from reps where id = $1', [withHistory.id]);
+      eq(kept.active, false, 'still active'); assert(kept.closed_at, 'closed_at not set');
+      eq(kept.email, null, 'their contact details were not scrubbed');
+      const [stillClosed] = await sql(`select closed_by_rep_id from rep_leads where company_name = 'Something They Closed'`);
+      eq(stillClosed.closed_by_rep_id, withHistory.id, 'the lead no longer names who closed it');
+
+      // Added by mistake, never used: nothing points at them, so delete. Given
+      // a dealer to look after, though, and put on it as BOTH closer and
+      // onboarder, which is the ordinary case — rep_assignments_has_a_rep
+      // means that row cannot simply have both columns nulled.
+      const [unused] = await sql(`insert into reps (name) values ('Never Used Rep') returning id`);
+      const [houseCo] = await sql(
+        `insert into tenants (slug, name, billing_required) values ('house-only-co','House Only Co', true) returning id`
+      );
+      await sql(`insert into rep_assignments (tenant_id, closer_rep_id, onboarder_rep_id, effective_from)
+                 values ($1, $2, $2, now())`, [houseCo.id, unused.id]);
+      const rows = await sqlAs(USERS.admin, `select * from remove_rep($1, 'added by mistake')`, [unused.id]);
+      eq(rows.length, 1, `remove_rep answered with ${rows.length} rows, not 1`);
+      eq(rows[0].outcome, 'deleted', 'an unused rep was kept');
+      const [{ n }] = await sql('select count(*)::int as n from reps where id = $1', [unused.id]);
+      eq(n, 0, 'the unused rep row survived');
+      // The assignment they were the only party on is gone, not left naming
+      // nobody.
+      const [{ a }] = await sql('select count(*)::int as a from rep_assignments where tenant_id = $1', [houseCo.id]);
+      eq(a, 0, 'an assignment naming nobody was left behind');
+      // Tidy the fixtures away: later checks count the companies on the page,
+      // and a leftover here makes this test the reason they fail. Order
+      // matters — 'Closer Rep' was CLOSED rather than deleted, so their row
+      // still exists and the lead still points at it. The lead goes first.
+      await sql('delete from tenants where id = $1', [houseCo.id]);
+      await sql(`delete from rep_leads where company_name = 'Something They Closed'`);
+      await sql(`delete from reps where name = 'Closer Rep'`);
+      return 'rep with a closed lead -> closed and scrubbed; unused rep -> deleted, assignment cleared, in one row';
+    });
+
     await check('An in-house company has no Remove button at all', async () => {
       const gss = page.locator(`tr[data-tenant="${tenants['good-steward-structures'].id}"]`);
       eq(await gss.locator('[data-delco]').count(), 0, 'in-house row offers a Remove button');
@@ -623,6 +751,11 @@ async function main() {
     await check('Searching narrows a list to what matches, across every field on the row', async () => {
       await page.click('[data-tab=dealers]');
       await page.waitForSelector('#tab-dealers tr[data-search]');
+      // Opening the tab refetches and redraws. waitForSelector above matches
+      // the rows ALREADY in the DOM from the last visit, so without this the
+      // baseline below can be read before the new list lands and come out one
+      // row short of what clearing the box then restores.
+      await page.waitForLoadState('networkidle').catch(() => {});
       const visible = () => page.$$eval('#tab-dealers tbody tr[data-search]', (rows) =>
         rows.filter((r) => !r.hidden).map((r) => r.querySelector('b, [data-company]').textContent));
 

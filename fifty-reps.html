@@ -768,6 +768,17 @@ function applySearch(tabId, key){
   }
 }
 
+// Take whatever is physically in the box right now as the query, immediately
+// before a redraw rebuilds it from SEARCH[key]. Called there and nowhere else:
+// a render builds its HTML in one go from that variable, and a keystroke
+// landing while the fetch was still in flight updates the box but only reaches
+// SEARCH through an input handler that the box may not have yet. The box is
+// what the person can see, so the box wins.
+function captureSearch(tabId, key){
+  const el = $(tabId);
+  const box = el && el.querySelector('[data-search-for="' + key + '"]');
+  if(box) SEARCH[key] = box.value;
+}
 function wireSearch(tabId, key){
   const box = $(tabId).querySelector('[data-search-for="' + key + '"]');
   if(!box) return;
@@ -800,6 +811,7 @@ async function renderLeads(){
   const [l, dl] = await Promise.all([api('/rep-leads'), api('/rep-dealers')]);
   state.leads = l.leads; state.dealers = dl.dealers;
   const open = state.leads.filter((x) => x.status === 'open').length;
+  captureSearch('tab-leads', 'leads');
   $('tab-leads').innerHTML =
     '<div class="head"><h2>Leads</h2><span class="muted">' + open + ' open · ' + state.leads.length + ' total</span></div>' +
     '<details class="card" ' + (state.leads.length ? '' : 'open') + '><summary>Add a lead</summary>' +
@@ -1105,6 +1117,7 @@ async function uploadFiles(leadId, files){
 async function renderReps(){
   await loadReps();
   const adminCols = state.isAdmin;
+  captureSearch('tab-reps', 'reps');
   $('tab-reps').innerHTML =
     '<div class="head"><h2>Reps</h2><button class="btn" id="addRepBtn" type="button">Add a rep</button></div>' +
     searchBox('reps', 'Search reps \u2014 name, email, phone') +
@@ -1193,6 +1206,7 @@ async function renderDealers(){
     catch(err){ state.closedCount = 0; }
   }
   if(!state.isRep) await loadReps();
+  captureSearch('tab-dealers', 'dealers');
   $('tab-dealers').innerHTML =
     '<div class="head"><h2>' + (state.isRep ? 'My dealers' : 'Companies') + '</h2><span class="muted">' +
       (state.isRep ? 'The companies you signed'
