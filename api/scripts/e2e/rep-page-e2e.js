@@ -538,6 +538,29 @@ async function main() {
       return 'paying: money chart shown; in-house: no money chart, and it says why';
     });
 
+    await check('At a narrow window the Resend login button is still reachable without scrolling', async () => {
+      await page.click('[data-tab=reps]');
+      await page.waitForSelector('#tab-reps [data-invite]');
+      const original = page.viewportSize();
+      await page.setViewportSize({ width: 900, height: original.height });
+      await page.waitForTimeout(150);
+      const fits = await page.evaluate(() => {
+        const btn = document.querySelector('#tab-reps [data-invite]');
+        const wrap = btn.closest('.tablewrap');
+        const b = btn.getBoundingClientRect();
+        const w = wrap.getBoundingClientRect();
+        return { scrolls: wrap.scrollWidth > wrap.clientWidth + 1, right: Math.round(b.right), edge: Math.round(w.right), width: Math.round(b.width) };
+      });
+      // The table is genuinely wider than its card at this width — that is the
+      // case worth testing, not one where everything happens to fit.
+      assert(fits.scrolls, 'the table did not overflow, so this proves nothing — narrow the viewport further');
+      assert(fits.width > 0, 'the button has no width');
+      assert(fits.right <= fits.edge + 1, `button runs to ${fits.right}, card ends at ${fits.edge}`);
+      await page.setViewportSize(original);
+      await page.waitForTimeout(100);
+      return `table overflows at 900px wide; the button still ends at the card edge (${fits.right} vs ${fits.edge})`;
+    });
+
     await check('Signing out clears the session', async () => {
       await page.click('#signOutBtn');
       await page.waitForSelector('#loginBox:not(.hide)');
