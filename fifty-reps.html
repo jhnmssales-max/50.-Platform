@@ -848,7 +848,7 @@ function readPricingFields(form, { onlyChanges = false } = {}){
 const COPY_FIELDS = [
   { key:'offerHow', stage:'Their invite email, and their share page', label:'How the program works, in a sentence or two', multiline:true, max:600,
     where:'The main offer line — the first thing a past customer reads. Wrap words in **stars** to bold them in the email.',
-    generic:"Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} Amazon E-Gift Card**." },
+    generic:"Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} {card}**." },
   { key:'cardNoun', stage:'Their invite email, and their share page', label:'What the gift card is called', max:60,
     where:'Used wherever the reward is named, right after the amount. Change it for a business that mails real cards rather than emailing them.',
     generic:'electronic gift card' },
@@ -925,10 +925,23 @@ function wmarkFor(key){
 // as a token: the card amount is set per dealer and is not known at lead
 // stage, so printing "$50" would be a guess -- and would put a money figure
 // in front of a helper, who is not supposed to see one anywhere on this page.
-function wfill(text, name){
+// `card` is whatever is currently typed in the gift-card box, so the offer
+// line's preview follows it as the rep types rather than promising an
+// emailed card to a business that posts them.
+function wfill(text, name, card){
   return String(text == null ? '' : text)
     .replace(/\*\*/g, '')
-    .replace(/\{name\}/g, name || 'their business');
+    .replace(/\{name\}/g, name || 'their business')
+    .replace(/\{card\}/g, card || 'electronic gift card');
+}
+
+// What the rep has typed into the gift-card box right now, or the fallback.
+function currentCardNoun(scope){
+  const el = (scope || document).querySelector('[data-wkey="cardNoun"], [name="copy_cardNoun"]');
+  const typed = el && el.value ? el.value.trim() : '';
+  if(typed) return typed;
+  const f = COPY_FIELDS.find((x) => x.key === 'cardNoun');
+  return (f && f.generic) || 'electronic gift card';
 }
 
 // Every box carries its generic wording as the placeholder, so an empty box
@@ -947,7 +960,7 @@ function copyFieldsHtml(values, name){
       const f = COPY_FIELDS.find((x) => x.key === key);
       const val = esc(v[key] || '');
       const common = 'name="copy_' + key + '" maxlength="' + f.max + '" data-wkey="' + esc(key) + '" ' +
-        'placeholder="' + esc(wfill(f.generic, name)) + '"';
+        'placeholder="' + esc(wfill(f.generic, name, null)) + '"';
       return '<div class="wbox" data-wbox="' + esc(key) + '">' +
         '<label>' + esc(f.label) + '</label>' +
         (f.multiline
@@ -1047,11 +1060,12 @@ function wireWording(scope){
       const f = COPY_FIELDS.find((x) => x.key === key);
       const typed = input.value.trim();
       if(!found || (!found.mark.before && !found.mark.after)){ el.hidden = true; return; }
-      const words = wfill(typed || f.generic, name);
+      const card = currentCardNoun(wiz);
+      const words = wfill(typed || f.generic, name, card);
       el.hidden = false;
       el.classList.toggle('gen', !typed);
       el.innerHTML = (typed ? '' : '<span class="muted">If left empty: </span>') +
-        esc(wfill(found.mark.before, name)) + '<b>' + esc(words) + '</b>' + esc(wfill(found.mark.after, name));
+        esc(wfill(found.mark.before, name, card)) + '<b>' + esc(words) + '</b>' + esc(wfill(found.mark.after, name, card));
       // The preview may grow but must never shrink. Typing removes the
       // "If left empty:" prefix and changes the words, so the sentence can
       // rewrap to one line SHORTER -- and everything below it, including the
@@ -1068,6 +1082,18 @@ function wireWording(scope){
         el.dataset.tall = String(tall);
         el.style.minHeight = tall + 'px';
       }
+    }
+
+    // Every box's fallback is shown as its placeholder, and the offer line's
+    // fallback contains {card}. Re-render them when the card's name changes,
+    // so a rep who types "gift card in the mail" sees the offer line say it
+    // too rather than still reading "electronic gift card".
+    function refreshPlaceholders(){
+      const card = currentCardNoun(wiz);
+      wiz.querySelectorAll('[data-wkey]').forEach((el) => {
+        const f = COPY_FIELDS.find((x) => x.key === el.dataset.wkey);
+        if(f) el.placeholder = wfill(f.generic, name, card);
+      });
     }
 
     function count(key){
@@ -1119,7 +1145,17 @@ function wireWording(scope){
       const key = input.dataset.wkey;
       count(key);
       input.addEventListener('focus', () => { if(drawn) showShot(key); else firstDrawOnFocus(key); });
-      input.addEventListener('input', () => { showPreview(key); count(key); });
+      input.addEventListener('input', () => {
+        // The card's name appears inside other boxes' sentences, so changing
+        // it has to redraw them all, not only its own.
+        if(key === 'cardNoun'){
+          WORDING_STEPS.forEach((st) => st.keys.forEach(showPreview));
+          refreshPlaceholders();
+        } else {
+          showPreview(key);
+        }
+        count(key);
+      });
     });
 
     wiz.querySelectorAll('[data-wuse]').forEach((btn) => {
