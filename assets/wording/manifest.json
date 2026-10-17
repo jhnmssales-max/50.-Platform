@@ -1,0 +1,191 @@
+{
+  "shots": [
+    {
+      "id": "invite-email",
+      "title": "The email their past customer gets",
+      "img": "assets/wording/invite-email.webp",
+      "page": {
+        "w": 760,
+        "h": 421
+      },
+      "marks": [
+        {
+          "key": "offerHow",
+          "box": {
+            "x": 140,
+            "y": 158,
+            "w": 480,
+            "h": 72
+          },
+          "before": "",
+          "after": ""
+        }
+      ]
+    },
+    {
+      "id": "share-page",
+      "title": "Their customer’s share page",
+      "img": "assets/wording/share-page.webp",
+      "page": {
+        "w": 900,
+        "h": 833
+      },
+      "marks": [
+        {
+          "key": "offerHow",
+          "box": {
+            "x": 264,
+            "y": 591,
+            "w": 372,
+            "h": 58
+          },
+          "before": "",
+          "after": ""
+        }
+      ]
+    },
+    {
+      "id": "share-sheet",
+      "title": "The phone’s share menu",
+      "img": "assets/wording/share-sheet.webp",
+      "page": {
+        "w": 390,
+        "h": 292
+      },
+      "marks": [
+        {
+          "key": "shareTitle",
+          "box": {
+            "x": 86,
+            "y": 38,
+            "w": 272,
+            "h": 38
+          },
+          "before": "",
+          "after": ""
+        },
+        {
+          "key": "shareText",
+          "box": {
+            "x": 16,
+            "y": 106,
+            "w": 358,
+            "h": 68
+          },
+          "before": "",
+          "after": ""
+        }
+      ]
+    },
+    {
+      "id": "friend-page",
+      "title": "The page their friend lands on",
+      "img": "assets/wording/friend-page.webp",
+      "page": {
+        "w": 900,
+        "h": 1046
+      },
+      "marks": [
+        {
+          "key": "friendAction",
+          "box": {
+            "x": 258,
+            "y": 311,
+            "w": 378,
+            "h": 36
+          },
+          "before": "Sarah thought you might need {name}'s services and wanted to pass along a personal recommendation. When you ",
+          "after": ", you and Sarah will each get a {reward} electronic gift card — no strings attached."
+        }
+      ]
+    },
+    {
+      "id": "friend-confirm",
+      "title": "What their friend sees after sending the form",
+      "img": "assets/wording/friend-confirm.webp",
+      "page": {
+        "w": 900,
+        "h": 1166
+      },
+      "marks": [
+        {
+          "key": "afterPurchase",
+          "box": {
+            "x": 371,
+            "y": 1016,
+            "w": 123,
+            "h": 15
+          },
+          "before": "Thanks, Sarah — we've got your info and someone will reach out soon. Once you've ",
+          "after": ", you and Sarah will each get a {reward} eGift card."
+        }
+      ]
+    },
+    {
+      "id": "terms",
+      "title": "Their terms page",
+      "img": "assets/wording/terms.webp",
+      "page": {
+        "w": 900,
+        "h": 1512
+      },
+      "marks": [
+        {
+          "key": "eligibility",
+          "box": {
+            "x": 164,
+            "y": 349,
+            "w": 558,
+            "h": 38
+          },
+          "before": "The “50.” referral program is open to customers of {name} who ",
+          "after": ". Each participant may enroll using their own contact information and may generate and share multiple unique referral links."
+        },
+        {
+          "key": "qualifyingEvent",
+          "box": {
+            "x": 247,
+            "y": 516,
+            "w": 237,
+            "h": 15
+          },
+          "before": "A participant (“Referrer”) shares a unique referral link with another individual (“Referred Customer”). If the Referred Customer submits their contact information through that link and subsequently ",
+          "after": ", both the Referrer and the Referred Customer will each receive a {reward} digital gift card."
+        },
+        {
+          "key": "rewardCondition",
+          "box": {
+            "x": 164,
+            "y": 574,
+            "w": 532,
+            "h": 61
+          },
+          "before": "A reward is issued only after {name} ",
+          "after": " Each referral link may be used once; a Referrer may share as many separate links as they like and will be rewarded for each one that results in a qualifying order."
+        }
+      ]
+    },
+    {
+      "id": "privacy",
+      "title": "Their privacy page",
+      "img": "assets/wording/privacy.webp",
+      "page": {
+        "w": 900,
+        "h": 1333
+      },
+      "marks": [
+        {
+          "key": "inquiryNoun",
+          "box": {
+            "x": 468,
+            "y": 614,
+            "w": 40,
+            "h": 15
+          },
+          "before": "We use this information to: contact you about your ",
+          "after": "; track and issue referral rewards; and send you the referral link or reward-related emails you'd expect from participating in the program. We do not sell your information to third parties, and we do not use it for unrelated marketing."
+        }
+      ]
+    }
+  ]
+}

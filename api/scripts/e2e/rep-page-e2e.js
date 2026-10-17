@@ -1181,6 +1181,21 @@ async function main() {
       return 'lead added under Alice, with its website';
     });
 
+    // The wording form is a three-step wizard now: a field is only reachable
+    // once its own step is showing. This mirrors WORDING_STEPS in
+    // fifty-reps.html -- if the grouping there changes, this breaks loudly
+    // rather than silently filling the wrong box.
+    const WIZ_STEP = {
+      offerHow: 0, shareTitle: 0, shareText: 0,
+      friendAction: 1, afterPurchase: 1, inquiryNoun: 1,
+      eligibility: 2, qualifyingEvent: 2, rewardCondition: 2,
+    };
+    const wizFill = async (page, scope, key, value) => {
+      await page.click(`${scope} [data-wstep="${WIZ_STEP[key]}"]`);
+      await page.waitForSelector(`${scope} [data-wpane="${WIZ_STEP[key]}"].on`);
+      await page.fill(`${scope} [name=copy_${key}]`, value);
+    };
+
     await check('She can type the business\'s own wording onto a lead, and it reaches the database', async () => {
       await openAddLead(repPage);
       // The wording section is deliberately shut: it is optional, and a rep
@@ -1189,8 +1204,8 @@ async function main() {
       assert(shut, 'the wording section starts closed');
       await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
       await repPage.fill('#leadForm [name=company_name]', 'Gutters By Dale');
-      await repPage.fill('#leadForm [name=copy_friendAction]', 'book your gutter job');
-      await repPage.fill('#leadForm [name=copy_inquiryNoun]', 'gutter inquiry');
+      await wizFill(repPage, '#leadForm', 'friendAction', 'book your gutter job');
+      await wizFill(repPage, '#leadForm', 'inquiryNoun', 'gutter inquiry');
       await repPage.click('#leadForm button[type=submit]');
       await repPage.waitForFunction(() => document.getElementById('tab-leads').textContent.includes('Gutters By Dale'));
       const [row] = await sql(`select copy from rep_leads where company_name = 'Gutters By Dale'`);
@@ -1212,14 +1227,85 @@ async function main() {
       return 'nine boxes, each showing its trade-neutral fallback';
     });
 
+    await check('The nine boxes come three at a time, not all at once', async () => {
+      await openAddLead(repPage);
+      await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
+      const all = await repPage.$$eval('#leadForm [name^=copy_]', (els) => els.length);
+      eq(all, 9, 'all nine still in the form, so saving sends every box');
+      const shown = await repPage.$$eval('#leadForm .wpane.on [name^=copy_]', (els) => els.map((e) => e.name));
+      eq(shown.length, 3, 'but only one step is on screen');
+      // The wall of nine boxes is the thing reps found overwhelming; if a
+      // change ever flattens the wizard back out, this is what catches it.
+      await repPage.click('#leadForm [data-wstep="2"]');
+      await repPage.waitForSelector('#leadForm [data-wpane="2"].on');
+      const later = await repPage.$$eval('#leadForm .wpane.on [name^=copy_]', (els) => els.map((e) => e.name));
+      eq(later.length, 3, 'still three after stepping');
+      assert(later.join() !== shown.join(), `step 3 shows the same boxes as step 1: ${later.join()}`);
+      return 'nine in the form, three on screen, different boxes per step';
+    });
+
+    await check('A fragment box shows the finished sentence it lands inside', async () => {
+      await openAddLead(repPage);
+      await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
+      await wizFill(repPage, '#leadForm', 'eligibility', 'had a roof put on by us');
+      // Six of the nine boxes are fragments completing a sentence the rep
+      // could not see -- which is exactly what made this tab confusing. The
+      // preview is the fix, so it has to actually contain both the fixed
+      // words of the real sentence and the rep's own.
+      const preview = await repPage.textContent('#leadForm [data-wprev=eligibility]');
+      assert(/had a roof put on by us/.test(preview), `the rep's words are missing: ${preview}`);
+      assert(/referral program is open to customers of/.test(preview),
+        `the sentence around them is missing, so the rep still cannot see where their words go: ${preview}`);
+      return `reads: ${preview.trim().slice(0, 70)}…`;
+    });
+
+    await check('"Use this wording" drops the fallback in, ready to edit', async () => {
+      await openAddLead(repPage);
+      await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
+      await repPage.click('#leadForm [data-wstep="1"]');
+      await repPage.waitForSelector('#leadForm [data-wpane="1"].on');
+      eq(await repPage.inputValue('#leadForm [name=copy_friendAction]'), '', 'starts empty');
+      await repPage.click('#leadForm [data-wuse=friendAction]');
+      const v = await repPage.inputValue('#leadForm [name=copy_friendAction]');
+      assert(v.length > 2, `nothing was dropped in: ${JSON.stringify(v)}`);
+      // Raw, with its tokens intact: baking "$50" in here would freeze the
+      // amount for a dealer whose card is not $50.
+      assert(!/\$\d/.test(v), `the reward amount was baked in rather than left as a token: ${v}`);
+      return `filled with: ${v}`;
+    });
+
+    await check('Every wording field has a picture pinning it to a real page', async () => {
+      // Guards the seam between api/scripts/build-wording-shots.js and the
+      // field list: add a tenth field and forget to re-run the script, and a
+      // rep gets a box with no picture and no sentence around it.
+      const { COPY_KEYS } = require('../../src/lib/tenantCopy');
+      const manifest = JSON.parse(
+        require('fs').readFileSync(require('path').join(__dirname, '../../../assets/wording/manifest.json'), 'utf8'));
+      const pinned = new Set();
+      manifest.shots.forEach((shot) => shot.marks.forEach((m) => pinned.add(m.key)));
+      const missing = COPY_KEYS.filter((k) => !pinned.has(k));
+      eq(missing.length, 0, `fields with no picture (re-run build-wording-shots.js): ${missing.join(', ')}`);
+      // The six fragments must carry the words around them, or the preview
+      // has nothing to wrap and the rep is back to guessing.
+      const frags = ['friendAction', 'afterPurchase', 'inquiryNoun', 'eligibility', 'qualifyingEvent', 'rewardCondition'];
+      manifest.shots.forEach((shot) => shot.marks.forEach((m) => {
+        if (frags.includes(m.key)) {
+          assert((m.before || '').length + (m.after || '').length > 10,
+            `${m.key} is a sentence fragment but carries no surrounding sentence`);
+        }
+      }));
+      return `${pinned.size} fields pinned across ${manifest.shots.length} pictures`;
+    });
+
     await check('The lead row says how much is in their own words, and reopens for editing', async () => {
       const rowText = await repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }).textContent();
       assert(/2 of 9 in their own words/.test(rowText), `row: ${rowText}`);
       await repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }).locator('[data-wording]').click();
       await repPage.waitForSelector('#wordingForm');
+      await repPage.click('#wordingForm [data-wstep="1"]');
       eq(await repPage.inputValue('#wordingForm [name=copy_friendAction]'), 'book your gutter job', 'reopens with what she typed');
       // A line added on the second visit, which is the normal way this gets filled.
-      await repPage.fill('#wordingForm [name=copy_offerHow]', 'Have us do your gutters and you both get {reward}.');
+      await wizFill(repPage, '#wordingForm', 'offerHow', 'Have us do your gutters and you both get {reward}.');
       await repPage.evaluate(() => { document.getElementById('appMsg').textContent = ''; });
       await repPage.click('#saveWording');
       await repPage.waitForFunction(() => document.getElementById('appMsg').textContent.includes('Wording saved'));
@@ -1235,7 +1321,7 @@ async function main() {
       await repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }).locator('[data-wording]').click();
       await repPage.waitForSelector('#wordingForm');
       for (const k of ['friendAction', 'inquiryNoun', 'offerHow']) {
-        await repPage.fill(`#wordingForm [name=copy_${k}]`, '');
+        await wizFill(repPage, '#wordingForm', k, '');
       }
       await repPage.evaluate(() => { document.getElementById('appMsg').textContent = ''; });
       await repPage.click('#saveWording');
