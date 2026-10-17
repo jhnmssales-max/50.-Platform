@@ -986,6 +986,22 @@ function wireWording(scope){
       el.classList.toggle('gen', !typed);
       el.innerHTML = (typed ? '' : '<span class="muted">If left empty: </span>') +
         esc(wfill(found.mark.before, name)) + '<b>' + esc(words) + '</b>' + esc(wfill(found.mark.after, name));
+      // The preview may grow but must never shrink. Typing removes the
+      // "If left empty:" prefix and changes the words, so the sentence can
+      // rewrap to one line SHORTER -- and everything below it, including the
+      // next box's button, slides UP under the rep's cursor mid-click.
+      // Whether it rewraps at all is luck of the wrap: it depends on the
+      // company name, what they typed and the column width, so it cannot be
+      // chased one string at a time. A high-water mark removes the whole
+      // class of it. Measured only once it has a box -- inside a shut
+      // <details> offsetHeight is 0 and would lock it flat.
+      const seen = Number(el.dataset.tall || 0);
+      const now = el.offsetHeight;
+      if(now > 0){
+        const tall = Math.max(seen, now);
+        el.dataset.tall = String(tall);
+        el.style.minHeight = tall + 'px';
+      }
     }
 
     function count(key){
@@ -1010,6 +1026,13 @@ function wireWording(scope){
       const next = wiz.querySelector('[data-wnav="next"]');
       next.textContent = step === WORDING_STEPS.length - 1 ? 'Done' : 'Next';
       active = WORDING_STEPS[step].keys[0];
+      // Re-measure this step's previews now that its pane is visible. Panes
+      // start display:none, where offsetHeight is 0, so a preview rendered at
+      // wire time never recorded how tall it is. Without this the first real
+      // measurement happens on the rep's first keystroke -- after the
+      // sentence has already rewrapped shorter -- and the floor locks in at
+      // the shrunk height, which is the bug it is meant to prevent.
+      WORDING_STEPS[step].keys.forEach(showPreview);
       if(drawn) showShot(active);
     }
 
@@ -1449,7 +1472,12 @@ async function wordingDialog(leadId){
       '<div class="actions">' +
         '<button type="button" class="btn secondary" id="cancelDlg">Cancel</button>' +
         '<button class="btn" type="submit" id="saveWording">Save wording</button>' +
-      '</div></form>'
+      '</div></form>',
+    // The default dialog is 560px, which was right for a single column of
+    // boxes. The wizard puts a picture beside them, leaving the boxes about
+    // 266px -- narrow enough that the preview sentence runs eight lines and
+    // rewraps on small edits. Wide gives the picture and the words room.
+    { wide: true }
   );
   $('cancelDlg').addEventListener('click', closeDialog);
   $('wordingForm').addEventListener('submit', async (e) => {
