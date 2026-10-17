@@ -537,6 +537,75 @@ async function main() {
       return 'helper refused on both, nothing moved';
     });
 
+    await check('A dealer\'s logins can be listed, added to, and the last one never removed', async () => {
+      // This list IS the recipients of the "send the gift cards" email:
+      // routes/referrals.js picks them with tenant_id + role = 'admin', read
+      // fresh each time. So "who can sign in" and "who gets told" are one
+      // question, and getting it wrong means a closed referral nobody acts on.
+      const id = global.__standardTenantId;
+      const first = await api('GET', `/rep-dealers/${id}/admins`, { as: USERS.admin });
+      eq(first.status, 200, `list: ${JSON.stringify(first.body)}`);
+      eq(first.body.admins.length, 1, 'a freshly built dealer has exactly one');
+      const only = first.body.admins[0];
+
+      // The last one is refused even though the page hides its button —
+      // the guard has to be the API's, not the markup's.
+      const refused = await api('DELETE', `/rep-dealers/${id}/admins/${only.id}`, { as: USERS.admin });
+      eq(refused.status, 409, `removing the only login must be refused: ${JSON.stringify(refused.body)}`);
+      const still = await sql(`select count(*)::int as n from users where tenant_id = $1 and role = 'admin'`, [id]);
+      eq(still[0].n, 1, 'the refused delete changed nothing');
+
+      const added = await api('POST', `/rep-dealers/${id}/admins`, {
+        as: USERS.admin, body: { email: 'second@standard.test', name: 'Second Person' },
+      });
+      eq(added.status, 201, `add: ${JSON.stringify(added.body)}`);
+      const two = await sql(
+        `select email, role from users where tenant_id = $1 and role = 'admin' order by email`, [id]);
+      eq(two.length, 2, 'now two logins');
+      assert(two.some((u) => u.email === 'second@standard.test'), `emails: ${two.map((u) => u.email).join(', ')}`);
+
+      // With two, the first becomes removable.
+      const gone = await api('DELETE', `/rep-dealers/${id}/admins/${only.id}`, { as: USERS.admin });
+      eq(gone.status, 200, `remove: ${JSON.stringify(gone.body)}`);
+      const left = await sql(
+        `select email from users where tenant_id = $1 and role = 'admin'`, [id]);
+      eq(left.length, 1, 'one left');
+      eq(left[0].email, 'second@standard.test', 'the right one was removed');
+      return 'one -> refused -> two -> one, and never zero';
+    });
+
+    await check('No password is ever emailed to someone added to a dealer', async () => {
+      // The build email has carried this guarantee since it was written; a
+      // second way in must not quietly become the exception.
+      const id = global.__standardTenantId;
+      const before = sent.length;
+      const r = await api('POST', `/rep-dealers/${id}/admins`, {
+        as: USERS.admin, body: { email: 'third@standard.test', name: 'Third Person' },
+      });
+      eq(r.status, 201, `add: ${JSON.stringify(r.body)}`);
+      const fresh = sent.slice(before).filter((m) => m.To === 'third@standard.test');
+      eq(fresh.length, 1, 'they were emailed exactly once');
+      const body = fresh[0].TextBody;
+      assert(/verify\?token=/.test(body), 'a set-password link');
+      assert(!/your password is|temporary password/i.test(body), 'a password was emailed');
+      // And none of the dealer's pricing, which is not their business.
+      assert(!/\$/.test(body), `prices were quoted to an added colleague: ${body}`);
+      return 'a one-time link, no password, no figures';
+    });
+
+    await check('A rep and the helper cannot see or change who holds a dealer\'s logins', async () => {
+      const id = global.__standardTenantId;
+      const g = await api('GET', `/rep-dealers/${id}/admins`, { as: USERS.helper });
+      const pst = await api('POST', `/rep-dealers/${id}/admins`, {
+        as: USERS.helper, body: { email: 'sneak@standard.test' } });
+      eq(g.status, 403, `helper GET: ${JSON.stringify(g.body)}`);
+      eq(pst.status, 403, `helper POST: ${JSON.stringify(pst.body)}`);
+      const [{ n }] = await sql(
+        `select count(*)::int as n from users where tenant_id = $1 and email = 'sneak@standard.test'`, [id]);
+      eq(n, 0, 'the helper created a login anyway');
+      return 'helper refused on both, nothing created';
+    });
+
     await check('An in-house company has no prices to set, and the route says so', async () => {
       // GSS, NMS and 50. itself are never charged. Letting a price be set on
       // one would read as them having started being billed.

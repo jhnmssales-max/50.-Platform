@@ -733,6 +733,144 @@ const pricingBody = z.object({
   charge_card_cost: z.boolean().optional(),
 }).refine((b) => Object.keys(b).length > 0, { message: 'Nothing to change' });
 
+// ---------------------------------------------------------------------------
+// Who holds a dealer's logins.
+//
+// These are the people who can sign in to that dealer's dashboard AND the
+// people the platform emails when a referral is marked paid and the gift
+// cards need to go out — routes/referrals.js picks its recipients with
+// "where tenant_id = ... and role = 'admin'", read fresh at the time.
+//
+// Until this existed a dealer had exactly one, created at build time, and
+// adding a second meant editing the database by hand. One person on holiday
+// meant nobody at that business was told to send a card.
+//
+// Admin only, and the write runs as the service role because it reaches
+// another tenant's rows, which is precisely what RLS forbids. The admin
+// check therefore happens first and explicitly — it cannot be inferred from
+// the write succeeding.
+// ---------------------------------------------------------------------------
+
+async function requireAdminThen(userId, fn) {
+  await withUserTransaction(userId, async (client) => {
+    await requirePlatform(client, userId, { admin: true });
+  });
+  return withServiceRole(fn);
+}
+
+router.get('/rep-dealers/:tenantId/admins', requireAuth, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  const out = await requireAdminThen(req.userId, async (client) => {
+    const { rows: [t] } = await client.query('select id, name from tenants where id = $1', [tenantId]);
+    if (!t) throw httpError(404, 'No such company');
+    const { rows } = await client.query(
+      `select id, email, name, created_at::text as created_at
+         from users where tenant_id = $1 and role = 'admin' order by created_at asc, email asc`,
+      [tenantId]
+    );
+    return { tenant_id: t.id, name: t.name, admins: rows };
+  });
+  res.json(out);
+}));
+
+const dealerAdminBody = z.object({
+  email: z.string().email().max(200),
+  name: z.string().trim().min(1).max(120).optional(),
+});
+
+router.post('/rep-dealers/:tenantId/admins', requireAuth, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  const body = parseOr400(dealerAdminBody, req.body || {});
+  const email = body.email.trim().toLowerCase();
+
+  if (!supabaseAdmin.isConfigured()) {
+    throw httpError(503, 'This platform cannot create logins yet: SUPABASE_SERVICE_ROLE_KEY is not set on the API service.', 'logins_not_configured');
+  }
+
+  // The company has to exist, and this address must not already sign in
+  // somewhere else, BEFORE a Supabase account is made for it. A login with no
+  // tenant is harmless and reusable; a half-made one attached to the wrong
+  // business is not.
+  const tenant = await requireAdminThen(req.userId, async (client) => {
+    const { rows: [t] } = await client.query('select id, name from tenants where id = $1', [tenantId]);
+    if (!t) throw httpError(404, 'No such company');
+    const { rows: [clash] } = await client.query(
+      'select tenant_id from users where lower(email) = $1', [email]);
+    if (clash && clash.tenant_id !== tenantId) {
+      throw httpError(409, `${email} already signs in to another account on this platform. Use a different address.`);
+    }
+    if (clash) throw httpError(409, `${email} already has a login on ${t.name}.`);
+    return t;
+  });
+
+  let authUserId;
+  try {
+    ({ userId: authUserId } = await supabaseAdmin.createPasswordlessUser(email));
+  } catch (err) {
+    throw httpError(502, `Supabase would not create a login for ${email}: ${err.message}`);
+  }
+
+  const added = await withServiceRole(async (client) => {
+    const { rows: [existing] } = await client.query('select id, tenant_id from users where id = $1', [authUserId]);
+    if (existing && existing.tenant_id !== tenantId) {
+      throw httpError(409, `${email} already signs in to another account on this platform.`);
+    }
+    if (existing) return existing;
+    const { rows: [row] } = await client.query(
+      `insert into users (id, tenant_id, email, name, role) values ($1, $2, $3, $4, 'admin')
+       returning id, email, name`,
+      [authUserId, tenantId, email, body.name || email.split('@')[0]]
+    );
+    return row;
+  });
+
+  // No password is ever emailed — they choose their own, same as at build.
+  const emailed = { sent: false, problem: null };
+  const frontend = String(process.env.FRONTEND_BASE_URL || '').replace(/\/+$/, '');
+  const from = process.env.EMAIL_FROM_ADDRESS;
+  if (!from) {
+    emailed.problem = 'EMAIL_FROM_ADDRESS is not set, so no link could be sent.';
+  } else {
+    try {
+      const link = await supabaseAdmin.setPasswordLink(email, `${frontend}/login`);
+      const mail = dealerBuildEmails.forExtraAdmin({
+        contactName: body.name,
+        companyName: tenant.name,
+        link,
+        signInUrl: `${frontend}/login`,
+        logoUrl: `${frontend}/assets/50-platform-logo.png`,
+      });
+      await sendEmail({ from: `Joseph at 50. <${from}>`, to: email, subject: mail.subject, htmlBody: mail.htmlBody, textBody: mail.textBody });
+      emailed.sent = true;
+    } catch (err) {
+      // The login exists either way; saying so beats implying it failed.
+      emailed.problem = `The login was created but could not be emailed: ${err.message}`;
+    }
+  }
+
+  res.status(201).json({ ...added, emailed });
+}));
+
+router.delete('/rep-dealers/:tenantId/admins/:userId', requireAuth, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  const userId = parseOr400(uuid, req.params.userId);
+  const out = await requireAdminThen(req.userId, async (client) => {
+    const { rows } = await client.query(
+      `select id, email from users where tenant_id = $1 and role = 'admin'`, [tenantId]);
+    if (!rows.some((r) => r.id === userId)) throw httpError(404, 'That person does not have a login here');
+    // Never the last one. A dealer with no admin cannot sign in and nobody
+    // is told to send their gift cards — the account would go quiet with
+    // nothing on screen explaining why.
+    if (rows.length <= 1) {
+      throw httpError(409, 'That is the only login on this company. Add someone else first, or remove the company instead.');
+    }
+    const { rows: [gone] } = await client.query(
+      `delete from users where id = $1 and tenant_id = $2 returning id, email`, [userId, tenantId]);
+    return { removed: gone, left: rows.length - 1 };
+  });
+  res.json(out);
+}));
+
 // Reading one dealer's prices, for the dialog that edits them. Deliberately
 // NOT added to rep_dealer_list(): that list is what reps and the helper see,
 // and neither is allowed money. A separate admin-only read keeps the figures

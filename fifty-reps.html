@@ -1825,6 +1825,9 @@ async function renderDealers(){
               // In-house companies are never charged, so there is nothing to
               // price and a dialog would imply they had started being billed.
               (state.isAdmin && !x.billing_exempt ? ' <button class="btn small secondary" data-price="' + x.tenant_id + '">Pricing</button>' : '') +
+              // Logins is offered for in-house companies too: NMS and GSS
+              // have real admins who get the same gift-card reminders.
+              (state.isAdmin ? ' <button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button>' : '') +
               (state.isAdmin ? ' <button class="btn small danger" data-delco="' + x.tenant_id + '">Remove</button>' : '') + '</td>'))  +
       '</tr>'
     ).join('') || '<tr data-empty-row><td colspan="6" class="muted" style="padding:18px">' + (state.isRep ? 'None yet. They show up here once Joseph has built them.' : 'No companies yet.') + '</td></tr>') + '</tbody></table></div>';
@@ -1835,6 +1838,8 @@ async function renderDealers(){
     b.addEventListener('click', () => deleteCompanyDialog(b.dataset.delco)));
   $('tab-dealers').querySelectorAll('[data-price]').forEach((b) =>
     b.addEventListener('click', () => pricingDialog(b.dataset.price)));
+  $('tab-dealers').querySelectorAll('[data-logins]').forEach((b) =>
+    b.addEventListener('click', () => loginsDialog(b.dataset.logins)));
   if($('toggleClosed')) $('toggleClosed').addEventListener('click', async () => {
     state.showClosed = !state.showClosed;
     await renderDealers();
@@ -2224,6 +2229,77 @@ function confirmDeleteDialog({ title, name, lead, goes, stays, button, onConfirm
 // reads and writes another tenant's row, which RLS hides from the signed-in
 // user entirely, so the API does it with the service role behind an explicit
 // admin check rather than relying on this button being hidden.
+// Who can sign in to a dealer's dashboard — which is the same list the
+// platform emails when a referral is marked paid and the gift cards have to
+// go out. Until this existed a dealer had exactly one, set at build time, so
+// one person on holiday meant nobody at that business was told.
+async function loginsDialog(tenantId){
+  let cur;
+  try{
+    cur = await api('/rep-dealers/' + tenantId + '/admins');
+  }catch(err){ return flash(err.message); }
+
+  const rows = cur.admins.map((a) =>
+    '<tr><td><b>' + esc(a.name || a.email) + '</b>' +
+      (a.name ? '<div class="muted">' + esc(a.email) + '</div>' : '') + '</td>' +
+    '<td class="num">' +
+      // The last one is never removable: a dealer with no login cannot sign
+      // in and nobody is told to send their cards. The button is hidden
+      // rather than shown-and-refused, and the API refuses it regardless.
+      (cur.admins.length > 1
+        ? '<button type="button" class="btn small danger" data-rmadmin="' + esc(a.id) + '">Remove</button>'
+        : '<span class="muted">only login</span>') +
+    '</td></tr>').join('');
+
+  openDialog(
+    '<h3>Who can sign in to ' + esc(cur.name) + '</h3>' +
+    '<p class="muted">These are the people emailed when a referral is marked paid, so the gift cards can go out. They can also sign in and mark referrals paid themselves.</p>' +
+    '<div class="tablewrap"><table><tbody>' + rows + '</tbody></table></div>' +
+    '<form id="addAdminForm" style="margin-top:14px">' +
+      '<div class="row">' +
+        '<div><label>Add someone \u2014 their email</label><input name="email" type="email" required maxlength="200" placeholder="name@theircompany.com"></div>' +
+        '<div><label>Their name</label><input name="name" maxlength="120"></div>' +
+      '</div>' +
+      '<p class="hint">They get an email with a link to choose their own password. No password is ever sent.</p>' +
+      '<div class="actions">' +
+        '<button type="button" class="btn secondary" id="cancelDlg">Done</button>' +
+        '<button class="btn" type="submit" id="addAdmin">Add login</button>' +
+      '</div></form>'
+  );
+  $('cancelDlg').addEventListener('click', async () => { closeDialog(); await renderDealers(); });
+
+  $('dlg').querySelectorAll('[data-rmadmin]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try{
+      await api('/rep-dealers/' + tenantId + '/admins/' + b.dataset.rmadmin, { method:'DELETE' });
+      closeDialog();
+      flash('Login removed.', true);
+      await loginsDialog(tenantId);
+    }catch(err){ flash(err.message); b.disabled = false; }
+  }));
+
+  $('addAdminForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('addAdmin');
+    btn.disabled = true; btn.textContent = 'Adding\u2026';
+    const d = Object.fromEntries(new FormData(e.target));
+    try{
+      const out = await post('/rep-dealers/' + tenantId + '/admins', { email: d.email, name: d.name || undefined });
+      closeDialog();
+      // The login exists whether or not the email got through, and saying
+      // which is what lets Joseph send the link himself if it did not.
+      flash(out.emailed && out.emailed.sent
+        ? d.email + ' can sign in once they set a password \u2014 the link is on its way.'
+        : d.email + ' was added, but: ' + ((out.emailed && out.emailed.problem) || 'no link could be emailed.'),
+        !!(out.emailed && out.emailed.sent));
+      await loginsDialog(tenantId);
+    }catch(err){
+      flash(err.message);
+      btn.disabled = false; btn.textContent = 'Add login';
+    }
+  });
+}
+
 async function pricingDialog(tenantId){
   let cur;
   try{

@@ -146,4 +146,52 @@ function forRep({ repName, companyName, contactName, contactEmail, signInUrl, ac
   return { subject: `${companyName} is live`, textBody: text, htmlBody: html };
 }
 
-module.exports = { forDealer, forRep };
+// ---------------------------------------------------------------------------
+// To someone being added to a dealer AFTER it is built
+// ---------------------------------------------------------------------------
+// Deliberately not the build email: the program is already running, there is
+// no setup payment ahead of them, and quoting prices to a colleague who was
+// added to help is both wrong and none of their business. What they need is
+// the link, where to sign in, and what the platform will email them about.
+function forExtraAdmin({ contactName, companyName, link, signInUrl, logoUrl }) {
+  const hi = firstName(contactName);
+
+  const text = [
+    `Hi ${hi},`,
+    '',
+    `You have been given a login for ${companyName}'s 50. referral program.`,
+    '',
+    'Set your password here (this link works once, and expires):',
+    link,
+    '',
+    `Then sign in any time at: ${signInUrl}`,
+    '',
+    'What you will see: every referral your customers have sent, and a button to mark one paid once that job closes.',
+    '',
+    'You will also be emailed whenever a referral is marked paid, so the gift cards can go out.',
+    '',
+    'Questions? Reply to this email.',
+    '',
+    '— 50.',
+  ].join('\n');
+
+  const html = `
+<div style="${FONT}max-width:480px;margin:0 auto;color:#1B1B1B;">
+  ${logoBlock(logoUrl)}
+  <p style="${PARA}">Hi ${escapeHtml(hi)},</p>
+  <p style="${PARA}">You have been given a login for <b>${escapeHtml(companyName)}</b>'s 50. referral program.</p>
+  ${button(link, 'Set your password')}
+  ${fallbackLink(link)}
+  <p style="${PARA}">Then sign in any time at <a href="${escapeHtml(signInUrl)}" style="color:#33475A;font-weight:bold;">${escapeHtml(signInUrl)}</a>.</p>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F4EE;border-radius:8px;margin:4px 0 16px;"><tr><td style="padding:12px 16px;">
+    <p style="${FONT}font-size:14px;line-height:1.6;margin:0 0 8px;">You will see every referral your customers have sent, and a button to mark one paid once that job closes.</p>
+    <p style="${FONT}font-size:14px;line-height:1.6;margin:0;">You will also be emailed whenever a referral is marked paid, so the gift cards can go out.</p>
+  </td></tr></table>
+  <p style="${PARA}">Questions? Reply to this email.</p>
+  <p style="${PARA}">— 50.</p>
+</div>`;
+
+  return { subject: `Your login for ${companyName}'s referral program`, textBody: text, htmlBody: html };
+}
+
+module.exports = { forDealer, forRep, forExtraAdmin };
