@@ -776,11 +776,16 @@ async function main() {
          values ('Gone Company', $1, $1, 'won', current_date, 'declined', 'Company removed') returning id`,
         [alice2.id]
       );
-      // Won and still attached to a live dealer: this one must stay.
+      // Won and still attached to a live dealer: this one must stay. Its own
+      // tenant, because rep_leads_one_per_tenant_idx allows one lead per
+      // company and every seeded dealer already has one.
+      const [liveCo] = await sql(
+        `insert into tenants (slug, name, billing_required, billing_status) values ('still-a-dealer','Still A Dealer', true, 'active') returning id`
+      );
       const [attached] = await sql(
         `insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on, tenant_id, build_status, built_at)
          values ('Still A Dealer', $1, $1, 'won', current_date, $2, 'built', now()) returning id`,
-        [alice2.id, tenants['dealer-a'].id]
+        [alice2.id, liveCo.id]
       );
 
       await page.click('[data-tab=leads]');
@@ -816,6 +821,7 @@ async function main() {
       eq((after[0] || {}).lost_count || 0, (before[0] || {}).lost_count || 0, 'a tidy-up was counted against the rep as a lost lead');
 
       await sql('delete from rep_leads where id = $1', [attached.id]);
+      await sql('delete from tenants where id = $1', [liveCo.id]);
       return 'orphaned won lead deleted, attached one refused with 409, lost count unchanged';
     });
 
@@ -894,10 +900,24 @@ async function main() {
     await check('A search survives the list redrawing underneath it, without stealing the cursor', async () => {
       await page.click('[data-tab=leads]');
       await page.waitForSelector('#tab-leads tr[data-search]');
+      // Opening the tab refetches and redraws, and the selector above matches
+      // the rows already in the DOM from the last visit. Typing into a box
+      // that is about to be replaced lands in a node whose input handler has
+      // not been attached yet, so the keystroke filters nothing — harmless in
+      // a browser, where the next keystroke fixes it, but it made this check
+      // pass or fail on timing.
+      await page.waitForLoadState('networkidle').catch(() => {});
       await page.fill('#tab-leads .searchbox', 'acme');
       await page.waitForTimeout(80);
-      const before = await page.$$eval('#tab-leads tbody tr[data-search]', (r) => r.filter((x) => !x.hidden).length);
+      const counted = await page.$$eval('#tab-leads tbody tr[data-search]', (r) => ({
+        shown: r.filter((x) => !x.hidden).length, total: r.length,
+      }));
+      const before = counted.shown;
+      // Deliberately not "before >= 1". That passes when the filter never ran
+      // at all, because then nothing is hidden and every row counts — which is
+      // exactly how a lost keystroke hid here instead of failing.
       assert(before >= 1, 'nothing matched acme to begin with');
+      assert(before < counted.total, `typing filtered nothing: ${before} of ${counted.total} rows still shown`);
 
       // Something else redraws the tab entirely.
       await page.evaluate(() => renderLeads());
