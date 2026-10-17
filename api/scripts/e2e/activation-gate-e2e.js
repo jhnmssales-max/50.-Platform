@@ -1177,15 +1177,18 @@ async function main() {
         return me.body.referral_fee;
       };
       const small = await at(3333);
-      const big = await at(50000);
+      // Capped by tenants_card_requires_low_charge: on a card, two cards plus
+      // the platform fee must stay under $500. The point here is that the fee
+      // holds, not how big the reward can get.
+      const big = await at(20000);
       await sql(`update tenants set reward_amount_cents = 5000 where id = $1`, [newTenantId]);
       eq(small.fee_cents, 3000, 'fee at a $33.33 card');
-      eq(big.fee_cents, 3000, 'fee at a $500.00 card');
+      eq(big.fee_cents, 3000, 'fee at a $200.00 card');
       eq(small.payout_cents, 6666, 'payout still reported');
       // This dealer sends their own cards, so 50. charges the fee alone.
       eq(small.card_cents, 0, 'card cost not charged');
       eq(small.charged_cents, 3000, 'charged = the fee');
-      return `fee held at $30.00 across a $33.33 and a $500.00 card`;
+      return `fee held at $30.00 across a $33.33 and a $200.00 card`;
     });
 
     section('Exempt tenant on the dealer page');

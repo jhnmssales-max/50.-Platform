@@ -163,7 +163,7 @@ async function collectReferralFee({ tenantId, referralId }) {
     const { rows: [inserted] } = await client.query(
       `insert into billing_events
          (tenant_id, referral_id, event_type, amount_cents, reward_amount_cents, fee_cents, fee_rate_bps, status)
-       values ($1, $2, 'referral_fee', $3, $4, $5, 'pending')
+       values ($1, $2, 'referral_fee', $3, $4, $5, $6, 'pending')
        returning id, status, amount_cents, reward_amount_cents, fee_cents, fee_rate_bps, stripe_payment_intent_id,
                  error_detail, created_at`,
       [tenantId, referralId, totalCents, row.reward_amount_cents, row.referral_fee_cents, rateBps]
