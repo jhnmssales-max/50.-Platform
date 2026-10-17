@@ -420,14 +420,30 @@ async function main() {
       return 'dealer and backdating refused 403 staff_only; a named closer is overridden with the rep themselves';
     });
 
-    await check('A won lead cannot be removed', async () => {
+    // This check used to assert that NOBODY could remove a won lead, admin
+    // included. That rule left Joseph unable to clear test rows he had created
+    // himself, so it changed: a won lead may be removed by the admin alone,
+    // and only while no rep has earned from its company. A rep is still
+    // refused — the lead is the record of what they closed — but with 403
+    // (you are not the one who may) rather than 409 (the lead's state forbids
+    // it), because the state is no longer what refuses it.
+    await check('A rep cannot remove a won lead, but the admin can', async () => {
       const r = await api('DELETE', `/rep-leads/${aliceLead.id}`, { as: ALICE });
-      eq(r.status, 409, 'status');
-      eq(r.body.code, 'won_cannot_delete', 'code');
+      eq(r.status, 403, 'status');
+      eq(r.body.code, 'won_admin_only', 'code');
       eq((await sql('select count(*)::int n from rep_leads where id = $1', [aliceLead.id]))[0].n, 1, 'still there');
-      // And not by the admin either — it is the record of who closed them.
-      eq((await api('DELETE', `/rep-leads/${aliceLead.id}`, { as: USERS.admin })).status, 409, 'admin');
-      return 'rep and admin both refused 409 won_cannot_delete';
+
+      // The admin can — on a lead of its own, so the checks after this one
+      // still have aliceLead to work with.
+      const [spare] = await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on)
+         values ('Spare Won Lead', $1, $1, 'won', current_date) returning id`,
+        [rep.Alice.id]
+      );
+      const ok = await api('DELETE', `/rep-leads/${spare.id}`, { as: USERS.admin });
+      eq(ok.status, 200, 'admin refused a won lead nobody earned from');
+      eq((await sql('select count(*)::int n from rep_leads where id = $1', [spare.id]))[0].n, 0, 'spare survived');
+      return 'rep refused 403 won_admin_only; admin removed one nobody earned from';
     });
 
     await check('A won lead stays won', async () => {
