@@ -833,6 +833,14 @@ async function main() {
 
         return `open lead: Delete + Lost + Mark won all present; delete kept lost at ${lostBefore}, Lost raised it to ${afterLost}`;
       } finally {
+        // flash() smooth-scrolls the window. Leaving a message up makes the
+        // next check's tab click wait for an element that never settles, so
+        // clear it rather than hand the next check a moving page.
+        await page.evaluate(() => {
+          const el = document.getElementById('appMsg');
+          if (el) el.className = 'msg';
+          window.scrollTo(0, 0);
+        }).catch(() => {});
         await sql('delete from rep_leads where id in ($1, $2)', [open1.id, open2.id]).catch(() => {});
       }
     });
@@ -912,7 +920,7 @@ async function main() {
       await page.waitForSelector('#confirmDelLead', { timeout: 6000 });
       const text = (await page.textContent('#dlg')).replace(/\s+/g, ' ');
       assert(/company is not touched/i.test(text), `the dialog does not reassure about the company: ${text.slice(0, 240)}`);
-      assert(/does not count as a lost lead/i.test(text), 'the dialog does not say it is not a loss');
+      assert(/not the same as/i.test(text) && /Lost/.test(text), `the dialog does not distinguish Delete from Lost: ${text.slice(0, 240)}`);
       await page.click('#confirmDelLead');
       await page.waitForFunction(
         () => !document.querySelector('#tab-leads').textContent.includes('Good Steward Structures'),
@@ -927,6 +935,14 @@ async function main() {
 
       return 'orphan and in-house leads deletable, earned-from refused 409, non-admin refused 403, company untouched';
       } finally {
+        // flash() smooth-scrolls the window. Leaving a message up makes the
+        // next check's tab click wait for an element that never settles, so
+        // clear it rather than hand the next check a moving page.
+        await page.evaluate(() => {
+          const el = document.getElementById('appMsg');
+          if (el) el.className = 'msg';
+          window.scrollTo(0, 0);
+        }).catch(() => {});
         await sql('delete from rep_leads where id in ($1, $2, $3)', [orphan.id, exempt.id, earnedLead.id]).catch(() => {});
         await sql('delete from rep_earnings where tenant_id = $1', [paidCo.id]).catch(() => {});
         await sql('delete from billing_events where tenant_id = $1', [paidCo.id]).catch(() => {});
