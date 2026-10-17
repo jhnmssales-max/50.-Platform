@@ -1288,6 +1288,12 @@ async function main() {
       await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
       await repPage.click('#leadForm [data-wstep="2"]');
       await repPage.waitForSelector('#leadForm [data-wpane="2"].on');
+      // Cleared here rather than assumed: an earlier check types into this
+      // box and the add-a-lead form restores what was typed across redraws,
+      // so by now it is usually full. The assertion below is the guard that
+      // caught exactly that -- keep it.
+      await repPage.fill('#leadForm [name=copy_eligibility]', '');
+      await repPage.waitForTimeout(150);
       eq(await repPage.inputValue('#leadForm [name=copy_eligibility]'), '', 'the box starts empty, or this check proves nothing');
       const heightOf = () => repPage.$eval('#leadForm [data-wprev=eligibility]',
         (el) => Math.round(el.getBoundingClientRect().height));
