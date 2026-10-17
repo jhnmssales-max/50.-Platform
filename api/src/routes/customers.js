@@ -140,6 +140,9 @@ router.post('/customers', requireAuth, async (req, res, next) => {
         buttonColor: (result.ctx.tenant_branding || {}).primaryColor,
         logoUrl: resolveLogoUrl((result.ctx.tenant_branding || {}).logoUrl),
         offerHow: ((result.ctx.tenant_branding || {}).copy || {}).offerHow,
+        // What this dealer calls their gift card, for the {card} token in
+        // their offer line. Without it the email would print the raw token.
+        cardNoun: ((result.ctx.tenant_branding || {}).copy || {}).cardNoun,
       });
 
       // Replies go to the staff member who sent the invite (their own

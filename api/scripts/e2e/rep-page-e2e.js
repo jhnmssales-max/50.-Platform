@@ -1343,6 +1343,32 @@ async function main() {
       return `panel reserves ${Math.round(h)}px from the first paint`;
     });
 
+    await check('The reps page and the API agree on the wording fields', async () => {
+      // fifty-reps.html keeps its OWN copy of the field list, because it is a
+      // static page with no build step. Two lists that must agree and nothing
+      // making them: adding cardNoun to the API's list and not the page's is
+      // exactly how the offer line kept promising an Amazon card after the
+      // default had stopped saying one.
+      const { COPY_FIELDS, GENERIC_COPY } = require('../../src/lib/tenantCopy');
+      const html = require('fs').readFileSync(
+        require('path').join(__dirname, '../../../fifty-reps.html'), 'utf8');
+      const block = html.match(/const COPY_FIELDS = \[([\s\S]*?)\n\];/);
+      assert(block, 'could not find COPY_FIELDS in fifty-reps.html');
+      const pageKeys = [...block[1].matchAll(/key:'([a-zA-Z]+)'/g)].map((m) => m[1]);
+      const apiKeys = COPY_FIELDS.map((f) => f.key);
+      eq(JSON.stringify(pageKeys), JSON.stringify(apiKeys),
+        `the page and the API list different fields, or in a different order`);
+      // The fallbacks have to match too: the page shows one as a placeholder
+      // while the API writes the other onto the dealer, so a dealer could be
+      // given wording no rep was ever shown.
+      const drifted = apiKeys.filter((k) => {
+        const want = GENERIC_COPY[k];
+        return want && !block[1].includes(want.slice(0, 40));
+      });
+      eq(drifted.length, 0, `fallbacks differ between the page and the API: ${drifted.join(', ')}`);
+      return `${apiKeys.length} fields, same order, same fallbacks`;
+    });
+
     await check('Every wording field has a picture pinning it to a real page', async () => {
       // Guards the seam between api/scripts/build-wording-shots.js and the
       // field list: add a tenth field and forget to re-run the script, and a

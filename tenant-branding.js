@@ -87,7 +87,11 @@
     return String(text)
       .replace(/\*\*/g, '')
       .replace(/\{reward\}/g, formatAmount(b.rewardAmountCents, b.rewardCurrency))
-      .replace(/\{name\}/g, b.name);
+      .replace(/\{name\}/g, b.name)
+      // Whatever this dealer calls their gift card. Falls back to the
+      // wording the pages ship with rather than leaving a raw token on a
+      // customer's screen.
+      .replace(/\{card\}/g, (b.copy && b.copy.cardNoun) || 'electronic gift card');
   }
 
   function apply(b){

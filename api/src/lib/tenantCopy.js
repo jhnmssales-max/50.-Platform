@@ -14,8 +14,11 @@
 // must never inherit "Buy a shed from us", so a NEW dealer's blanks are filled
 // from GENERIC_COPY below rather than left to fall through to DEFAULT_COPY.
 //
-// {reward} is replaced with that dealer's card amount and {name} with their
-// business name, wherever they appear. **bold** is honored in the invite
+// {reward} is replaced with that dealer's card amount, {name} with their
+// business name, and {card} with whatever they call their gift card
+// (cardNoun), wherever those appear. {card} exists so the offer line does not
+// promise an emailed Amazon card to a dealer who posts real ones -- the
+// default used to say exactly that. **bold** is honored in the invite
 // email only.
 
 // Ordered as the rep meets them, which is also how the reps page groups them.
@@ -104,7 +107,7 @@ const COPY_KEYS = COPY_FIELDS.map((f) => f.key);
 // customers — it just says less than their own words would.
 const GENERIC_COPY = {
   offerHow:
-    "Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} Amazon E-Gift Card**.",
+    "Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} {card}**.",
   cardNoun: 'electronic gift card',
   shareTitle: 'Get {reward} when you make a purchase from {name}',
   shareText: 'I referred you — make your purchase through my link and we both get {reward}.',

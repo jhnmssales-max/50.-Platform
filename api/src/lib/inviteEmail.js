@@ -14,7 +14,7 @@
 const DEFAULT_OFFER_HOW =
   "Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building through that link, you each receive a **{reward} Amazon E-Gift Card**.";
 
-function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency, logoUrl, offerHow }) {
+function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency, logoUrl, offerHow, cardNoun }) {
   const btnColor = /^#[0-9a-fA-F]{3,8}$/.test(buttonColor || '') ? buttonColor : '#1C2B33';
   const firstName = (customerName || '').trim().split(' ')[0] || 'there';
 
@@ -30,7 +30,10 @@ function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, re
   const subject = `${tenantName} wants to say thank you.`;
 
   const offerTemplate = typeof offerHow === 'string' && offerHow.trim() ? offerHow.trim() : DEFAULT_OFFER_HOW;
-  const withAmount = offerTemplate.replace(/\{reward\}/g, amount).replace(/\{name\}/g, tenantName);
+  const withAmount = offerTemplate
+    .replace(/\{reward\}/g, amount)
+    .replace(/\{name\}/g, tenantName)
+    .replace(/\{card\}/g, (cardNoun && String(cardNoun).trim()) || 'electronic gift card');
   const offerText = withAmount.replace(/\*\*/g, '');
   const offerHtml = escapeHtml(withAmount).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 
