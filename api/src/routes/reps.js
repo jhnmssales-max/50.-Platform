@@ -541,9 +541,9 @@ router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
   const id = parseOr400(uuid, req.params.id);
 
   const lead = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId, { rep: true });
+    const ctx = await requirePlatform(client, req.userId, { rep: true });
     const { rows: [l] } = await client.query(
-      `select id, company_name, status, build_status,
+      `select id, company_name, status, build_status, tenant_id,
               coalesce(brought_in_by_rep_id, closed_by_rep_id) as owner_rep_id,
               to_char(found_on, 'YYYY-MM') as found_month
        from rep_leads where id = $1`,
@@ -551,8 +551,22 @@ router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
     );
     // Not theirs, or not there: RLS has already made those the same thing.
     if (!l) throw httpError(404, 'No such lead');
+    // A won lead is normally the record of who closed a dealer, and stays.
+    // The exception is a won lead with NO dealer on it: either it was never
+    // built, or its company was removed — and remove_company() only deletes a
+    // company that never traded, so by construction nobody earned a penny
+    // from it. There is no money history to protect, and leaving it means
+    // clutter the admin can never clear (a test company, a false start).
+    //
+    // Admin only, deliberately: a rep must not be able to erase the record of
+    // what they closed, or anyone else's.
     if (l.status === 'won') {
-      throw httpError(409, 'That lead was won, so it cannot be deleted — it is the record of who closed them.', 'won_cannot_delete');
+      if (!ctx.is_admin) {
+        throw httpError(403, 'That lead was won, so only the 50. admin can delete it — it is the record of who closed them.', 'won_admin_only');
+      }
+      if (l.tenant_id) {
+        throw httpError(409, `${l.company_name} is still a company on the platform, so this lead is its origin record. Remove the company first, then this can go.`, 'won_has_dealer');
+      }
     }
     const { rows: files } = await client.query('select storage_path from rep_lead_files where lead_id = $1', [id]);
     return { ...l, files };
@@ -560,15 +574,23 @@ router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
 
   await withServiceRole(async (client) => {
     // rep_lead_files cascades on the lead's delete, so the rows go with it.
+    // The same two conditions again as a WHERE, so the one place that actually
+    // removes the row cannot be reached by a path that skipped the checks.
     await assertRowsAffected(
       client,
-      await client.query(`delete from rep_leads where id = $1 and status <> 'won'`, [id]),
+      await client.query(
+        `delete from rep_leads where id = $1 and (status <> 'won' or tenant_id is null)`,
+        [id]
+      ),
       { table: 'rep_leads', id }
     );
     // A bare count survives, so "how many did they lose" still has an answer.
     // Nothing about WHO: a rep, a month, a number. Counted against the month
     // the lead came in, which is where the rest of that month's figures put it.
-    if (lead.owner_rep_id) {
+    //
+    // Not counted for a WON lead: it was not lost, and inflating the lost
+    // column would quietly ruin the conversion rate it exists to compute.
+    if (lead.owner_rep_id && lead.status !== 'won') {
       await client.query(
         `insert into rep_lead_outcomes (rep_id, month, lost_count)
          values ($1, $2, 1)

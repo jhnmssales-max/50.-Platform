@@ -165,6 +165,22 @@ async function main() {
     auth.addUser({ id: u.id, email: u.email, password: PASSWORD });
   }
 
+  // A request as a given signed-in user, for checking what the API refuses.
+  // Separate from the browser: a refusal the page never offers still has to be
+  // refused when it is asked for directly.
+  async function apiAs(user, path, init = {}) {
+    const t = await fetch(`${AUTH_BASE}/auth/v1/token?grant_type=password`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: user.email, password: PASSWORD }),
+    });
+    const { access_token } = await t.json();
+    const res = await fetch(`${API_ORIGIN}/api${path}`, {
+      ...init,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}`, ...(init.headers || {}) },
+    });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  }
+
   const apiLines = [];
   const apiChild = spawn(process.execPath, ['src/server.js'], {
     cwd: API_DIR,
@@ -749,6 +765,58 @@ async function main() {
       await sql(`delete from rep_leads where company_name = 'Deleted Their Dealer'`);
       await sql('delete from reps where id = $1', [stranded.id]);
       return `dialog said "${heading}", database said "${outcome}"`;
+    });
+
+    await check('A won lead with no company can be deleted; one with a company cannot', async () => {
+      const [alice2] = await sql(`select id from reps where name = 'Alice Rep'`);
+      // Won, built, and its company then removed — the state remove_company
+      // leaves behind, and the clutter Joseph could not clear.
+      const [orphan] = await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on, build_status, declined_reason)
+         values ('Gone Company', $1, $1, 'won', current_date, 'declined', 'Company removed') returning id`,
+        [alice2.id]
+      );
+      // Won and still attached to a live dealer: this one must stay.
+      const [attached] = await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on, tenant_id, build_status, built_at)
+         values ('Still A Dealer', $1, $1, 'won', current_date, $2, 'built', now()) returning id`,
+        [alice2.id, tenants['dealer-a'].id]
+      );
+
+      await page.click('[data-tab=leads]');
+      await page.waitForFunction(() => document.querySelector('#tab-leads').textContent.includes('Gone Company'), { timeout: 10000 });
+      await page.waitForLoadState('networkidle').catch(() => {});
+
+      // Only the orphaned one offers a Delete.
+      const orphanRow = page.locator('#tab-leads tr', { hasText: 'Gone Company' });
+      const attachedRow = page.locator('#tab-leads tr', { hasText: 'Still A Dealer' });
+      eq(await orphanRow.locator('[data-dellead]').count(), 1, 'no Delete on a won lead whose company is gone');
+      eq(await attachedRow.locator('[data-dellead]').count(), 0, 'a won lead with a live dealer offers Delete');
+
+      // The API refuses the attached one even if asked directly.
+      const refused = await apiAs(USERS.admin, `/rep-leads/${attached.id}`, { method: 'DELETE' });
+      eq(refused.status, 409, `expected 409, got ${refused.status} ${JSON.stringify(refused.body)}`);
+      assert(/Remove the company first/i.test(refused.body.error || ''), `unhelpful refusal: ${refused.body.error}`);
+
+      // And deleting the orphan works, without counting as a lost lead.
+      const before = await sql('select lost_count from rep_lead_outcomes where rep_id = $1', [alice2.id]);
+      await orphanRow.locator('[data-dellead]').click();
+      await page.waitForSelector('#confirmDelLead', { timeout: 6000 });
+      const text = (await page.textContent('#dlg')).replace(/\s+/g, ' ');
+      assert(/no company on the platform/i.test(text), `the dialog does not explain why: ${text.slice(0, 200)}`);
+      assert(/does not count as a lost lead/i.test(text), 'the dialog does not say it is not a loss');
+      await page.click('#confirmDelLead');
+      await page.waitForFunction(
+        () => !document.querySelector('#tab-leads').textContent.includes('Gone Company'),
+        null, { timeout: 10000 }
+      );
+      const [{ n }] = await sql(`select count(*)::int as n from rep_leads where id = $1`, [orphan.id]);
+      eq(n, 0, 'the lead row survived');
+      const after = await sql('select lost_count from rep_lead_outcomes where rep_id = $1', [alice2.id]);
+      eq((after[0] || {}).lost_count || 0, (before[0] || {}).lost_count || 0, 'a tidy-up was counted against the rep as a lost lead');
+
+      await sql('delete from rep_leads where id = $1', [attached.id]);
+      return 'orphaned won lead deleted, attached one refused with 409, lost count unchanged';
     });
 
     await check('An in-house company has no Remove button at all', async () => {

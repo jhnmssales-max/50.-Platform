@@ -849,7 +849,11 @@ async function renderLeads(){
       '<td class="num"><button class="btn small secondary" data-wording="' + x.id + '">Wording</button> ' +
         '<button class="btn small secondary" data-files="' + x.id + '">Files</button> ' +
         '<button class="btn small secondary" data-leadfu="' + x.id + '">Follow up</button> ' +
-        (x.status === 'won' ? (x.build_status === 'awaiting_approval' ? '<span class="muted">waiting on Joseph</span>' : '') :
+        (x.status === 'won' ? (x.build_status === 'awaiting_approval' ? '<span class="muted">waiting on Joseph</span>'
+          // A won lead with no company left is a false start or a test: there
+          // is no dealer for it to be the origin record of, and nobody earned
+          // from it, so the admin can clear it away. Admin only.
+          : (state.isAdmin && !x.tenant_id ? '<button class="btn small danger" data-dellead="' + x.id + '">Delete</button>' : '')) :
         '<button class="btn small" data-win="' + x.id + '">Mark won</button> ' +
         '<button class="btn small danger" data-lost="' + x.id + '">Lost</button>') + '</td></tr>'
     ).join('') || '<tr data-empty-row><td colspan="7" class="muted" style="padding:18px">No leads yet.</td></tr>') +
@@ -887,6 +891,7 @@ async function renderLeads(){
   $('tab-leads').querySelectorAll('[data-files]').forEach((b) => b.addEventListener('click', () => filesDialog(b.dataset.files)));
   $('tab-leads').querySelectorAll('[data-wording]').forEach((b) => b.addEventListener('click', () => wordingDialog(b.dataset.wording)));
   $('tab-leads').querySelectorAll('[data-lost]').forEach((b) => b.addEventListener('click', () => lostDialog(b.dataset.lost)));
+  $('tab-leads').querySelectorAll('[data-dellead]').forEach((b) => b.addEventListener('click', () => deleteWonLeadDialog(b.dataset.dellead)));
 }
 function todayYmd(){ return new Date().toLocaleDateString('en-CA', { timeZone: TZ }); }
 function formData(form){ const o = {}; new FormData(form).forEach((v, k) => { o[k] = typeof v === 'string' ? v.trim() : v; }); return o; }
@@ -940,6 +945,36 @@ function lostDialog(id){
       const out = await api('/rep-leads/' + id, { method:'DELETE' });
       closeDialog();
       flash(out.deleted + ' removed.', true);
+      await renderLeads();
+    }catch(err){
+      closeDialog(); flash(err.message);
+    }
+  });
+}
+
+// Clearing away a won lead whose company is gone. Deliberately separate from
+// lostDialog: this one is not saying they said no, it is tidying up a record
+// that no longer refers to anything. It does not count against the rep's lost
+// leads, because it was not a loss.
+function deleteWonLeadDialog(id){
+  const lead = state.leads.find((x) => x.id === id);
+  if(!lead) return flash('That lead is gone.');
+  openDialog(
+    '<h3>Delete ' + esc(lead.company_name) + '?</h3>' +
+    '<p>They were marked won, but there is no company on the platform for them any more \u2014 either it was never built, or it was removed. Nobody earned anything from them, so there is nothing here to keep.</p>' +
+    '<p class="muted">This removes the lead, the contact, the notes and anything uploaded. It does not count as a lost lead against '
+      + esc(repName(lead.closed_by_rep_id) || repName(lead.brought_in_by_rep_id) || 'the rep') + '. It cannot be undone.</p>' +
+    '<div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Keep it</button>' +
+    '<button class="btn danger" id="confirmDelLead" type="button">Delete this lead</button></div>'
+  );
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('confirmDelLead').addEventListener('click', async () => {
+    const btn = $('confirmDelLead');
+    btn.disabled = true; btn.textContent = 'Deleting\u2026';
+    try{
+      const out = await api('/rep-leads/' + id, { method:'DELETE' });
+      closeDialog();
+      flash(out.deleted + ' is deleted.', true);
       await renderLeads();
     }catch(err){
       closeDialog(); flash(err.message);
