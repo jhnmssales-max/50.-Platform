@@ -199,7 +199,8 @@ function liveModeFilterParam(stripeMode) {
 // Activation receipt
 // ---------------------------------------------------------------------------
 const TENANT_COLUMNS = `t.id, t.slug, t.name, t.billing_required, t.billing_status, t.activation_paid_at, t.activation_livemode,
-       t.annual_fee_cents, t.renewal_due_at, t.reward_amount_cents, t.referral_fee_bps, t.reward_currency, t.payment_method_type`;
+       t.annual_fee_cents, t.renewal_due_at, t.reward_amount_cents,
+       t.referral_fee_cents, t.charge_card_cost, t.reward_currency, t.payment_method_type`;
 
 async function buildActivationReceipt(tenant, admins, stripeMode) {
   const { rows: [payment] } = await pool.query(
@@ -224,7 +225,8 @@ async function buildActivationReceipt(tenant, admins, stripeMode) {
       annualFeeCents: tenant.annual_fee_cents,
       renewalDueAt: tenant.renewal_due_at,
       rewardAmountCents: tenant.reward_amount_cents,
-      feeRateBps: tenant.referral_fee_bps,
+      referralFeeCents: tenant.referral_fee_cents,
+      chargeCardCost: tenant.charge_card_cost,
       paymentMethodType: tenant.payment_method_type,
     }),
     detail: { amountCents: payment ? payment.amount_cents : null, paymentIntentId: payment ? payment.stripe_payment_intent_id : null },
@@ -405,7 +407,8 @@ async function buildAnnualSummary(tenant, admins, clock, stripeMode) {
       months: monthRows.map((m) => ({ period: m.period, count: m.count, feeCents: m.fee_cents })),
       currency: tenant.reward_currency,
       nextRenewalAt,
-      feeRateBps: tenant.referral_fee_bps,
+      referralFeeCents: tenant.referral_fee_cents,
+      chargeCardCost: tenant.charge_card_cost,
     }),
     detail: { year: clock.previous_year, feeCount: fees.count, feeTotalCents: fees.totalCents, renewalCount: renewals.length, activation: !!activationRow },
   };

@@ -49,13 +49,24 @@ const PENDING_RESEND_WINDOW_MS = 23 * 60 * 60 * 1000;
 // than racing it.
 const IN_FLIGHT_GRACE_MS = 2 * 60 * 1000;
 
-// payout = both cards; fee rounded half-up to the cent, in integer math
-// (no floating-point cents): $100.00 at 3000 bps -> $30.00; $66.66 at
-// 3000 bps -> $20.00 (19.998 rounds up).
-function computeReferralFee({ rewardAmountCents, rateBps }) {
+// What this dealer is charged for one rewarded referral.
+//
+// The fee is a flat amount per referral (tenants.referral_fee_cents), not a
+// percentage. A percentage could not bill a dealer who buys and sends their
+// own gift cards: 50. never funds those cards, so a rate applied to a payout
+// 50. is not paying collapses to nothing. See the migration
+// 20261025000000_dealer_pricing.sql.
+//
+// The cards' face value is added ON TOP only when the dealer is being
+// charged for cards 50. buys (tenants.charge_card_cost). Off for every
+// dealer who sends their own, which is all of them today.
+//
+//   fee only            $30 flat                      -> $30
+//   fee + card cost     $30 flat + two $50 cards      -> $130
+function computeReferralFee({ rewardAmountCents, feeCents, chargeCardCost }) {
   const payoutCents = rewardAmountCents * 2;
-  const feeCents = Math.floor((payoutCents * rateBps + 5000) / 10000);
-  return { payoutCents, feeCents };
+  const cardCents = chargeCardCost ? payoutCents : 0;
+  return { payoutCents, cardCents, feeCents, totalCents: feeCents + cardCents };
 }
 
 function formatCents(cents, currency) {
@@ -85,7 +96,8 @@ async function collectReferralFee({ tenantId, referralId }) {
       `select r.id as referral_id, r.tenant_id,
               t.name as tenant_name, t.billing_required, t.activation_paid_at, t.activation_livemode,
               t.stripe_customer_id, t.stripe_payment_method_id,
-              t.reward_amount_cents, t.reward_currency, t.referral_fee_bps
+              t.reward_amount_cents, t.reward_currency,
+              t.referral_fee_cents, t.charge_card_cost, t.reward_fulfillment
        from referrals r
        join tenants t on t.id = r.tenant_id
        where r.id = $1 and r.tenant_id = $2
@@ -99,7 +111,7 @@ async function collectReferralFee({ tenantId, referralId }) {
     }
 
     const { rows: [existing] } = await client.query(
-      `select id, status, amount_cents, reward_amount_cents, fee_rate_bps, stripe_payment_intent_id,
+      `select id, status, amount_cents, reward_amount_cents, fee_cents, fee_rate_bps, stripe_payment_intent_id,
               error_detail, created_at
        from billing_events
        where referral_id = $1 and event_type = 'referral_fee' and status in ('pending', 'succeeded')`,
@@ -139,15 +151,22 @@ async function collectReferralFee({ tenantId, referralId }) {
       return { row, attempt: existing, resume: true };
     }
 
-    const rateBps = row.referral_fee_bps;
-    const { feeCents } = computeReferralFee({ rewardAmountCents: row.reward_amount_cents, rateBps });
+    const { totalCents } = computeReferralFee({
+      rewardAmountCents: row.reward_amount_cents,
+      feeCents: row.referral_fee_cents,
+      chargeCardCost: row.charge_card_cost,
+    });
+    // fee_rate_bps stays null on every new row. It recorded the percentage a
+    // charge was computed at, and there is no percentage any more; the amount
+    // actually taken is amount_cents. Old rows keep their rate.
+    const rateBps = null;
     const { rows: [inserted] } = await client.query(
       `insert into billing_events
-         (tenant_id, referral_id, event_type, amount_cents, reward_amount_cents, fee_rate_bps, status)
-       values ($1, $2, 'referral_fee', $3, $4, $5, 'pending')
-       returning id, status, amount_cents, reward_amount_cents, fee_rate_bps, stripe_payment_intent_id,
+         (tenant_id, referral_id, event_type, amount_cents, reward_amount_cents, fee_cents, fee_rate_bps, status)
+       values ($1, $2, 'referral_fee', $3, $4, $5, $6, 'pending')
+       returning id, status, amount_cents, reward_amount_cents, fee_cents, fee_rate_bps, stripe_payment_intent_id,
                  error_detail, created_at`,
-      [tenantId, referralId, feeCents, row.reward_amount_cents, rateBps]
+      [tenantId, referralId, totalCents, row.reward_amount_cents, row.referral_fee_cents, rateBps]
     );
     return { row, attempt: inserted, resume: false };
   });
@@ -156,8 +175,17 @@ async function collectReferralFee({ tenantId, referralId }) {
 
   const { row, attempt } = claim;
   const currency = row.reward_currency;
+  // chargedCents is what actually left the dealer's card. feeCents is 50.'s
+  // cut of it; the rest, when there is any, is the gift cards' face value.
+  // Kept apart so a receipt can say "two $50 cards plus a $30 fee" rather
+  // than one unexplained $130. rateBps is null on every new row and holds
+  // the old percentage on rows charged before the flat fee.
   const summary = {
-    feeCents: attempt.amount_cents,
+    chargedCents: attempt.amount_cents,
+    // From the charge's own snapshot, never the tenant's live setting: a fee
+    // changed after the fact must not rewrite what an old receipt says.
+    feeCents: attempt.fee_cents != null ? attempt.fee_cents : attempt.amount_cents,
+    cardCents: attempt.fee_cents != null ? attempt.amount_cents - attempt.fee_cents : 0,
     payoutCents: attempt.reward_amount_cents * 2,
     rateBps: attempt.fee_rate_bps,
     currency,

@@ -1039,24 +1039,31 @@ async function main() {
       feeReferral = await submitFriend(code, 1);
       return `invite ${code} -> referral ${feeReferral}`;
     });
-    await check('"Mark as paid" quotes the exact fee: $30.00 = 30% of the $100.00 payout', async () => {
+    await check('"Mark as paid" quotes the exact flat fee, with no percentage', async () => {
       const callsBefore = STAND_IN ? (await stripeRequestLog()).length : 0;
       await markPaidOnPage(admin.page, feeReferral);
       await waitForMarkedPaid(admin.page, feeReferral, 15000);
       const confirmMsg = admin.dialogs.filter((d) => d.type === 'confirm').pop().message;
-      assert(confirmMsg.includes('$30.00') && confirmMsg.includes('30% of the $100.00'), `confirm text: ${confirmMsg}`);
+      // A flat fee, and this dealer sends their own cards, so the confirm
+      // must name the fee alone and must not quote a percentage of a gift
+      // card payout 50. is not charging them for.
+      assert(confirmMsg.includes('$30.00'), `confirm text: ${confirmMsg}`);
+      assert(!confirmMsg.includes('%'), `confirm still quotes a percentage: ${confirmMsg}`);
       admin.callsBeforeFee = callsBefore;
       return `confirm: "${confirmMsg.replace(/\n+/g, ' ')}"`;
     });
     await check('Exactly one $30.00 off-session charge to the tenant\'s saved card, recorded in billing_events', async () => {
       const [row] = await sql(
-        `select id, status, amount_cents, fee_rate_bps, reward_amount_cents, livemode, stripe_payment_intent_id
+        `select id, status, amount_cents, fee_cents, fee_rate_bps, reward_amount_cents, livemode, stripe_payment_intent_id
          from billing_events where referral_id = $1 and event_type = 'referral_fee'`,
         [feeReferral]
       );
       eq(row.status, 'succeeded', 'status');
       eq(row.amount_cents, 3000, 'amount_cents');
-      eq(row.fee_rate_bps, 3000, 'fee_rate_bps');
+      // The rate is gone; the flat fee is snapshotted on the charge instead,
+      // so a fee changed later cannot rewrite what this receipt says.
+      eq(row.fee_rate_bps, null, 'fee_rate_bps is not recorded for a flat fee');
+      eq(row.fee_cents, 3000, 'fee_cents snapshot');
       eq(row.reward_amount_cents, 5000, 'reward_amount_cents (per card)');
       eq(row.livemode, false, 'livemode');
       const [ref] = await sql('select status from referrals where id = $1', [feeReferral]);
@@ -1085,7 +1092,7 @@ async function main() {
         eq(pi.livemode, false, 'Stripe livemode');
         stripeSide = `Stripe ${pi.id}: ${pi.status} ${pi.amount} ${pi.currency} livemode=${pi.livemode}`;
       }
-      return `billing_events referral_fee: succeeded 3000 (rate 3000 bps of 2 x 5000) livemode=false ${row.stripe_payment_intent_id}; referral rewarded. ${stripeSide}`;
+      return `billing_events referral_fee: succeeded 3000 (flat fee, snapshotted) livemode=false ${row.stripe_payment_intent_id}; referral rewarded. ${stripeSide}`;
     });
 
     if (STAND_IN) {
@@ -1159,13 +1166,29 @@ async function main() {
       skip('Declined fee / lost response / concurrency', 'failure injection needs the stand-in; covered in --stripe=stand-in');
     }
 
-    await check('Fee rounding: $33.33 per card -> $66.66 payout -> $20.00 fee (half-up, integer cents)', async () => {
-      await sql(`update tenants set reward_amount_cents = 3333 where id = $1`, [newTenantId]);
-      const me = await api('GET', '/api/me', { token: tokenFor(USERS.newAdmin) });
+    await check('The flat fee does not move when the gift card amount does', async () => {
+      // This is the whole reason the percentage went: a dealer who sends
+      // their own cards can have any reward, or none that 50. funds, and
+      // Joseph still gets paid the same amount per referral. Under the old
+      // rate, dropping the reward dropped his fee with it.
+      const at = async (reward) => {
+        await sql(`update tenants set reward_amount_cents = $2 where id = $1`, [newTenantId, reward]);
+        const me = await api('GET', '/api/me', { token: tokenFor(USERS.newAdmin) });
+        return me.body.referral_fee;
+      };
+      const small = await at(3333);
+      // Capped by tenants_card_requires_low_charge: on a card, two cards plus
+      // the platform fee must stay under $500. The point here is that the fee
+      // holds, not how big the reward can get.
+      const big = await at(20000);
       await sql(`update tenants set reward_amount_cents = 5000 where id = $1`, [newTenantId]);
-      eq(me.body.referral_fee.payout_cents, 6666, 'payout_cents');
-      eq(me.body.referral_fee.fee_cents, 2000, 'fee_cents');
-      return JSON.stringify(me.body.referral_fee);
+      eq(small.fee_cents, 3000, 'fee at a $33.33 card');
+      eq(big.fee_cents, 3000, 'fee at a $200.00 card');
+      eq(small.payout_cents, 6666, 'payout still reported');
+      // This dealer sends their own cards, so 50. charges the fee alone.
+      eq(small.card_cents, 0, 'card cost not charged');
+      eq(small.charged_cents, 3000, 'charged = the fee');
+      return `fee held at $30.00 across a $33.33 and a $200.00 card`;
     });
 
     section('Exempt tenant on the dealer page');

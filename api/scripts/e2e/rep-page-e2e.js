@@ -1587,6 +1587,24 @@ async function main() {
       return `built; ${stillWaiting.length} other(s) still waiting, untouched`;
     });
 
+    await check('A rep cannot read or change what any dealer pays, even asking the API directly', async () => {
+      // The pricing routes reach another tenant's row with the service role,
+      // which is precisely what RLS exists to prevent — so the admin check in
+      // front of them is the only guard, and a rep has to be bounced by the
+      // API itself, not merely shown no button.
+      const [dealer] = await sql(`select id from tenants where slug = 'dealer-a'`);
+      const alice = { email: 'alice@x.test' };
+      const read = await apiAs(alice, `/rep-dealers/${dealer.id}/pricing`);
+      const write = await apiAs(alice, `/rep-dealers/${dealer.id}/pricing`, {
+        method: 'PATCH', body: JSON.stringify({ referral_fee_cents: 1 }),
+      });
+      eq(read.status, 403, `rep GET: ${JSON.stringify(read.body)}`);
+      eq(write.status, 403, `rep PATCH: ${JSON.stringify(write.body)}`);
+      const [t] = await sql('select referral_fee_cents from tenants where id = $1', [dealer.id]);
+      assert(t.referral_fee_cents !== 1, 'a rep changed a dealer\'s fee');
+      return `rep refused: GET ${read.status}, PATCH ${write.status}`;
+    });
+
     await check('The helper and a rep never see the Build dashboards tab at all', async () => {
       for (const who of [USERS.helper, { email: 'alice@x.test' }]) {
         const p = await newPage('no-builds');
