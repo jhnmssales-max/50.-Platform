@@ -34,7 +34,7 @@ const COPY_FIELDS = [
     key: 'cardNoun',
     stage: 'The invite email, and their share page',
     label: 'What the gift card is called',
-    where: 'Used wherever the reward is named \u2014 \u201ca $50 …\u201d. Change it for a business that mails real cards rather than emailing them.',
+    where: 'Used wherever the reward is named, right after the amount. Change it for a business that mails real cards rather than emailing them.',
     max: 60,
   },
   {

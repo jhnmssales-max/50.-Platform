@@ -1590,7 +1590,11 @@ async function main() {
       assert(fresh.some((m) => m.To === 'owner@hillcountry.test'), 'the dealer was emailed');
       assert(fresh.some((m) => m.To === 'alice@x.test' && /is live/.test(m.Subject)), 'the rep was told');
       const dealerMail = fresh.find((m) => m.To === 'owner@hillcountry.test');
-      assert(dealerMail.TextBody.includes('$25 gift card'), 'their own card amount is in the email');
+      // The email names the card as well as the amount now, so this is
+      // "$25 electronic gift card" by default and whatever the dealer calls
+      // it otherwise. Both halves asserted, loosely joined.
+      assert(/\$25 [a-z ]*gift card/.test(dealerMail.TextBody),
+        `their own card amount and its name are in the email: ${dealerMail.TextBody}`);
       assert(!/password is|temporary password/i.test(dealerMail.TextBody), 'no password was emailed');
       return `${t.name} (${t.slug}) built, $25 card, both emailed`;
     });

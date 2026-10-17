@@ -599,7 +599,14 @@ async function main() {
       assert(dealerMail.From.startsWith('Joseph at 50.'), `from: ${dealerMail.From}`);
       assert(/verify\?token=/.test(dealerMail.TextBody), 'a set-password link');
       assert(!/your password is|temporary password/i.test(dealerMail.TextBody), 'no password was emailed');
-      assert(dealerMail.TextBody.includes('$500'), 'it says what the first sign-in costs');
+      // THIS DEALER was built at a $750 onboarding charge, a few checks up.
+      // The email used to say $500 regardless, because the route passed
+      // activationFeeCents: 50000 hardcoded — so the old assertion passed
+      // while the email told every dealer the wrong price. It reads the
+      // tenant's real terms now.
+      assert(dealerMail.TextBody.includes('$750'),
+        `the email must quote THIS dealer's onboarding charge, not a default: ${dealerMail.TextBody}`);
+      assert(!dealerMail.TextBody.includes('$500'), 'the hardcoded $500 is back');
       assert(dealerMail.TextBody.includes('$25 gift card'), 'and names their own card amount');
       assert(/Your \$50 lands/.test(repMail.TextBody), 'the rep is told when they get paid');
 
