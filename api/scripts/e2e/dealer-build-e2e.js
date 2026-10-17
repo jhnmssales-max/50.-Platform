@@ -429,6 +429,12 @@ async function main() {
         body: {
           brand: { primaryColor: '#8B1A1A', primaryDark: '#5E1111', secondary: '#C98585', accentColor: '#1E6F3C', accentDark: '#154E2A', bg: '#F7F4EE', logoUrl: logoFile.public_url },
           reward_amount_cents: 2500,
+          // Joseph priced this one himself on the build screen.
+          activation_fee_cents: 75000,
+          annual_fee_cents: 15000,
+          referral_fee_cents: 4500,
+          reward_fulfillment: 'platform',
+          charge_card_cost: true,
         },
       });
       eq(r.status, 201, `build: ${JSON.stringify(r.body)}`);
@@ -443,6 +449,105 @@ async function main() {
       eq(t.reward_amount_cents, 2500, 'card amount on the tenant');
       eq(t.billing_required, true, 'they are gated into paying the $500');
       return `${t.name} (${t.slug}), ${t.branding.primaryColor}, $25 card, billing required`;
+    });
+
+    await check('The prices Joseph set on the build screen are on the dealer, in the same transaction', async () => {
+      // Not a follow-up update: approve_lead_build writes them with the
+      // insert, so a dealer never exists for a moment on standard terms.
+      const [t] = await sql(
+        `select activation_fee_cents, annual_fee_cents, referral_fee_cents,
+                reward_amount_cents, reward_fulfillment, charge_card_cost
+           from tenants where id = $1`, [built.tenant_id]);
+      eq(t.activation_fee_cents, 75000, 'onboarding charge');
+      eq(t.annual_fee_cents, 15000, 'yearly');
+      eq(t.referral_fee_cents, 4500, 'flat fee per referral');
+      eq(t.reward_amount_cents, 2500, 'gift card');
+      eq(t.reward_fulfillment, 'platform', 'who sends the cards');
+      eq(t.charge_card_cost, true, 'charged for the cards too');
+      return '$750 / $150 / $45 a referral, 50. sends the cards and bills for them';
+    });
+
+    await check('A build that sets no prices gets the standard terms, not whatever the form showed', async () => {
+      // The build screen pre-fills the standard numbers. If it sent them
+      // explicitly, every dealer built today would be pinned to today's
+      // prices and a later change to what "standard" means would skip them.
+      const plain = (await api('POST', '/rep-leads', {
+        as: USERS.admin,
+        body: { company_name: 'Standard Terms Co', contact_name: 'Pat', email: 'pat@standard.test', found_on: '2026-10-01' },
+      })).body;
+      await api('POST', `/rep-leads/${plain.id}/win`, { as: USERS.admin, body: { closed_by_rep_id: repRow.id } });
+      const r = await api('POST', `/rep-leads/${plain.id}/build`, { as: USERS.admin, body: {} });
+      eq(r.status, 201, `build: ${JSON.stringify(r.body)}`);
+      const [t] = await sql(
+        `select activation_fee_cents, annual_fee_cents, referral_fee_cents,
+                reward_amount_cents, reward_fulfillment, charge_card_cost
+           from tenants where id = $1`, [r.body.tenant_id]);
+      eq(t.activation_fee_cents, 50000, 'standard onboarding charge');
+      eq(t.annual_fee_cents, 10000, 'standard yearly');
+      eq(t.referral_fee_cents, 3000, 'standard flat fee');
+      eq(t.reward_amount_cents, 5000, 'standard gift card');
+      eq(t.reward_fulfillment, 'dealer', 'dealer sends their own cards by default');
+      eq(t.charge_card_cost, false, 'not charged for cards 50. does not buy');
+      global.__standardTenantId = r.body.tenant_id;
+      return '$500 / $100 / $30, dealer sends their own cards';
+    });
+
+
+    await check('Changing a running dealer\'s prices sticks, and only Joseph can do it', async () => {
+      const id = global.__standardTenantId;
+      const read = await api('GET', `/rep-dealers/${id}/pricing`, { as: USERS.admin });
+      eq(read.status, 200, `read: ${JSON.stringify(read.body)}`);
+      eq(read.body.referral_fee_cents, 3000, 'reads what they currently pay');
+
+      const r = await api('PATCH', `/rep-dealers/${id}/pricing`, {
+        as: USERS.admin,
+        body: { referral_fee_cents: 2500, annual_fee_cents: 0, reward_fulfillment: 'platform', charge_card_cost: true },
+      });
+      eq(r.status, 200, `patch: ${JSON.stringify(r.body)}`);
+      const [t] = await sql(
+        `select activation_fee_cents, annual_fee_cents, referral_fee_cents, reward_fulfillment, charge_card_cost
+           from tenants where id = $1`, [id]);
+      eq(t.referral_fee_cents, 2500, 'fee changed');
+      eq(t.annual_fee_cents, 0, 'a free renewal is allowed, not treated as unset');
+      eq(t.reward_fulfillment, 'platform', 'fulfillment changed');
+      eq(t.charge_card_cost, true, 'card cost changed');
+      // Untouched fields stay put: a partial edit must not reset the rest.
+      eq(t.activation_fee_cents, 50000, 'onboarding charge left alone');
+      return 'renegotiated to $25 a referral with no yearly, 50. sending the cards';
+    });
+
+    await check('The helper cannot read or change what any dealer pays', async () => {
+      // This route reaches another tenant's row with the service role, which
+      // is exactly what RLS exists to stop — so the admin check in front of
+      // it is the only thing standing there, and it has to be tested rather
+      // than inferred from the button being hidden.
+      //
+      // The helper is the case this suite can make: a real signed-in account
+      // on the 50. tenant that is not Joseph. A rep is covered in
+      // rep-page-e2e, which has rep logins; asserting it here against a
+      // USERS.rep this suite does not define would have skipped silently and
+      // passed while testing nothing.
+      const id = global.__standardTenantId;
+      const g = await api('GET', `/rep-dealers/${id}/pricing`, { as: USERS.helper });
+      const pch = await api('PATCH', `/rep-dealers/${id}/pricing`, { as: USERS.helper, body: { referral_fee_cents: 1 } });
+      eq(g.status, 403, `helper GET: ${JSON.stringify(g.body)}`);
+      eq(pch.status, 403, `helper PATCH: ${JSON.stringify(pch.body)}`);
+      const [t] = await sql('select referral_fee_cents from tenants where id = $1', [id]);
+      eq(t.referral_fee_cents, 2500, 'the refused requests changed nothing');
+      return 'helper refused on both, nothing moved';
+    });
+
+    await check('An in-house company has no prices to set, and the route says so', async () => {
+      // GSS, NMS and 50. itself are never charged. Letting a price be set on
+      // one would read as them having started being billed.
+      const [gss] = await sql(`select id from tenants where slug = 'good-steward-structures'`);
+      const r = await api('PATCH', `/rep-dealers/${gss.id}/pricing`, {
+        as: USERS.admin, body: { referral_fee_cents: 5000 },
+      });
+      eq(r.status, 409, `expected a refusal: ${JSON.stringify(r.body)}`);
+      const [t] = await sql('select referral_fee_cents from tenants where id = $1', [gss.id]);
+      assert(t.referral_fee_cents !== 5000, 'an in-house company was priced anyway');
+      return `refused: ${r.body.error || r.body.message}`;
     });
 
     await check('Their wording lands on the dealer, with every other line filled in generically', async () => {
