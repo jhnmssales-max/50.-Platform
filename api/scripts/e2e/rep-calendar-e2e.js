@@ -375,6 +375,32 @@ async function main() {
       assert(got === addDays(-9), `stamped ${addDays(-8)}T02:00:00Z, which is ${addDays(-9)} Eastern, but it shows on ${got}`);
       return `02:00Z on ${addDays(-8)} -> ${got}`;
     });
+    await check('a lead lands on the calendar the day it is added', async () => {
+      // Joseph asked for this: entering a lead should put it on the calendar
+      // by itself, without anyone writing a follow-up for it.
+      await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, status, found_on)
+         values ('Brand New Prospect', $1, 'open', $2)`,
+        [REPS.alice, addDays(-2)]
+      );
+      const hers = await apiAs(USERS.alice, `/rep-calendar?from=${addDays(-30)}&to=${addDays(30)}`);
+      const added = hers.body.items.filter((i) => i.kind === 'lead_added').map((i) => i.title);
+      assert(added.includes('Brand New Prospect'), `her own lead is missing: ${JSON.stringify(added)}`);
+      const it = hers.body.items.find((i) => i.kind === 'lead_added' && i.title === 'Brand New Prospect');
+      eq(String(it.on_date).slice(0, 10), addDays(-2), 'it landed on the wrong day');
+
+      // An open lead, never won — the point is that it does not wait for a win.
+      const [row] = await sql(`select status from rep_leads where company_name = 'Brand New Prospect'`);
+      eq(row.status, 'open', 'the fixture is not an open lead');
+
+      // Bob must not see it; Joseph must.
+      const his = await apiAs(USERS.bob, `/rep-calendar?from=${addDays(-30)}&to=${addDays(30)}`);
+      assert(!his.body.items.some((i) => i.title === 'Brand New Prospect'), 'another rep can see it');
+      const boss = await apiAs(USERS.admin, `/rep-calendar?from=${addDays(-30)}&to=${addDays(30)}`);
+      assert(boss.body.items.some((i) => i.kind === 'lead_added' && i.title === 'Brand New Prospect'), 'the admin cannot see it');
+      return `added ${addDays(-2)}, visible to her and the admin, not to Bob`;
+    });
+
     await check('a lead that said yes is on the calendar', async () => {
       const r = await apiAs(USERS.alice, `/rep-calendar?from=${addDays(-30)}&to=${addDays(30)}`);
       const won = r.body.items.filter((i) => i.kind === 'lead_won').map((i) => i.title);

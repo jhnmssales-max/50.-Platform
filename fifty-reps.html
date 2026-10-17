@@ -505,6 +505,7 @@ function closeDialog(){ const d = $('dlg'); if(d.open) d.close(); }
 // LOCAL date parts, never toISOString(), which is UTC: at 8pm Eastern that
 // would already be tomorrow and every item would land a day late.
 const CAL_KINDS = {
+  lead_added:   { verb: 'Lead added', cls: ''     },
   lead_won:     { verb: 'Signed up',  cls: 'won'  },
   dealer_built: { verb: 'Dashboard built', cls: '' },
   dealer_live:  { verb: 'Went live',  cls: 'won'  },
