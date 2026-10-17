@@ -387,11 +387,11 @@ async function main() {
       const added = hers.body.items.filter((i) => i.kind === 'lead_added').map((i) => i.title);
       assert(added.includes('Brand New Prospect'), `her own lead is missing: ${JSON.stringify(added)}`);
       const it = hers.body.items.find((i) => i.kind === 'lead_added' && i.title === 'Brand New Prospect');
-      eq(String(it.on_date).slice(0, 10), addDays(-2), 'it landed on the wrong day');
+      assert(String(it.on_date).slice(0, 10) === addDays(-2), `it landed on ${it.on_date}, not ${addDays(-2)}`);
 
       // An open lead, never won — the point is that it does not wait for a win.
       const [row] = await sql(`select status from rep_leads where company_name = 'Brand New Prospect'`);
-      eq(row.status, 'open', 'the fixture is not an open lead');
+      assert(row.status === 'open', `the fixture is not an open lead: ${row.status}`);
 
       // Bob must not see it; Joseph must.
       const his = await apiAs(USERS.bob, `/rep-calendar?from=${addDays(-30)}&to=${addDays(30)}`);
