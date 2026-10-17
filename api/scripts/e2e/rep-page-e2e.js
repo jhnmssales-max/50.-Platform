@@ -1274,6 +1274,37 @@ async function main() {
       return `filled with: ${v}`;
     });
 
+    await check('Typing in a box never pulls the controls below it upward', async () => {
+      // The preview under an EMPTY box opens with "If left empty: " in front
+      // of it. Typing removes that prefix and changes the words, so the
+      // sentence can rewrap one line SHORTER and everything below slides up
+      // under the rep's cursor mid-click. Joseph hit this for real.
+      //
+      // The box must start EMPTY. An earlier version of this check used a
+      // fixture with the field pre-filled, so the prefix was never there to
+      // remove, the shrink never happened, and the check passed against
+      // broken code -- which is how the fix got deleted as useless.
+      await openAddLead(repPage);
+      await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
+      await repPage.click('#leadForm [data-wstep="2"]');
+      await repPage.waitForSelector('#leadForm [data-wpane="2"].on');
+      eq(await repPage.inputValue('#leadForm [name=copy_eligibility]'), '', 'the box starts empty, or this check proves nothing');
+      const heightOf = () => repPage.$eval('#leadForm [data-wprev=eligibility]',
+        (el) => Math.round(el.getBoundingClientRect().height));
+      const before = await heightOf();
+      assert(before > 0, 'the preview is not on screen, so nothing is being measured');
+      // Several lengths: whether any one of them rewraps depends on the
+      // company name and column width, so a single string proves little.
+      for (const words of ['bought cabinets', 'had us out', 'had a roof put on by us', 'had any work done by our crew']) {
+        await repPage.fill('#leadForm [name=copy_eligibility]', words);
+        await repPage.waitForTimeout(120);
+        const now = await heightOf();
+        assert(now >= before, `typing "${words}" shrank the preview from ${before}px to ${now}px, pulling the next button up by ${before - now}px`);
+      }
+      await repPage.fill('#leadForm [name=copy_eligibility]', '');
+      return `preview held at ${before}px or taller across four edits`;
+    });
+
     await check('The picture panel holds its space before the picture arrives', async () => {
       // The picture is fetched only once the wizard is on screen, so it lands
       // after the boxes are already drawn -- and on a phone it sits ABOVE
