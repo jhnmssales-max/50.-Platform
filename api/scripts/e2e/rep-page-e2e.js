@@ -386,6 +386,8 @@ async function main() {
       await page.waitForSelector('#tab-dealers tr[data-tenant]');
       const rowB = page.locator(`tr[data-tenant="${tenants['dealer-b'].id}"]`);
       assert(await rowB.locator('[data-field=from]').count() === 1, 'no start date box');
+      eq(await rowB.locator('[data-logins]').count(), 1, 'paying row offers no Logins button');
+      eq(await rowB.locator('[data-price]').count(), 1, 'paying row offers no Pricing button');
       await rowB.locator('[data-field=closer]').selectOption({ label: 'Bob Rep' });
       const saved = page.waitForResponse((r) => r.request().method() === 'PUT' && r.url().includes('/assignment'));
       await rowB.locator('[data-save]').click();
@@ -413,6 +415,14 @@ async function main() {
       eq(await gssRow.locator('[data-save]').count(), 0, 'in-house row offers a Save button');
       // And it never reads as a dealer who owes the $500.
       assert(!(await gssRow.textContent()).includes('not yet'), 'in-house row reads as unpaid');
+      // But Logins IS offered: the dialog is the only place Joseph can see
+      // who gets the gift-card reminders, and an in-house company has real
+      // people on it. The button first shipped inside the editable branch of
+      // the row only, so every in-house row rendered an empty cell -- the
+      // route tests all passed, because the routes themselves were fine.
+      eq(await gssRow.locator('[data-logins]').count(), 1, 'in-house row offers no Logins button');
+      // Nothing to price, though: an in-house company is never charged.
+      eq(await gssRow.locator('[data-price]').count(), 0, 'in-house row offers a Pricing dialog');
 
       const header = await page.textContent('#tab-dealers .head');
       assert(/3 in-house/.test(header), `header: ${header}`);
