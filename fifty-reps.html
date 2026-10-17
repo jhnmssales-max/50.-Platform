@@ -113,10 +113,75 @@
   .due .what b{font-weight:600;}
   .due .what p{margin:2px 0 0;font-size:13px;color:var(--muted);overflow-wrap:anywhere;}
   .due .btn{flex:0 0 auto;}
+  /* ---- phone ----
+     Two things have to change below ~560px.
+
+     A table wide enough for six columns can only scroll sideways here, and
+     because the actions column is sticky it parks the buttons on top of the
+     content: you end up looking at a column of Wording / Files / Mark won with
+     no idea which company any of them belongs to. So each row becomes its own
+     card instead, read top to bottom, with its buttons underneath.
+
+     And the month grid was simply hidden, which left the tab showing arrows
+     that changed a heading above nothing at all. A 7-column grid does fit —
+     what does not fit is a chip with words in it, so each item becomes a dot
+     and the list underneath stays the part you act on. */
   @media (max-width:560px){
-    .calgrid{display:none;}
+    .tablewrap{overflow-x:visible;background:transparent;border:0;border-radius:0;}
+    table{min-width:0;display:block;}
+    thead{display:none;}
+    tbody{display:block;}
+    tbody tr{display:block;background:var(--card);border:1px solid var(--line);
+      border-radius:12px;padding:12px 14px;margin:0 0 10px;}
+    tbody tr > td{display:block;border:0;padding:2px 0;}
+    tbody tr > td:empty{display:none;}
+    td.num{text-align:left;}
+    /* The actions cell: a wrapped row of buttons under a hairline, and never
+       sticky — there is nothing to stick to once the row is a card. */
+    .tablewrap tbody tr > td:last-child{position:static;background:transparent;
+      display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+      margin-top:8px;padding-top:10px;border-top:1px solid var(--line);}
+    .tablewrap tbody tr > td:last-child:empty{display:none;}
+    .tablewrap tr > *:last-child::after{display:none;}
+    .tablewrap tbody tr > td:last-child select,
+    .tablewrap tbody tr > td:last-child input{flex:1 1 140px;min-width:0;}
+    /* The first cell carries the name, so give it the weight a heading has. */
+    tbody tr > td:first-child{font-size:16px;font-weight:600;padding-bottom:4px;}
+    /* ...but whatever sits under the name in that cell is a note, not part of
+       the heading, so it does not inherit the weight. */
+    tbody tr > td:first-child .muted{font-weight:400;font-size:13px;}
+    tbody tr[data-empty-row] > td{font-size:15px;font-weight:400;text-align:left;}
+
+    /* The month, at a size that fits a phone. */
+    .calgrid .dow{padding:5px 2px;font-size:10px;}
+    .calgrid .day{min-height:50px;padding:4px 3px;gap:2px;}
+    .calgrid .day .dnum{font-size:11px;}
+    /* A 7px dot has no room for a tint, so each one takes the solid version of
+       the colour its chip carries on a wide screen. */
+    .chip{font-size:0;line-height:0;width:8px;height:8px;min-height:8px;padding:0;
+      border-radius:50%;display:inline-block;flex:0 0 auto;background:#1F4E7A;}
+    .chip.late{background:#B4702E;}
+    .chip.done{background:#B8B2A4;text-decoration:none;}
+    .chip.mile{background:#8E887B;}
+    .chip.mile.won{background:var(--ok);}
+    .daydots{display:flex;flex-wrap:wrap;gap:3px;align-content:flex-start;}
+    /* A column of em-dashes standing in for columns that are not there. */
+    .nomob{display:none!important;}
+    /* Where a cell only makes sense under its column heading, carry the
+       heading with it: the label on the left, the figure on the right. */
+    tbody tr > td[data-label]{display:flex;justify-content:space-between;
+      align-items:baseline;gap:12px;}
+    tbody tr > td[data-label]::before{content:attr(data-label);
+      color:var(--muted);font-size:13px;font-weight:400;}
+    /* Buttons on their own line, so one row never reads as two. */
     .due{flex-wrap:wrap;}
     .due .when{flex:1 1 100%;}
+    .due .what{flex:1 1 100%;}
+    .due .btn{flex:0 0 auto;}
+    .calhead h3{flex:1 1 100%;}
+    /* Tighter tabs: "Companies" was being cut mid-word at the edge. */
+    nav.tabs{padding:8px 12px 0;gap:0;}
+    nav.tabs button{padding:9px 11px;font-size:14px;}
   }
   .notice{background:var(--warn-bg);border:1px solid #E8D79C;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:14px;}
   .neg{color:var(--danger);}
@@ -520,9 +585,11 @@ function calGrid(gridFrom){
     // Six rows always fit a month, but the last row is often entirely next
     // month — drop it rather than show a blank stripe.
     if(i >= 35 && !inMonth && !(byDay[iso] || []).length) continue;
+    // The chips live in their own box so that at phone width, where each one
+    // is a dot, they flow as a row under the date rather than a column.
     cells += '<div class="day' + (inMonth ? '' : ' out') + (iso === today ? ' today' : '') + '">'
       + '<span class="dnum">' + Number(iso.split('-')[2]) + '</span>'
-      + (byDay[iso] || []).map(calChip).join('')
+      + '<div class="daydots">' + (byDay[iso] || []).map(calChip).join('') + '</div>'
       + '</div>';
   }
   return '<div class="calgrid">' + cells + '</div>';
@@ -573,8 +640,8 @@ async function renderCalendar(){
     + '<p class="muted">Your own follow-ups. A digest of whatever is due goes to '
     + esc(state.me && state.me.email ? state.me.email : 'your email') + ' at 7am on the day.</p>'
     + dueList()
-    + '<p class="muted" style="margin-top:18px;">The grey and green marks on the month are things that already happened — a lead signing up, a dashboard being built, a dealer going live. '
-    + (state.isRep ? 'Yours only.' : 'Every company’s.') + ' Follow-ups are only ever your own.</p>';
+    + '<p class="muted" style="margin-top:18px;">The marks on the month are things that already happened — a lead signing up, a dashboard being built, a dealer going live. '
+    + (state.isRep ? 'Yours only.' : 'Every company’s.') + ' Follow-ups are only ever your own. On a phone each one is a dot.</p>';
 
   $('calPrev').addEventListener('click', () => { shiftMonth(-1); renderCalendar().catch((e) => flash(e.message)); });
   $('calNext').addEventListener('click', () => { shiftMonth(1); renderCalendar().catch((e) => flash(e.message)); });
@@ -842,10 +909,10 @@ async function renderLeads(){
         (x.notes ? '<div class="muted">' + esc(x.notes) + '</div>' : '') +
         '<div class="muted">Wording: ' + esc(wordingSummary(x.copy)) + '</div></td>' +
       '<td>' + esc(x.contact_name || '') + '<div class="muted">' + esc([x.phone, x.email].filter(Boolean).join(' · ')) + '</div></td>' +
-      (state.isRep ? '' : '<td>' + esc(repName(x.brought_in_by_rep_id) || '—') + '</td>') +
+      (state.isRep ? '' : '<td' + (repName(x.brought_in_by_rep_id) ? '' : ' class="nomob"') + '>' + esc(repName(x.brought_in_by_rep_id) || '—') + '</td>') +
       '<td>' + esc(plainDate(x.found_on)) + '</td>' +
       '<td><span class="pill ' + x.status + '">' + x.status + '</span></td>' +
-      (state.isRep ? '' : '<td>' + (x.status === 'won' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>') +
+      (state.isRep ? '' : '<td' + (x.status === 'won' ? '' : ' class="nomob"') + '>' + (x.status === 'won' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>') +
       '<td class="num"><button class="btn small secondary" data-wording="' + x.id + '">Wording</button> ' +
         '<button class="btn small secondary" data-files="' + x.id + '">Files</button> ' +
         '<button class="btn small secondary" data-leadfu="' + x.id + '">Follow up</button> ' +
@@ -1179,8 +1246,11 @@ async function renderReps(){
         (r.active ? '' : '<span class="pill off">inactive</span>') + '</td>' +
       '<td>' + esc(r.phone || '') + '<div class="muted">' + esc(r.email || '') + '</div></td>' +
       '<td>' + (r.has_login ? '<span class="pill closed">can sign in</span>' : '<span class="pill off">no login</span>') + '</td>' +
-      '<td class="num">' + r.companies_closed + '</td><td class="num">' + r.companies_onboarded + '</td><td class="num">' + r.leads_brought_in + '</td>' +
-      (adminCols ? '<td class="num">' + dollarCell(r.earned_this_month_cents) + '</td><td class="num"><b>' + dollarCell(r.owed_cents) + '</b></td>' : '') +
+      '<td class="num" data-label="Companies closed">' + r.companies_closed + '</td>' +
+      '<td class="num" data-label="Onboarded">' + r.companies_onboarded + '</td>' +
+      '<td class="num" data-label="Leads found">' + r.leads_brought_in + '</td>' +
+      (adminCols ? '<td class="num" data-label="Earned this month">' + dollarCell(r.earned_this_month_cents) + '</td>' +
+                   '<td class="num" data-label="You owe"><b>' + dollarCell(r.owed_cents) + '</b></td>' : '') +
       '<td class="num">' +
         (state.isAdmin && r.active && r.email ? '<button class="btn small" data-invite="' + r.id + '">' + (r.has_login ? 'Resend login' : 'Send login') + '</button> ' : '') +
         '<button class="btn small secondary" data-edit="' + r.id + '">Edit</button>' +
@@ -1296,8 +1366,8 @@ async function renderDealers(){
         // to be credited with and nothing to assign. Showing the dropdowns
         // would invite a change that could never pay anyone.
         : ((x.billing_exempt || x.closed_at)
-          ? '<td class="muted">—</td><td class="muted">—</td>' +
-            (state.isAdmin ? '<td class="muted">—</td>' : '') + '<td></td>'
+          ? '<td class="muted nomob">—</td><td class="muted nomob">—</td>' +
+            (state.isAdmin ? '<td class="muted nomob">—</td>' : '') + '<td></td>'
           : '<td><select data-field="closer">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
             '<td><select data-field="onboarder">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
             (state.isAdmin ? '<td><input type="date" data-field="from" style="min-width:140px" title="Leave blank to start now"></td>' : '') +
@@ -2028,8 +2098,15 @@ async function renderMoney(){
     '<div class="tablewrap"><table><thead><tr><th>Rep</th><th class="num">Sign-up bonuses</th><th class="num">Referral royalties</th><th class="num">Reversals</th><th class="num">Earned</th><th class="num">Paid</th><th class="num">You owe</th><th></th></tr></thead><tbody>' +
     (ov.reps.map((r) =>
       '<tr><td><b>' + esc(r.name) + '</b> ' + (r.active ? '' : '<span class="pill off">inactive</span>') + '</td>' +
-      '<td class="num">' + dollarCell(r.activation_cents) + '</td><td class="num">' + dollarCell(r.royalty_cents) + '</td><td class="num">' + dollarCell(r.reversal_cents) + '</td>' +
-      '<td class="num"><b>' + dollarCell(r.earned_cents) + '</b></td><td class="num">' + dollarCell(r.paid_cents) + '</td><td class="num"><b>' + dollarCell(r.owed_cents) + '</b></td>' +
+      // data-label is what the column heading says. On a wide screen the heading
+      // is above the number; once the row is a card on a phone there is no
+      // heading, and six unlabelled dollar figures in a column say nothing.
+      '<td class="num" data-label="Sign-up bonuses">' + dollarCell(r.activation_cents) + '</td>' +
+      '<td class="num" data-label="Referral royalties">' + dollarCell(r.royalty_cents) + '</td>' +
+      '<td class="num" data-label="Reversals">' + dollarCell(r.reversal_cents) + '</td>' +
+      '<td class="num" data-label="Earned"><b>' + dollarCell(r.earned_cents) + '</b></td>' +
+      '<td class="num" data-label="Paid">' + dollarCell(r.paid_cents) + '</td>' +
+      '<td class="num" data-label="You owe"><b>' + dollarCell(r.owed_cents) + '</b></td>' +
       '<td class="num"><button class="btn small secondary" data-stmt="' + r.id + '">Statement</button> <button class="btn small" data-pay="' + r.id + '">Record payment</button></td></tr>'
     ).join('') || '<tr><td colspan="8" class="muted" style="padding:18px">No reps yet.</td></tr>') + '</tbody></table></div>' +
     '<details class="card" style="margin-top:18px"><summary>Pay rates</summary><form id="rateForm">' +
