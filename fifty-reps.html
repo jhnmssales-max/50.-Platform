@@ -894,7 +894,15 @@ let wshotsPromise = null;
 function loadWordingShots(){
   if(WSHOTS) return Promise.resolve(WSHOTS);
   if(!wshotsPromise){
-    wshotsPromise = fetch('assets/wording/manifest.json', { cache:'force-cache' })
+    // no-cache, NOT force-cache. force-cache serves whatever the browser
+    // already has without ever asking whether it changed, so adding a tenth
+    // field shipped a manifest nobody received: the page kept the nine-field
+    // copy, found no entry for the new box, and showed "No picture for this
+    // one yet" with no sentence under it. Every future change to the
+    // pictures would have been invisible the same way.
+    // no-cache still sends the ETag and still gets a 304 when nothing has
+    // changed, so this costs a round trip, not a download.
+    wshotsPromise = fetch('assets/wording/manifest.json', { cache:'no-cache' })
       .then((r) => r.ok ? r.json() : Promise.reject(new Error('no manifest')))
       .then((m) => { WSHOTS = m; return m; })
       .catch(() => null);
