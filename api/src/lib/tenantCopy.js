@@ -31,6 +31,13 @@ const COPY_FIELDS = [
     multiline: true,
   },
   {
+    key: 'cardNoun',
+    stage: 'The invite email, and their share page',
+    label: 'What the gift card is called',
+    where: 'Used wherever the reward is named, right after the amount. Change it for a business that mails real cards rather than emailing them.',
+    max: 60,
+  },
+  {
     key: 'shareTitle',
     stage: 'The invite email, and their share page',
     label: 'Title when a customer shares their link',
@@ -98,6 +105,7 @@ const COPY_KEYS = COPY_FIELDS.map((f) => f.key);
 const GENERIC_COPY = {
   offerHow:
     "Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} Amazon E-Gift Card**.",
+  cardNoun: 'electronic gift card',
   shareTitle: 'Get {reward} when you make a purchase from {name}',
   shareText: 'I referred you — make your purchase through my link and we both get {reward}.',
   friendAction: 'make your purchase',

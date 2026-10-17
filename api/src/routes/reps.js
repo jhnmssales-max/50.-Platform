@@ -1446,6 +1446,20 @@ router.post('/rep-leads/:id/build', requireAuth, wrap(async (req, res) => {
     }
   });
 
+  // 4b. What this dealer was actually created with. Read back rather than
+  //     restated from the request body: approve_lead_build applies its own
+  //     fallbacks for anything Joseph left alone, and a second copy of those
+  //     defaults here is exactly how the welcome email ends up quoting a
+  //     price the dealer is not charged. It hardcoded $500 before this.
+  const terms = await withServiceRole(async (client) => {
+    const { rows: [row] } = await client.query(
+      `select activation_fee_cents, annual_fee_cents, referral_fee_cents,
+              reward_amount_cents, reward_fulfillment, charge_card_cost,
+              branding->'copy'->>'cardNoun' as card_noun
+         from tenants where id = $1`, [tenantId]);
+    return row;
+  });
+
   // 5. Tell them. Best effort, and honest about which part failed.
   const frontend = String(process.env.FRONTEND_BASE_URL || '').replace(/\/+$/, '');
   const from = process.env.EMAIL_FROM_ADDRESS;
@@ -1463,8 +1477,13 @@ router.post('/rep-leads/:id/build', requireAuth, wrap(async (req, res) => {
         companyName: plan.name,
         link,
         signInUrl: `${frontend}/login`,
-        activationFeeCents: 50000,
-        rewardAmountCents: plan.rewardCents || 5000,
+        activationFeeCents: terms.activation_fee_cents,
+        annualFeeCents: terms.annual_fee_cents,
+        referralFeeCents: terms.referral_fee_cents,
+        chargeCardCost: terms.charge_card_cost,
+        rewardFulfillment: terms.reward_fulfillment,
+        cardNoun: terms.card_noun,
+        rewardAmountCents: terms.reward_amount_cents,
         repName: plan.lead.closed_by_name,
         logoUrl,
       });

@@ -42,10 +42,26 @@ function logoBlock(logoUrl) {
 // ---------------------------------------------------------------------------
 // To the dealer's own admin
 // ---------------------------------------------------------------------------
-function forDealer({ contactName, companyName, link, signInUrl, activationFeeCents, rewardAmountCents, repName, logoUrl }) {
+function forDealer({ contactName, companyName, link, signInUrl, activationFeeCents, annualFeeCents,
+                     referralFeeCents, chargeCardCost, rewardFulfillment, cardNoun,
+                     rewardAmountCents, repName, logoUrl }) {
   const hi = firstName(contactName);
   const fee = money(activationFeeCents);
   const card = money(rewardAmountCents);
+  // Every figure here comes from this dealer's own terms. These lines used to
+  // be hardcoded -- "$100 a year", "30% of that payout" -- which stopped
+  // being true the moment prices became per-dealer, and the 30% stopped
+  // being true at all when the fee became a flat amount.
+  const yearly = money(annualFeeCents);
+  const perReferral = money(referralFeeCents);
+  const noun = (cardNoun && String(cardNoun).trim()) || 'gift card';
+  const weSend = rewardFulfillment === 'platform';
+  const rewardSentence = weSend
+    ? `When one of your customers refers a friend and that job closes, we email both of them a ${card} ${noun}.`
+    : `When one of your customers refers a friend and that job closes, you send both of them a ${card} ${noun}.`;
+  const costSentence = chargeCardCost
+    ? `Your card on file is charged for the two cards plus a ${perReferral} fee.`
+    : `Your card on file is charged ${perReferral}.`;
 
   const text = [
     `Hi ${hi},`,
@@ -59,8 +75,8 @@ function forDealer({ contactName, companyName, link, signInUrl, activationFeeCen
     '',
     'What happens when you sign in:',
     `- There is a one-time ${fee} setup payment to switch the program on. That covers your first 12 months.`,
-    `- After that it is $100 a year.`,
-    `- When one of your customers refers a friend and that job closes, you send both of them a ${card} gift card. 50. charges 30% of that payout as its fee.`,
+    `- After that it is ${yearly} a year.`,
+    `- ${rewardSentence} ${costSentence}`,
     '',
     'Your colours and logo are already on your pages. If anything looks off, reply to this email and we will fix it.',
     '',
@@ -80,8 +96,8 @@ function forDealer({ contactName, companyName, link, signInUrl, activationFeeCen
   <p style="${PARA}">Then sign in any time at <a href="${escapeHtml(signInUrl)}" style="color:#33475A;font-weight:bold;">${escapeHtml(signInUrl)}</a>.</p>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F4EE;border-radius:8px;margin:4px 0 16px;"><tr><td style="padding:12px 16px;">
     <p style="${FONT}font-size:14px;line-height:1.6;margin:0 0 8px;"><b>When you sign in</b> there is a one-time ${escapeHtml(fee)} setup payment to switch the program on. That covers your first 12 months.</p>
-    <p style="${FONT}font-size:14px;line-height:1.6;margin:0 0 8px;">After that it is $100 a year.</p>
-    <p style="${FONT}font-size:14px;line-height:1.6;margin:0;">When one of your customers refers a friend and that job closes, you send both of them a ${escapeHtml(card)} gift card. 50. charges 30% of that payout as its fee.</p>
+    <p style="${FONT}font-size:14px;line-height:1.6;margin:0 0 8px;">After that it is ${escapeHtml(yearly)} a year.</p>
+    <p style="${FONT}font-size:14px;line-height:1.6;margin:0;">${escapeHtml(rewardSentence)} ${escapeHtml(costSentence)}</p>
   </td></tr></table>
   <p style="${PARA}">Your colours and logo are already on your pages. If anything looks off, reply to this email and we will fix it.</p>
   ${repName ? `<p style="${PARA}">${escapeHtml(repName)} set this up with you — they are still your contact.</p>` : ''}

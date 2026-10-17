@@ -1212,7 +1212,7 @@ async function main() {
       eq(row.copy.friendAction, 'book your gutter job', 'what she typed');
       eq(row.copy.inquiryNoun, 'gutter inquiry', 'and the second line');
       eq(Object.keys(row.copy).length, 2, 'only the boxes she filled');
-      return '2 of 9 lines stored, the rest left to the generic wording';
+      return '2 lines stored, the rest left to the generic wording';
     });
 
     await check('Every empty box shows the wording that runs instead, so nothing looks missing', async () => {
@@ -1220,28 +1220,46 @@ async function main() {
       await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
       const holders = await repPage.$$eval('#leadForm details.wording [name^=copy_]', (els) =>
         els.map((e) => ({ name: e.name, placeholder: e.placeholder })));
-      eq(holders.length, 9, 'nine lines');
+      // From the field list rather than a literal, so a new field does not
+      // silently narrow what this check covers.
+      const { COPY_KEYS } = require('../../src/lib/tenantCopy');
+      eq(holders.length, COPY_KEYS.length, 'every line has a fallback shown');
       assert(holders.every((h) => h.placeholder && h.placeholder.length > 2), `a box with no fallback shown: ${JSON.stringify(holders)}`);
       const all = holders.map((h) => h.placeholder).join(' ').toLowerCase();
       assert(!all.includes('shed'), `shed wording offered to a non-shed business: ${all}`);
-      return 'nine boxes, each showing its trade-neutral fallback';
+      return 'every box shows its trade-neutral fallback';
     });
 
-    await check('The nine boxes come three at a time, not all at once', async () => {
+    await check('The boxes come a few at a time, not all at once', async () => {
+      // Asserted as a property, not as "three": steps hold different numbers
+      // of fields and a tenth was added for what the gift card is called. The
+      // thing that must stay true is that every box is in the form so saving
+      // sends them all, while only one step's worth is ever on screen.
+      const { COPY_KEYS } = require('../../src/lib/tenantCopy');
       await openAddLead(repPage);
       await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
       const all = await repPage.$$eval('#leadForm [name^=copy_]', (els) => els.length);
-      eq(all, 9, 'all nine still in the form, so saving sends every box');
+      eq(all, COPY_KEYS.length, 'every box is in the form, so saving sends them all');
       const shown = await repPage.$$eval('#leadForm .wpane.on [name^=copy_]', (els) => els.map((e) => e.name));
-      eq(shown.length, 3, 'but only one step is on screen');
-      // The wall of nine boxes is the thing reps found overwhelming; if a
-      // change ever flattens the wizard back out, this is what catches it.
+      assert(shown.length > 0 && shown.length < all,
+        `one step shows ${shown.length} of ${all} boxes — the wizard has flattened back out`);
       await repPage.click('#leadForm [data-wstep="2"]');
       await repPage.waitForSelector('#leadForm [data-wpane="2"].on');
       const later = await repPage.$$eval('#leadForm .wpane.on [name^=copy_]', (els) => els.map((e) => e.name));
-      eq(later.length, 3, 'still three after stepping');
+      assert(later.length > 0 && later.length < all, `step 3 shows ${later.length} of ${all}`);
       assert(later.join() !== shown.join(), `step 3 shows the same boxes as step 1: ${later.join()}`);
-      return 'nine in the form, three on screen, different boxes per step';
+      // No box may be stranded: every field has to live on some step, or a
+      // rep can never reach it.
+      const reachable = new Set();
+      for (const i of [0, 1, 2]) {
+        await repPage.click(`#leadForm [data-wstep="${i}"]`);
+        await repPage.waitForSelector(`#leadForm [data-wpane="${i}"].on`);
+        (await repPage.$$eval('#leadForm .wpane.on [name^=copy_]', (els) => els.map((e) => e.name)))
+          .forEach((n) => reachable.add(n.replace(/^copy_/, '')));
+      }
+      const stranded = COPY_KEYS.filter((k) => !reachable.has(k));
+      eq(stranded.length, 0, `fields on no step, so a rep cannot reach them: ${stranded.join(', ')}`);
+      return `${all} in the form, ${shown.length} on screen, every one reachable`;
     });
 
     await check('A fragment box shows the finished sentence it lands inside', async () => {
@@ -1350,7 +1368,7 @@ async function main() {
 
     await check('The lead row says how much is in their own words, and reopens for editing', async () => {
       const rowText = await repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }).textContent();
-      assert(/2 of 9 in their own words/.test(rowText), `row: ${rowText}`);
+      assert(/2 of \d+ in their own words/.test(rowText), `row: ${rowText}`);
       await repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }).locator('[data-wording]').click();
       await repPage.waitForSelector('#wordingForm');
       await repPage.click('#wordingForm [data-wstep="1"]');
@@ -1365,7 +1383,7 @@ async function main() {
       const [row] = await sql(`select copy from rep_leads where company_name = 'Gutters By Dale'`);
       eq(Object.keys(row.copy).length, 3, 'now three lines');
       eq(row.copy.offerHow, 'Have us do your gutters and you both get {reward}.', 'the line added later');
-      return 'row shows 2 of 9, dialog reopens, a third line added later';
+      return 'row shows 2 of N, dialog reopens, a third line added later';
     });
 
     await check('Clearing every box drops the lead back to the generic wording', async () => {
@@ -1572,7 +1590,11 @@ async function main() {
       assert(fresh.some((m) => m.To === 'owner@hillcountry.test'), 'the dealer was emailed');
       assert(fresh.some((m) => m.To === 'alice@x.test' && /is live/.test(m.Subject)), 'the rep was told');
       const dealerMail = fresh.find((m) => m.To === 'owner@hillcountry.test');
-      assert(dealerMail.TextBody.includes('$25 gift card'), 'their own card amount is in the email');
+      // The email names the card as well as the amount now, so this is
+      // "$25 electronic gift card" by default and whatever the dealer calls
+      // it otherwise. Both halves asserted, loosely joined.
+      assert(/\$25 [a-z ]*gift card/.test(dealerMail.TextBody),
+        `their own card amount and its name are in the email: ${dealerMail.TextBody}`);
       assert(!/password is|temporary password/i.test(dealerMail.TextBody), 'no password was emailed');
       return `${t.name} (${t.slug}) built, $25 card, both emailed`;
     });

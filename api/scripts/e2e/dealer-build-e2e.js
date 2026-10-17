@@ -557,7 +557,10 @@ async function main() {
       eq(c.friendAction, 'hire us for your roof', 'the rep\'s words, intact');
       eq(c.inquiryNoun, 'roofing inquiry', 'and the second one');
       eq(c.offerHow.includes('make a purchase with us'), true, 'a blank line got the generic wording');
-      eq(Object.keys(c).length, 9, 'every line is set, so nothing can fall through to a default');
+      // Counted from the field list, not a literal: adding a tenth field
+      // should not make this check quietly wrong.
+      const { COPY_KEYS } = require('../../src/lib/tenantCopy');
+      eq(Object.keys(c).length, COPY_KEYS.length, 'every line is set, so nothing can fall through to a default');
       return `${Object.keys(c).length} lines: 2 Christian's, 7 generic`;
     });
 
@@ -596,8 +599,18 @@ async function main() {
       assert(dealerMail.From.startsWith('Joseph at 50.'), `from: ${dealerMail.From}`);
       assert(/verify\?token=/.test(dealerMail.TextBody), 'a set-password link');
       assert(!/your password is|temporary password/i.test(dealerMail.TextBody), 'no password was emailed');
-      assert(dealerMail.TextBody.includes('$500'), 'it says what the first sign-in costs');
-      assert(dealerMail.TextBody.includes('$25 gift card'), 'and names their own card amount');
+      // THIS DEALER was built at a $750 onboarding charge, a few checks up.
+      // The email used to say $500 regardless, because the route passed
+      // activationFeeCents: 50000 hardcoded — so the old assertion passed
+      // while the email told every dealer the wrong price. It reads the
+      // tenant's real terms now.
+      assert(dealerMail.TextBody.includes('$750'),
+        `the email must quote THIS dealer's onboarding charge, not a default: ${dealerMail.TextBody}`);
+      assert(!dealerMail.TextBody.includes('$500'), 'the hardcoded $500 is back');
+      // Same wording change as in rep-page: the email names the card as well
+      // as the amount, so this reads "$25 electronic gift card" by default.
+      assert(/\$25 [a-z ]*gift card/.test(dealerMail.TextBody),
+        `and names their own card amount: ${dealerMail.TextBody}`);
       assert(/Your \$50 lands/.test(repMail.TextBody), 'the rep is told when they get paid');
 
       // The account exists but cannot be used until a password is chosen.
