@@ -94,7 +94,11 @@ const SHOTS = [
     title: 'The page their friend lands on',
     file: 'fifty-template-lead.html',
     width: 900,
-    keys: ['friendAction'],
+    // cardNoun is pinned here rather than on the terms page because this is
+    // where a rep meets it: the main offer line, in the sentence a customer
+    // actually reads. It appears on the terms page too, and querySelector
+    // takes the first match, which is this one.
+    keys: ['friendAction', 'cardNoun'],
     // Without a link code the page falls back to "A friend", which reads
     // oddly mid-sentence ("you and A friend will each get"). A real name
     // makes the captured sentence read the way a customer will see it.

@@ -557,7 +557,10 @@ async function main() {
       eq(c.friendAction, 'hire us for your roof', 'the rep\'s words, intact');
       eq(c.inquiryNoun, 'roofing inquiry', 'and the second one');
       eq(c.offerHow.includes('make a purchase with us'), true, 'a blank line got the generic wording');
-      eq(Object.keys(c).length, 9, 'every line is set, so nothing can fall through to a default');
+      // Counted from the field list, not a literal: adding a tenth field
+      // should not make this check quietly wrong.
+      const { COPY_KEYS } = require('../../src/lib/tenantCopy');
+      eq(Object.keys(c).length, COPY_KEYS.length, 'every line is set, so nothing can fall through to a default');
       return `${Object.keys(c).length} lines: 2 Christian's, 7 generic`;
     });
 

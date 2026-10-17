@@ -96,6 +96,17 @@
           },
           "before": "Sarah thought you might need {name}'s services and wanted to pass along a personal recommendation. When you ",
           "after": ", you and Sarah will each get a {reward} electronic gift card — no strings attached."
+        },
+        {
+          "key": "cardNoun",
+          "box": {
+            "x": 520,
+            "y": 331,
+            "w": 106,
+            "h": 15
+          },
+          "before": "Sarah thought you might need {name}'s services and wanted to pass along a personal recommendation. When you make your purchase, you and Sarah will each get a {reward} ",
+          "after": " — no strings attached."
         }
       ]
     },
@@ -117,7 +128,7 @@
             "h": 15
           },
           "before": "Thanks, Sarah — we've got your info and someone will reach out soon. Once you've ",
-          "after": ", you and Sarah will each get a {reward} eGift card."
+          "after": ", you and Sarah will each get a {reward} electronic gift card."
         }
       ]
     },
@@ -127,7 +138,7 @@
       "img": "assets/wording/terms.webp",
       "page": {
         "w": 900,
-        "h": 1512
+        "h": 1489
       },
       "marks": [
         {
@@ -150,7 +161,7 @@
             "h": 15
           },
           "before": "A participant (“Referrer”) shares a unique referral link with another individual (“Referred Customer”). If the Referred Customer submits their contact information through that link and subsequently ",
-          "after": ", both the Referrer and the Referred Customer will each receive a {reward} digital gift card."
+          "after": ", both the Referrer and the Referred Customer will each receive a {reward} electronic gift card."
         },
         {
           "key": "rewardCondition",
