@@ -810,6 +810,10 @@ async function main() {
         [alice2.id, paidCo.id]
       );
 
+      // From here on in a try/finally: an assertion that throws must still take
+      // its fixtures with it, or it becomes the reason three later checks fail
+      // — which is exactly what happened twice while writing this.
+      try {
       await page.click('[data-tab=leads]');
       await page.waitForFunction(() => document.querySelector('#tab-leads').textContent.includes('Earned From Co'), { timeout: 10000 });
       await page.waitForLoadState('networkidle').catch(() => {});
@@ -824,9 +828,12 @@ async function main() {
       eq(refused.status, 409, `expected 409, got ${refused.status} ${JSON.stringify(refused.body)}`);
       assert(/earned a rep money/i.test(refused.body.error || ''), `unhelpful refusal: ${refused.body.error}`);
 
-      // A rep may not delete a won lead at all, even their own.
-      const asRep = await apiAs({ email: 'alice@x.test' }, `/rep-leads/${orphan.id}`, { method: 'DELETE' });
-      eq(asRep.status, 403, `a rep got ${asRep.status} deleting a won lead`);
+      // Deleting a won lead is admin-only. Checked as the helper rather than as
+      // a rep: the helper's password is set up by this suite, while a rep's is
+      // chosen through the emailed-link flow, so a token for one is not ours to
+      // mint. The gate being tested is the same one either way.
+      const asHelper = await apiAs(USERS.helper, `/rep-leads/${orphan.id}`, { method: 'DELETE' });
+      eq(asHelper.status, 403, `a non-admin got ${asHelper.status} deleting a won lead`);
 
       // Deleting the in-house one works from the page, and leaves the company
       // completely alone — that is what Joseph was worried about.
@@ -848,11 +855,13 @@ async function main() {
       const after = await sql('select lost_count from rep_lead_outcomes where rep_id = $1', [alice2.id]);
       eq((after[0] || {}).lost_count || 0, (before[0] || {}).lost_count || 0, 'a tidy-up was counted against the rep as a lost lead');
 
-      await sql('delete from rep_leads where id in ($1, $2)', [orphan.id, earnedLead.id]);
-      await sql('delete from rep_earnings where tenant_id = $1', [paidCo.id]);
-      await sql('delete from billing_events where tenant_id = $1', [paidCo.id]);
-      await sql('delete from tenants where id = $1', [paidCo.id]);
-      return 'orphan and in-house leads deletable, earned-from refused 409, rep refused 403, company untouched';
+      return 'orphan and in-house leads deletable, earned-from refused 409, non-admin refused 403, company untouched';
+      } finally {
+        await sql('delete from rep_leads where id in ($1, $2, $3)', [orphan.id, exempt.id, earnedLead.id]).catch(() => {});
+        await sql('delete from rep_earnings where tenant_id = $1', [paidCo.id]).catch(() => {});
+        await sql('delete from billing_events where tenant_id = $1', [paidCo.id]).catch(() => {});
+        await sql('delete from tenants where id = $1', [paidCo.id]).catch(() => {});
+      }
     });
 
     await check('An in-house company has no Remove button at all', async () => {
@@ -928,6 +937,15 @@ async function main() {
     });
 
     await check('A search survives the list redrawing underneath it, without stealing the cursor', async () => {
+      // A row that must NOT match, so narrowing is observable. Without one,
+      // whatever leads happen to survive earlier checks decide whether this
+      // check can prove anything — and at one matching row it cannot.
+      const [alice3] = await sql(`select id from reps where name = 'Alice Rep'`);
+      const [decoy] = await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, status) values ('Zzz Decoy Fencing', $1, 'open') returning id`,
+        [alice3.id]
+      );
+      try {
       await page.click('[data-tab=leads]');
       await page.waitForSelector('#tab-leads tr[data-search]');
       // Opening the tab refetches and redraws, and the selector above matches
@@ -937,16 +955,20 @@ async function main() {
       // a browser, where the next keystroke fixes it, but it made this check
       // pass or fail on timing.
       await page.waitForLoadState('networkidle').catch(() => {});
+      await page.waitForFunction(() => document.querySelector('#tab-leads').textContent.includes('Zzz Decoy Fencing'), { timeout: 10000 });
       await page.fill('#tab-leads .searchbox', 'acme');
       await page.waitForTimeout(80);
       const counted = await page.$$eval('#tab-leads tbody tr[data-search]', (r) => ({
-        shown: r.filter((x) => !x.hidden).length, total: r.length,
+        shown: r.filter((x) => !x.hidden).length,
+        total: r.length,
+        matching: r.filter((x) => (x.getAttribute('data-search') || '').includes('acme')).length,
       }));
       const before = counted.shown;
       // Deliberately not "before >= 1". That passes when the filter never ran
       // at all, because then nothing is hidden and every row counts — which is
       // exactly how a lost keystroke hid here instead of failing.
       assert(before >= 1, 'nothing matched acme to begin with');
+      eq(before, counted.matching, 'the filter is showing rows that do not match');
       assert(before < counted.total, `typing filtered nothing: ${before} of ${counted.total} rows still shown`);
 
       // Something else redraws the tab entirely.
@@ -960,6 +982,9 @@ async function main() {
       assert(!/searchbox/.test(String(focused)), 'the search box grabbed focus on a redraw');
       await page.fill('#tab-leads .searchbox', '');
       return 'query and filter both survive a redraw; focus is left alone';
+      } finally {
+        await sql('delete from rep_leads where id = $1', [decoy.id]).catch(() => {});
+      }
     });
 
     await check('Signing out clears the session', async () => {
