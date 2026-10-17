@@ -1259,8 +1259,13 @@ async function main() {
       const ph = await repPage.getAttribute('#tab-leads .searchbox', 'placeholder');
       assert(/your leads/i.test(ph), `a rep is offered: ${ph}`);
 
+      // Opening the tab refetches and redraws, and the selector above matches
+      // the box already in the DOM from the last visit. Typing before that
+      // settles reads a list that is still being replaced — the same wait its
+      // two sibling search checks already needed.
+      await repPage.waitForLoadState('networkidle').catch(() => {});
       await repPage.fill('#tab-leads .searchbox', 'acme');
-      await repPage.waitForTimeout(80);
+      await repPage.waitForTimeout(120);
       const names = await repPage.$$eval('#tab-leads tbody tr[data-search]', (rows) =>
         rows.filter((r) => !r.hidden).map((r) => r.querySelector('b').textContent));
       assert(names.length >= 1 && names.every((n) => /acme/i.test(n)), `matched: ${JSON.stringify(names)}`);
