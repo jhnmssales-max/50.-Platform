@@ -767,62 +767,92 @@ async function main() {
       return `dialog said "${heading}", database said "${outcome}"`;
     });
 
-    await check('A won lead with no company can be deleted; one with a company cannot', async () => {
+    await check('A won lead can be deleted unless a rep earned from its company', async () => {
       const [alice2] = await sql(`select id from reps where name = 'Alice Rep'`);
-      // Won, built, and its company then removed — the state remove_company
-      // leaves behind, and the clutter Joseph could not clear.
+
+      // (a) Won, built, and its company then removed — the state
+      // remove_company leaves behind, and the clutter Joseph could not clear.
       const [orphan] = await sql(
         `insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on, build_status, declined_reason)
          values ('Gone Company', $1, $1, 'won', current_date, 'declined', 'Company removed') returning id`,
         [alice2.id]
       );
-      // Won and still attached to a live dealer: this one must stay. Its own
-      // tenant, because rep_leads_one_per_tenant_idx allows one lead per
-      // company and every seeded dealer already has one.
-      const [liveCo] = await sql(
-        `insert into tenants (slug, name, billing_required, billing_status) values ('still-a-dealer','Still A Dealer', true, 'active') returning id`
-      );
-      const [attached] = await sql(
+
+      // (b) Won and attached to an IN-HOUSE company. This is the case Joseph
+      // found: Good Steward Structures is billing-exempt, so it can never earn
+      // a rep anything, and it can never be removed either. Testing "has a
+      // company" instead of "a rep earned" left this lead stuck for good.
+      const inHouse = tenants['good-steward-structures'].id;
+      const [exempt] = await sql(
         `insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on, tenant_id, build_status, built_at)
-         values ('Still A Dealer', $1, $1, 'won', current_date, $2, 'built', now()) returning id`,
-        [alice2.id, liveCo.id]
+         values ('Good Steward Structures', $1, $1, 'won', current_date, $2, 'built', now()) returning id`,
+        [alice2.id, inHouse]
+      );
+
+      // (c) Won, and a rep has actually earned from that company. This one
+      // stays, whatever else is true of it.
+      const [paidCo] = await sql(
+        `insert into tenants (slug, name, billing_required, billing_status, activation_paid_at, activation_livemode)
+         values ('earned-from-co','Earned From Co', true, 'active', now(), true) returning id`
+      );
+      const [ev] = await sql(
+        `insert into billing_events (tenant_id, event_type, amount_cents, status, livemode, stripe_payment_intent_id)
+         values ($1,'activation_charge',50000,'succeeded',true,'pi_earned_from') returning id`, [paidCo.id]
+      );
+      await sql(
+        `insert into rep_earnings (rep_id, tenant_id, role, kind, amount_cents, source_billing_event_id, earned_at)
+         values ($1, $2, 'closer', 'activation', 5000, $3, now())`,
+        [alice2.id, paidCo.id, ev.id]
+      );
+      const [earnedLead] = await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on, tenant_id, build_status, built_at)
+         values ('Earned From Co', $1, $1, 'won', current_date, $2, 'built', now()) returning id`,
+        [alice2.id, paidCo.id]
       );
 
       await page.click('[data-tab=leads]');
-      await page.waitForFunction(() => document.querySelector('#tab-leads').textContent.includes('Gone Company'), { timeout: 10000 });
+      await page.waitForFunction(() => document.querySelector('#tab-leads').textContent.includes('Earned From Co'), { timeout: 10000 });
       await page.waitForLoadState('networkidle').catch(() => {});
 
-      // Only the orphaned one offers a Delete.
-      const orphanRow = page.locator('#tab-leads tr', { hasText: 'Gone Company' });
-      const attachedRow = page.locator('#tab-leads tr', { hasText: 'Still A Dealer' });
-      eq(await orphanRow.locator('[data-dellead]').count(), 1, 'no Delete on a won lead whose company is gone');
-      eq(await attachedRow.locator('[data-dellead]').count(), 0, 'a won lead with a live dealer offers Delete');
+      const row = (name) => page.locator('#tab-leads tr', { hasText: name });
+      eq(await row('Gone Company').locator('[data-dellead]').count(), 1, 'no Delete on a won lead whose company is gone');
+      eq(await row('Good Steward Structures').locator('[data-dellead]').count(), 1, 'no Delete on an in-house company\u2019s lead \u2014 it can never be cleared');
+      eq(await row('Earned From Co').locator('[data-dellead]').count(), 0, 'Delete offered on a lead a rep earned from');
 
-      // The API refuses the attached one even if asked directly.
-      const refused = await apiAs(USERS.admin, `/rep-leads/${attached.id}`, { method: 'DELETE' });
+      // The API refuses the earned one even when asked directly.
+      const refused = await apiAs(USERS.admin, `/rep-leads/${earnedLead.id}`, { method: 'DELETE' });
       eq(refused.status, 409, `expected 409, got ${refused.status} ${JSON.stringify(refused.body)}`);
-      assert(/Remove the company first/i.test(refused.body.error || ''), `unhelpful refusal: ${refused.body.error}`);
+      assert(/earned a rep money/i.test(refused.body.error || ''), `unhelpful refusal: ${refused.body.error}`);
 
-      // And deleting the orphan works, without counting as a lost lead.
+      // A rep may not delete a won lead at all, even their own.
+      const asRep = await apiAs({ email: 'alice@x.test' }, `/rep-leads/${orphan.id}`, { method: 'DELETE' });
+      eq(asRep.status, 403, `a rep got ${asRep.status} deleting a won lead`);
+
+      // Deleting the in-house one works from the page, and leaves the company
+      // completely alone — that is what Joseph was worried about.
       const before = await sql('select lost_count from rep_lead_outcomes where rep_id = $1', [alice2.id]);
-      await orphanRow.locator('[data-dellead]').click();
+      await row('Good Steward Structures').locator('[data-dellead]').click();
       await page.waitForSelector('#confirmDelLead', { timeout: 6000 });
       const text = (await page.textContent('#dlg')).replace(/\s+/g, ' ');
-      assert(/no company on the platform/i.test(text), `the dialog does not explain why: ${text.slice(0, 200)}`);
+      assert(/company is not touched/i.test(text), `the dialog does not reassure about the company: ${text.slice(0, 240)}`);
       assert(/does not count as a lost lead/i.test(text), 'the dialog does not say it is not a loss');
       await page.click('#confirmDelLead');
       await page.waitForFunction(
-        () => !document.querySelector('#tab-leads').textContent.includes('Gone Company'),
+        () => !document.querySelector('#tab-leads').textContent.includes('Good Steward Structures'),
         null, { timeout: 10000 }
       );
-      const [{ n }] = await sql(`select count(*)::int as n from rep_leads where id = $1`, [orphan.id]);
-      eq(n, 0, 'the lead row survived');
+      const [{ leads }] = await sql(`select count(*)::int as leads from rep_leads where id = $1`, [exempt.id]);
+      eq(leads, 0, 'the lead row survived');
+      const [{ co }] = await sql(`select count(*)::int as co from tenants where id = $1`, [inHouse]);
+      eq(co, 1, 'deleting a lead removed its company');
       const after = await sql('select lost_count from rep_lead_outcomes where rep_id = $1', [alice2.id]);
       eq((after[0] || {}).lost_count || 0, (before[0] || {}).lost_count || 0, 'a tidy-up was counted against the rep as a lost lead');
 
-      await sql('delete from rep_leads where id = $1', [attached.id]);
-      await sql('delete from tenants where id = $1', [liveCo.id]);
-      return 'orphaned won lead deleted, attached one refused with 409, lost count unchanged';
+      await sql('delete from rep_leads where id in ($1, $2)', [orphan.id, earnedLead.id]);
+      await sql('delete from rep_earnings where tenant_id = $1', [paidCo.id]);
+      await sql('delete from billing_events where tenant_id = $1', [paidCo.id]);
+      await sql('delete from tenants where id = $1', [paidCo.id]);
+      return 'orphan and in-house leads deletable, earned-from refused 409, rep refused 403, company untouched';
     });
 
     await check('An in-house company has no Remove button at all', async () => {

@@ -394,7 +394,16 @@ const LEAD_COLUMNS = `l.id, l.company_name, l.contact_name, l.phone, l.email, l.
   l.brought_in_by_rep_id, l.found_on, l.status,
   l.closed_by_rep_id, l.onboarded_by_rep_id, l.closed_on, l.tenant_id, l.created_at,
   l.build_status, l.brand, l.brand_source, l.reward_amount_cents, l.built_at, l.declined_reason,
-  l.copy`;
+  l.copy,
+  -- Whether the data allows this lead to be deleted, decided here with the
+  -- same test DELETE /rep-leads/:id makes. The page must not work this out for
+  -- itself: it cannot see rep_earnings, and a page guessing from what it CAN
+  -- see is exactly how the rep removal dialog came to promise one outcome
+  -- while the database did another. The caller still applies the admin rule,
+  -- which it knows reliably.
+  (l.status <> 'won'
+   or l.tenant_id is null
+   or not exists (select 1 from rep_earnings e where e.tenant_id = l.tenant_id)) as can_delete`;
 
 // A rep calling this gets only their own leads — not because of anything
 // here, but because RLS gives them no other rows.
@@ -552,11 +561,22 @@ router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
     // Not theirs, or not there: RLS has already made those the same thing.
     if (!l) throw httpError(404, 'No such lead');
     // A won lead is normally the record of who closed a dealer, and stays.
-    // The exception is a won lead with NO dealer on it: either it was never
-    // built, or its company was removed — and remove_company() only deletes a
-    // company that never traded, so by construction nobody earned a penny
-    // from it. There is no money history to protect, and leaving it means
-    // clutter the admin can never clear (a test company, a false start).
+    // What makes it worth keeping is MONEY: once a rep has earned from that
+    // company, the lead is part of how that came about.
+    //
+    // The first version of this tested "has no company attached" instead, as a
+    // proxy for the same thing. That was wrong, and Joseph found it: the three
+    // in-house companies (Good Steward, North Mountain, 50. itself) have
+    // companies that can never be removed, and are billing-exempt so they can
+    // never earn a rep anything either. Their leads would have been stuck for
+    // good, refused with a message telling him to remove a company the system
+    // refuses to remove.
+    //
+    // So the test is the real one. Note what is NOT at risk: rep_earnings and
+    // rep_assignments reference the tenant and the rep, never the lead, so
+    // deleting a lead cannot move a penny or un-credit anyone — a rep whose
+    // dealer has not paid yet is still paid through their assignment. What
+    // goes is the pipeline record of who found and closed them.
     //
     // Admin only, deliberately: a rep must not be able to erase the record of
     // what they closed, or anyone else's.
@@ -565,7 +585,15 @@ router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
         throw httpError(403, 'That lead was won, so only the 50. admin can delete it — it is the record of who closed them.', 'won_admin_only');
       }
       if (l.tenant_id) {
-        throw httpError(409, `${l.company_name} is still a company on the platform, so this lead is its origin record. Remove the company first, then this can go.`, 'won_has_dealer');
+        const { rows: [m] } = await client.query(
+          'select exists (select 1 from rep_earnings where tenant_id = $1) as earned',
+          [l.tenant_id]
+        );
+        if (m && m.earned) {
+          throw httpError(409,
+            `${l.company_name} has earned a rep money, so this lead is part of that record and cannot be deleted.`,
+            'won_rep_earned');
+        }
       }
     }
     const { rows: files } = await client.query('select storage_path from rep_lead_files where lead_id = $1', [id]);
@@ -574,12 +602,16 @@ router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
 
   await withServiceRole(async (client) => {
     // rep_lead_files cascades on the lead's delete, so the rows go with it.
-    // The same two conditions again as a WHERE, so the one place that actually
+    // The same condition again as a WHERE, so the one place that actually
     // removes the row cannot be reached by a path that skipped the checks.
     await assertRowsAffected(
       client,
       await client.query(
-        `delete from rep_leads where id = $1 and (status <> 'won' or tenant_id is null)`,
+        `delete from rep_leads l
+          where l.id = $1
+            and (l.status <> 'won'
+                 or l.tenant_id is null
+                 or not exists (select 1 from rep_earnings e where e.tenant_id = l.tenant_id))`,
         [id]
       ),
       { table: 'rep_leads', id }
