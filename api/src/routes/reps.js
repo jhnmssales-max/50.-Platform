@@ -715,6 +715,83 @@ router.post('/rep-leads/:id/win', requireAuth, wrap(async (req, res) => {
 // ---------------------------------------------------------------------------
 // Joseph and the helper see every dealer; a rep sees only the ones they are
 // on. rep_dealer_list() decides that, not this handler.
+// What a dealer pays, after they are already running. Joseph renegotiates,
+// or fixes a price he set wrong on the build screen, without a database edit.
+//
+// Admin only, and checked twice for two different reasons: requirePlatform on
+// the signed-in connection is the authorisation, and the service-role write
+// below is how it reaches another tenant's row at all -- RLS hides every
+// tenant but the caller's own, so this cannot be done as the signed-in user.
+// The explicit admin check therefore has to happen before that write, not be
+// assumed from it.
+const pricingBody = z.object({
+  activation_fee_cents: z.number().int().min(0).max(1000000).optional(),
+  annual_fee_cents: z.number().int().min(0).max(1000000).optional(),
+  referral_fee_cents: z.number().int().min(0).max(100000).optional(),
+  reward_amount_cents: z.number().int().min(500).max(50000).optional(),
+  reward_fulfillment: z.enum(['dealer', 'platform']).optional(),
+  charge_card_cost: z.boolean().optional(),
+}).refine((b) => Object.keys(b).length > 0, { message: 'Nothing to change' });
+
+// Reading one dealer's prices, for the dialog that edits them. Deliberately
+// NOT added to rep_dealer_list(): that list is what reps and the helper see,
+// and neither is allowed money. A separate admin-only read keeps the figures
+// off every surface except Joseph's own.
+router.get('/rep-dealers/:tenantId/pricing', requireAuth, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+  });
+  const out = await withServiceRole(async (client) => {
+    const { rows: [row] } = await client.query(
+      `select id, name, billing_required, activation_fee_cents, annual_fee_cents,
+              referral_fee_cents, reward_amount_cents, reward_fulfillment, charge_card_cost
+         from tenants where id = $1`, [tenantId]);
+    if (!row) throw httpError(404, 'No such company');
+    return row;
+  });
+  res.json(out);
+}));
+
+router.patch('/rep-dealers/:tenantId/pricing', requireAuth, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  const body = parseOr400(pricingBody, req.body || {});
+
+  await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+  });
+
+  const out = await withServiceRole(async (client) => {
+    // An in-house company pays nothing by design. Letting a price be set on
+    // one would look like it had started being billed.
+    const { rows: [t] } = await client.query(
+      'select id, name, billing_required from tenants where id = $1', [tenantId]);
+    if (!t) throw httpError(404, 'No such company');
+    if (t.billing_required === false) {
+      throw httpError(409, `${t.name} is an in-house company and is never charged, so its prices cannot be set.`);
+    }
+
+    const sets = [];
+    const vals = [tenantId];
+    for (const key of ['activation_fee_cents', 'annual_fee_cents', 'referral_fee_cents',
+                       'reward_amount_cents', 'reward_fulfillment', 'charge_card_cost']) {
+      if (body[key] !== undefined) {
+        vals.push(body[key]);
+        sets.push(`${key} = $${vals.length}`);
+      }
+    }
+    const { rows: [row] } = await client.query(
+      `update tenants set ${sets.join(', ')} where id = $1
+       returning id, name, activation_fee_cents, annual_fee_cents, referral_fee_cents,
+                 reward_amount_cents, reward_fulfillment, charge_card_cost`,
+      vals
+    );
+    return row;
+  });
+
+  res.json(out);
+}));
+
 router.get('/rep-dealers', requireAuth, wrap(async (req, res) => {
   // Closed companies are left out unless asked for, and the function itself
   // refuses to hand one to a rep however this is called.
@@ -1266,8 +1343,16 @@ const buildBody = z.object({
   // the build screen sends is what the rep collected, with whatever Joseph
   // changed; anything still blank is filled from the generic wording below.
   copy: copyBody.optional(),
-  // The one price that varies per dealer: the gift card. $500 and 30% never do.
+  // Every price is per dealer now -- Joseph sets them on the build screen.
+  // All optional: anything left out takes the standard amount, so a build
+  // where he changes nothing produces a dealer on the usual terms.
+  // Ceilings are sanity rails against a slipped decimal point, not policy.
   reward_amount_cents: z.number().int().min(500).max(50000).optional(),
+  activation_fee_cents: z.number().int().min(0).max(1000000).optional(),
+  annual_fee_cents: z.number().int().min(0).max(1000000).optional(),
+  referral_fee_cents: z.number().int().min(0).max(100000).optional(),
+  reward_fulfillment: z.enum(['dealer', 'platform']).optional(),
+  charge_card_cost: z.boolean().optional(),
   admin_name: z.string().trim().min(1).max(120).optional(),
   admin_email: z.string().email().max(200).optional(),
 });
@@ -1335,8 +1420,13 @@ router.post('/rep-leads/:id/build', requireAuth, wrap(async (req, res) => {
   const tenantId = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { admin: true });
     const { rows: [r] } = await client.query(
-      'select approve_lead_build($1, $2, $3, $4::jsonb, $5) as tenant_id',
-      [id, plan.slug, plan.name, JSON.stringify(plan.brand), plan.rewardCents]
+      'select approve_lead_build($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10) as tenant_id',
+      [id, plan.slug, plan.name, JSON.stringify(plan.brand), plan.rewardCents,
+       body.activation_fee_cents != null ? body.activation_fee_cents : null,
+       body.annual_fee_cents != null ? body.annual_fee_cents : null,
+       body.referral_fee_cents != null ? body.referral_fee_cents : null,
+       body.reward_fulfillment || null,
+       body.charge_card_cost != null ? body.charge_card_cost : null]
     );
     return r.tenant_id;
   });

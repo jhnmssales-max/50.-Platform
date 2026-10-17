@@ -111,3 +111,140 @@ alter table billing_events
 
 comment on column billing_events.fee_cents is
   'Snapshot of 50.''s flat fee at charge time (tenants.referral_fee_cents). amount_cents minus this is the gift cards'' face value, when the dealer was charged for cards 50. bought. Null on rows charged before the flat fee, which carry fee_rate_bps instead.';
+
+
+-- ---------------------------------------------------------------------------
+-- approve_lead_build carries the prices through.
+--
+-- The settings have to be applied in the SAME transaction that creates the
+-- tenant. The API's own connection runs as the signed-in admin, where RLS
+-- hides every tenant but their own, so a follow-up UPDATE from up there
+-- would either be refused or need the service role on a second connection --
+-- and then a dealer could exist for a moment at standard prices.
+-- This function is already security definer, so the prices land with the
+-- insert or not at all.
+
+create or replace function approve_lead_build(
+  p_lead_id uuid,
+  p_slug text,
+  p_name text,
+  p_brand jsonb,
+  p_reward_amount_cents integer default null,
+  -- Joseph sets each dealer's prices himself on the build screen. Null on any
+  -- of these means "leave it at the column default", so a build that sends
+  -- nothing behaves exactly as it did before they existed.
+  p_activation_fee_cents integer default null,
+  p_annual_fee_cents integer default null,
+  p_referral_fee_cents integer default null,
+  p_reward_fulfillment text default null,
+  p_charge_card_cost boolean default null
+) returns uuid
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_lead rep_leads%rowtype;
+  v_tenant_id uuid;
+  v_slug text;
+  v_n int;
+begin
+  if not is_platform_admin() then
+    raise exception 'Only the 50. admin can build a dealer' using errcode = '42501';
+  end if;
+
+  select * into v_lead from rep_leads where id = p_lead_id for update;
+  if not found then
+    raise exception 'No such lead' using errcode = 'P0002';
+  end if;
+  if v_lead.status <> 'won' then
+    raise exception 'That lead has not been won yet' using errcode = '22023';
+  end if;
+  if v_lead.build_status = 'built' then
+    raise exception 'That lead already has a 50. account' using errcode = '22023';
+  end if;
+  if coalesce(btrim(p_slug), '') = '' or coalesce(btrim(p_name), '') = '' then
+    raise exception 'A dealer needs a name and a slug' using errcode = '22023';
+  end if;
+
+  -- Make the address unique HERE rather than in the API, because the API runs
+  -- as the signed-in user and RLS hides every tenant but their own: a check
+  -- for "is this slug taken" run up there would answer no for every dealer
+  -- that exists, and then the insert would fail on the unique index. Two
+  -- businesses with the same name is not far-fetched, so the second one gets
+  -- a -2 and the third a -3.
+  v_slug := btrim(p_slug);
+  if exists (select 1 from tenants where slug = v_slug) then
+    for v_n in 2..60 loop
+      if not exists (select 1 from tenants where slug = v_slug || '-' || v_n) then
+        v_slug := v_slug || '-' || v_n;
+        exit;
+      end if;
+      if v_n = 60 then
+        raise exception 'Too many dealers already use that name — give this one a slightly different name' using errcode = '22023';
+      end if;
+    end loop;
+  end if;
+
+  -- billing_required defaults to true, which is what gates them into paying
+  -- the $500 at their first sign-in. Never set it here: the three exempt
+  -- tenants are fixed in the schema and a built dealer is never one of them.
+  if p_reward_fulfillment is not null and p_reward_fulfillment not in ('dealer', 'platform') then
+    raise exception 'reward_fulfillment must be dealer or platform' using errcode = '22023';
+  end if;
+
+  insert into tenants (
+    slug, name, branding, reward_amount_cents,
+    activation_fee_cents, annual_fee_cents, referral_fee_cents,
+    reward_fulfillment, charge_card_cost
+  )
+  values (
+    v_slug,
+    btrim(p_name),
+    coalesce(p_brand, '{}'::jsonb),
+    coalesce(p_reward_amount_cents, 5000),
+    -- Each falls back to the column default, so the prices a dealer gets
+    -- when Joseph changes nothing are the standard ones.
+    coalesce(p_activation_fee_cents, 50000),
+    coalesce(p_annual_fee_cents, 10000),
+    coalesce(p_referral_fee_cents, 3000),
+    coalesce(p_reward_fulfillment, 'dealer'),
+    coalesce(p_charge_card_cost, false)
+  )
+  returning id into v_tenant_id;
+
+  update rep_leads
+     set tenant_id = v_tenant_id,
+         build_status = 'built',
+         built_at = now(),
+         approved_by = auth.uid(),
+         brand = coalesce(p_brand, brand),
+         reward_amount_cents = p_reward_amount_cents
+   where id = p_lead_id;
+
+  -- The rep who closed it goes on the dealer, which is what earns them the
+  -- $50 once the activation clears. assign_rep() is not called here because
+  -- it refuses anyone who is not staff and this already ran its own admin
+  -- check; the insert is the same one it would make.
+  if v_lead.closed_by_rep_id is not null or v_lead.onboarded_by_rep_id is not null then
+    insert into rep_assignments (tenant_id, closer_rep_id, onboarder_rep_id, effective_from)
+    values (v_tenant_id, v_lead.closed_by_rep_id, v_lead.onboarded_by_rep_id, now());
+  end if;
+
+  return v_tenant_id;
+end;
+$$;
+
+-- The caller needs the address that was actually used, which may not be the
+-- one it asked for. Kept as a separate lookup rather than a second return
+-- value so the function's signature stays one id.
+
+-- The 5-argument version is replaced, not left beside this one: two
+-- overloads of the same name differing only by trailing defaults is how a
+-- caller ends up silently hitting the old one and getting standard prices
+-- for a dealer Joseph priced himself.
+drop function if exists approve_lead_build(uuid, text, text, jsonb, integer);
+
+revoke all on function approve_lead_build(uuid, text, text, jsonb, integer, integer, integer, integer, text, boolean) from public, anon;
+grant execute on function approve_lead_build(uuid, text, text, jsonb, integer, integer, integer, integer, text, boolean) to authenticated;
+comment on function approve_lead_build(uuid, text, text, jsonb, integer, integer, integer, integer, text, boolean) is 'Admin only. Turns a won lead into a real 50. dealer: creates the tenant with its branding, gift card and the prices Joseph set on the build screen, puts the closing rep on it, and marks the lead built — all in one transaction. Any price left null takes the column default. The dealer''s own login is made by the API through Supabase Auth, not here. Returns the new tenant id.';

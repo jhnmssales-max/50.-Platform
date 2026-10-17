@@ -783,6 +783,61 @@ function followupDialog(id, about){
   if($('fuDel')) $('fuDel').addEventListener('click', () => finish(() => api('/rep-followups/' + id, { method: 'DELETE' }), 'Deleted.'));
 }
 
+/* ---------- what a dealer pays ---------- */
+// Shared by the build screen and the Companies-tab dialog, so a price means
+// the same thing in both places and there is one list to keep right.
+// `v` is a tenant's current pricing, or null on a build (standard terms).
+const PRICE_FIELDS = [
+  { key:'activation_fee_cents', label:'Onboarding charge ($)', std:500,
+    hint:'Charged once, at their first sign-in. Covers their first year.' },
+  { key:'annual_fee_cents', label:'Every year after ($)', std:100,
+    hint:'Charged to the card on file on their anniversary.' },
+  { key:'referral_fee_cents', label:'Your fee per referral ($)', std:30,
+    hint:'A flat amount each time one is marked paid \u2014 not a percentage, so it does not shrink with the gift card.' },
+];
+
+function pricingFieldsHtml(v){
+  const dollars = (key, std) => (v && v[key] != null) ? (v[key] / 100) : std;
+  const boxes = PRICE_FIELDS.map((f) =>
+    '<div><label>' + esc(f.label) + '</label>' +
+      '<input name="price_' + f.key + '" type="number" min="0" max="10000" step="1" value="' + dollars(f.key, f.std) + '">' +
+      '<p class="hint">' + esc(f.hint) + '</p></div>').join('');
+  const platform = v ? v.reward_fulfillment === 'platform' : false;
+  const charge = v ? !!v.charge_card_cost : false;
+  return '<div class="row">' + boxes + '</div>' +
+    '<label>Who sends the gift cards</label>' +
+    '<select name="reward_fulfillment">' +
+      '<option value="dealer"' + (platform ? '' : ' selected') + '>They do \u2014 we email them, they send the cards</option>' +
+      '<option value="platform"' + (platform ? ' selected' : '') + '>We do \u2014 we email the cards to their customer</option>' +
+    '</select>' +
+    '<p class="hint">Either way nothing goes out until they mark the referral paid.</p>' +
+    '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px">' +
+      '<input type="checkbox" name="charge_card_cost" style="width:auto;margin-top:3px"' + (charge ? ' checked' : '') + '>' +
+      '<span>Also charge them for the gift cards themselves' +
+      '<p class="hint" style="margin:2px 0 0">Tick this when you are buying the cards, so you are paid back for them on top of your fee. Leave it off when the cards are theirs to buy.</p></span>' +
+    '</label>';
+}
+
+// Reads the boxes back as cents. On a build only what DIFFERS from the
+// standard terms is sent, so a dealer Joseph did not price is created on the
+// column defaults rather than on whatever the form happened to show.
+function readPricingFields(form, { onlyChanges = false } = {}){
+  const out = {};
+  PRICE_FIELDS.forEach((f) => {
+    const el = form.querySelector('[name="price_' + f.key + '"]');
+    if(!el || el.value === '') return;
+    const cents = Math.round(Number(el.value) * 100);
+    if(!Number.isFinite(cents) || cents < 0) return;
+    if(onlyChanges && cents === f.std * 100) return;
+    out[f.key] = cents;
+  });
+  const sel = form.querySelector('[name="reward_fulfillment"]');
+  if(sel && !(onlyChanges && sel.value === 'dealer')) out.reward_fulfillment = sel.value;
+  const chk = form.querySelector('[name="charge_card_cost"]');
+  if(chk && !(onlyChanges && !chk.checked)) out.charge_card_cost = chk.checked;
+  return out;
+}
+
 /* ---------- the wording a dealer's own customers read ---------- */
 // Same nine lines, in the same order, as api/src/lib/tenantCopy.js — keep the
 // two in step. A business never sees these labels; a rep does, sitting across
@@ -1720,6 +1775,9 @@ async function renderDealers(){
             '<td><select data-field="onboarder">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
             (state.isAdmin ? '<td><input type="date" data-field="from" style="min-width:140px" title="Leave blank to start now"></td>' : '') +
             '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button>' +
+              // In-house companies are never charged, so there is nothing to
+              // price and a dialog would imply they had started being billed.
+              (state.isAdmin && !x.billing_exempt ? ' <button class="btn small secondary" data-price="' + x.tenant_id + '">Pricing</button>' : '') +
               (state.isAdmin ? ' <button class="btn small danger" data-delco="' + x.tenant_id + '">Remove</button>' : '') + '</td>'))  +
       '</tr>'
     ).join('') || '<tr data-empty-row><td colspan="6" class="muted" style="padding:18px">' + (state.isRep ? 'None yet. They show up here once Joseph has built them.' : 'No companies yet.') + '</td></tr>') + '</tbody></table></div>';
@@ -1728,6 +1786,8 @@ async function renderDealers(){
   wireSearch('tab-dealers', 'dealers');
   $('tab-dealers').querySelectorAll('[data-delco]').forEach((b) =>
     b.addEventListener('click', () => deleteCompanyDialog(b.dataset.delco)));
+  $('tab-dealers').querySelectorAll('[data-price]').forEach((b) =>
+    b.addEventListener('click', () => pricingDialog(b.dataset.price)));
   if($('toggleClosed')) $('toggleClosed').addEventListener('click', async () => {
     state.showClosed = !state.showClosed;
     await renderDealers();
@@ -1898,7 +1958,12 @@ async function buildDialog(leadId){
       '<div><label>Who gets the account</label><input name="admin_email" type="email" required maxlength="200" value="' + esc(lead.email || '') + '"></div></div>' +
       '<div class="row"><div><label>Their contact\u2019s name</label><input name="admin_name" maxlength="120" value="' + esc(lead.contact_name || '') + '"></div>' +
       '<div><label>Gift card each side gets ($)</label><input name="reward" type="number" min="5" max="500" step="1" value="' + (cardCents / 100) + '"></div></div>' +
-      '<p class="muted" style="margin:-4px 0 10px">The $500 setup and the 30% fee never change. The card does — $50 unless you say otherwise.</p>' +
+
+      // Every price is per dealer now. Pre-filled with the standard terms, so
+      // leaving them alone builds a dealer on the usual deal.
+      '<h3 style="font-size:15px;margin:14px 0 2px">What they pay</h3>' +
+      '<p class="muted" style="margin:2px 0 8px">Pre-filled with the standard terms. Change any of them for this dealer.</p>' +
+      pricingFieldsHtml(null) +
 
       '<h3 style="font-size:15px;margin:14px 0 2px">Their logo</h3>' +
       (b.logoUrl
@@ -1975,6 +2040,10 @@ async function buildDialog(leadId){
       const out = await post('/rep-leads/' + leadId + '/build', {
         name: d.name, admin_email: d.admin_email, admin_name: d.admin_name || undefined,
         brand, copy: readCopyFields(e.target), reward_amount_cents: Math.round(Number(d.reward) * 100),
+        // Only prices Joseph actually changed. Sending the standard ones
+        // explicitly would pin them on the dealer, so a later change to what
+        // "standard" means would skip every dealer built before it.
+        ...readPricingFields(e.target, { onlyChanges: true }),
       });
       closeDialog();
       const trouble = (out.emailed && out.emailed.problems) || [];
@@ -2099,6 +2168,44 @@ function confirmDeleteDialog({ title, name, lead, goes, stays, button, onConfirm
     }catch(err){
       flash(err.message);
       go.disabled = false; go.textContent = button;
+    }
+  });
+}
+
+// What a dealer pays, after they are already running — a renegotiation, or
+// fixing a price set wrong at build time. Admin only on the server too: this
+// reads and writes another tenant's row, which RLS hides from the signed-in
+// user entirely, so the API does it with the service role behind an explicit
+// admin check rather than relying on this button being hidden.
+async function pricingDialog(tenantId){
+  let cur;
+  try{
+    cur = await api('/rep-dealers/' + tenantId + '/pricing');
+  }catch(err){ return flash(err.message); }
+  openDialog(
+    '<h3>What ' + esc(cur.name) + ' pays</h3>' +
+    '<p class="muted">Changes apply from the next charge. Anything already charged keeps the price it was charged at.</p>' +
+    '<form id="pricingForm">' + pricingFieldsHtml(cur) +
+      '<div class="actions">' +
+        '<button type="button" class="btn secondary" id="cancelDlg">Cancel</button>' +
+        '<button class="btn" type="submit" id="savePricing">Save pricing</button>' +
+      '</div></form>'
+  );
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('pricingForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('savePricing');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try{
+      // Every field, not only the changed ones: on an existing dealer the
+      // boxes show what they actually pay, so what is on screen is what
+      // should be saved.
+      await patch('/rep-dealers/' + tenantId + '/pricing', readPricingFields(e.target));
+      closeDialog();
+      flash('Pricing saved for ' + cur.name + '.', true);
+    }catch(err){
+      flash(err.message);
+      btn.disabled = false; btn.textContent = 'Save pricing';
     }
   });
 }
