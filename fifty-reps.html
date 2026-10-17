@@ -1817,7 +1817,15 @@ async function renderDealers(){
         // would invite a change that could never pay anyone.
         : ((x.billing_exempt || x.closed_at)
           ? '<td class="muted nomob">—</td><td class="muted nomob">—</td>' +
-            (state.isAdmin ? '<td class="muted nomob">—</td>' : '') + '<td></td>'
+            (state.isAdmin ? '<td class="muted nomob">—</td>' : '') +
+            // There is nothing to save on this row, but an in-house company
+            // still has real people signing in and getting the gift-card
+            // reminders, so Logins belongs here too. It first shipped inside
+            // the editable branch below only, which left every in-house row
+            // with an empty cell. A closed company has nobody left to sign
+            // in, so it keeps the empty one.
+            '<td class="num">' + (state.isAdmin && !x.closed_at
+              ? '<button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button>' : '') + '</td>'
           : '<td><select data-field="closer">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
             '<td><select data-field="onboarder">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
             (state.isAdmin ? '<td><input type="date" data-field="from" style="min-width:140px" title="Leave blank to start now"></td>' : '') +
@@ -1825,8 +1833,8 @@ async function renderDealers(){
               // In-house companies are never charged, so there is nothing to
               // price and a dialog would imply they had started being billed.
               (state.isAdmin && !x.billing_exempt ? ' <button class="btn small secondary" data-price="' + x.tenant_id + '">Pricing</button>' : '') +
-              // Logins is offered for in-house companies too: NMS and GSS
-              // have real admins who get the same gift-card reminders.
+              // Live in-house rows get this button from the branch above,
+              // where they have no Save to sit beside.
               (state.isAdmin ? ' <button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button>' : '') +
               (state.isAdmin ? ' <button class="btn small danger" data-delco="' + x.tenant_id + '">Remove</button>' : '') + '</td>'))  +
       '</tr>'
