@@ -971,9 +971,17 @@ function markPaidConfirmText(){
   const base = 'Mark this referral as paid? This can\'t be undone.';
   const fee = currentUser && currentUser.referral_fee;
   if(!fee) return base;
+  // A flat fee per referral, not a percentage. When 50. also buys the gift
+  // cards this dealer is charged for those too, so the total is spelled out
+  // rather than left as one unexplained number on their statement.
+  if(fee.card_cents > 0){
+    return base + '\n\nYour card on file will be charged ' +
+      fmtMoney(fee.charged_cents, fee.currency) + ': ' +
+      fmtMoney(fee.card_cents, fee.currency) + ' for the gift cards, plus 50.\'s ' +
+      fmtMoney(fee.fee_cents, fee.currency) + ' fee.';
+  }
   return base + '\n\nYour card on file will be charged 50.\'s usage fee of ' +
-    fmtMoney(fee.fee_cents, fee.currency) + ' (' + (fee.rate_bps / 100) + '% of the ' +
-    fmtMoney(fee.payout_cents, fee.currency) + ' in gift cards for this referral).';
+    fmtMoney(fee.fee_cents, fee.currency) + ' for this referral.';
 }
 
 document.getElementById('searchBox').addEventListener('input', debounce((e) => renderList(e.target.value), 300));

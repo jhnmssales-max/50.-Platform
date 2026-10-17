@@ -99,11 +99,17 @@ router.get('/me', requireAuth, async (req, res, next) => {
       annual_renewal: billingRequired && ctx.renewal_due_at && ctx.annual_fee_cents > 0
         ? { fee_cents: ctx.annual_fee_cents, due_at: ctx.renewal_due_at, currency: ctx.reward_currency }
         : null,
+      // A flat amount per rewarded referral. card_cents is the gift cards'
+      // face value when this dealer is charged for cards 50. buys, and 0
+      // when the cards are theirs to send -- so the dealer page can quote
+      // the real total instead of a percentage of a payout nobody is
+      // charging them for.
       referral_fee: fee
         ? {
-            rate_bps: ctx.referral_fee_bps,
-            payout_cents: fee.payoutCents,
             fee_cents: fee.feeCents,
+            card_cents: fee.cardCents,
+            charged_cents: fee.totalCents,
+            payout_cents: fee.payoutCents,
             currency: ctx.reward_currency,
           }
         : null,

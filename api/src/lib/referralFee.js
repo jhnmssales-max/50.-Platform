@@ -111,7 +111,7 @@ async function collectReferralFee({ tenantId, referralId }) {
     }
 
     const { rows: [existing] } = await client.query(
-      `select id, status, amount_cents, reward_amount_cents, fee_rate_bps, stripe_payment_intent_id,
+      `select id, status, amount_cents, reward_amount_cents, fee_cents, fee_rate_bps, stripe_payment_intent_id,
               error_detail, created_at
        from billing_events
        where referral_id = $1 and event_type = 'referral_fee' and status in ('pending', 'succeeded')`,
@@ -162,11 +162,11 @@ async function collectReferralFee({ tenantId, referralId }) {
     const rateBps = null;
     const { rows: [inserted] } = await client.query(
       `insert into billing_events
-         (tenant_id, referral_id, event_type, amount_cents, reward_amount_cents, fee_rate_bps, status)
+         (tenant_id, referral_id, event_type, amount_cents, reward_amount_cents, fee_cents, fee_rate_bps, status)
        values ($1, $2, 'referral_fee', $3, $4, $5, 'pending')
-       returning id, status, amount_cents, reward_amount_cents, fee_rate_bps, stripe_payment_intent_id,
+       returning id, status, amount_cents, reward_amount_cents, fee_cents, fee_rate_bps, stripe_payment_intent_id,
                  error_detail, created_at`,
-      [tenantId, referralId, totalCents, row.reward_amount_cents, rateBps]
+      [tenantId, referralId, totalCents, row.reward_amount_cents, row.referral_fee_cents, rateBps]
     );
     return { row, attempt: inserted, resume: false };
   });
@@ -182,8 +182,10 @@ async function collectReferralFee({ tenantId, referralId }) {
   // the old percentage on rows charged before the flat fee.
   const summary = {
     chargedCents: attempt.amount_cents,
-    feeCents: row.referral_fee_cents,
-    cardCents: attempt.amount_cents - row.referral_fee_cents,
+    // From the charge's own snapshot, never the tenant's live setting: a fee
+    // changed after the fact must not rewrite what an old receipt says.
+    feeCents: attempt.fee_cents != null ? attempt.fee_cents : attempt.amount_cents,
+    cardCents: attempt.fee_cents != null ? attempt.amount_cents - attempt.fee_cents : 0,
     payoutCents: attempt.reward_amount_cents * 2,
     rateBps: attempt.fee_rate_bps,
     currency,

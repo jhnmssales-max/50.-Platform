@@ -77,3 +77,37 @@ comment on column tenants.charge_card_cost is
   'When true, this dealer is charged the gift cards'' face value on top of referral_fee_cents. For dealers whose cards 50. buys.';
 comment on column tenants.referral_fee_bps is
   'HISTORICAL ONLY since 20261025000000_dealer_pricing. billing_events.fee_rate_bps records the rate past charges used; nothing new reads this. New charges use referral_fee_cents.';
+
+
+-- ---------------------------------------------------------------------------
+-- billing_events has to be able to explain a flat-fee charge.
+--
+-- billing_events_referral_fee_shape required fee_rate_bps on every
+-- 'referral_fee' row: a charge had to record the percentage it was computed
+-- at, which was the only way to explain the amount. There is no percentage
+-- any more, so the thing that explains the amount is the fee itself -- and
+-- when the dealer is also charged for the cards, amount_cents is fee plus
+-- cards and the split has to be recorded or a receipt cannot break it down.
+--
+-- fee_cents is a SNAPSHOT, like reward_amount_cents and fee_rate_bps beside
+-- it. Joseph can change a dealer's fee whenever he likes; a charge already
+-- made must keep the number it was actually made at, not follow the tenant
+-- row afterwards.
+alter table billing_events
+  add column fee_cents integer check (fee_cents >= 0);
+
+alter table billing_events
+  drop constraint billing_events_referral_fee_shape;
+
+alter table billing_events
+  add constraint billing_events_referral_fee_shape
+    check (event_type <> 'referral_fee'
+           or (referral_id is not null
+               and reward_amount_cents is not null
+               -- Either explanation is acceptable: the old rows carry the
+               -- rate they were computed at, the new ones carry the flat fee.
+               -- Neither is not.
+               and (fee_rate_bps is not null or fee_cents is not null)));
+
+comment on column billing_events.fee_cents is
+  'Snapshot of 50.''s flat fee at charge time (tenants.referral_fee_cents). amount_cents minus this is the gift cards'' face value, when the dealer was charged for cards 50. bought. Null on rows charged before the flat fee, which carry fee_rate_bps instead.';
