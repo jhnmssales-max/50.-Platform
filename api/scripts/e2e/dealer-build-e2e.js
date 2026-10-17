@@ -607,7 +607,10 @@ async function main() {
       assert(dealerMail.TextBody.includes('$750'),
         `the email must quote THIS dealer's onboarding charge, not a default: ${dealerMail.TextBody}`);
       assert(!dealerMail.TextBody.includes('$500'), 'the hardcoded $500 is back');
-      assert(dealerMail.TextBody.includes('$25 gift card'), 'and names their own card amount');
+      // Same wording change as in rep-page: the email names the card as well
+      // as the amount, so this reads "$25 electronic gift card" by default.
+      assert(/\$25 [a-z ]*gift card/.test(dealerMail.TextBody),
+        `and names their own card amount: ${dealerMail.TextBody}`);
       assert(/Your \$50 lands/.test(repMail.TextBody), 'the rep is told when they get paid');
 
       // The account exists but cannot be used until a password is chosen.
