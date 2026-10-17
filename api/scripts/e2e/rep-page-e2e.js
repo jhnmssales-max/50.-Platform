@@ -1109,6 +1109,15 @@ async function main() {
         const text = await hp.textContent(`#tab-${tab}`);
         assert(!text.includes('$'), `"$" on ${tab}: ${text.match(/.{20}\$.{20}/)}`);
       }
+      // The loop finishes on Companies. Logins, Pricing and Remove are
+      // Joseph's alone: the helper may reassign reps, but a dealer's logins
+      // are the people who get paid-referral emails, and its prices are
+      // money -- the whole reason this account sees none. Both branches of
+      // the row gate on isAdmin, so in-house rows are covered too.
+      await hp.waitForSelector('#tab-dealers tr[data-tenant]');
+      eq(await hp.locator('#tab-dealers [data-logins]').count(), 0, 'helper is offered a Logins button');
+      eq(await hp.locator('#tab-dealers [data-price]').count(), 0, 'helper is offered a Pricing button');
+      eq(await hp.locator('#tab-dealers [data-delco]').count(), 0, 'helper is offered a Remove button');
       await hp.click('[data-tab=reps]');
       const heads = await hp.$$eval('#tab-reps th', (h) => h.map((x) => x.textContent));
       assert(!heads.some((h) => /earned|owe/i.test(h)), heads.join(','));
