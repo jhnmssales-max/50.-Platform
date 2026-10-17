@@ -394,14 +394,21 @@ const LEAD_COLUMNS = `l.id, l.company_name, l.contact_name, l.phone, l.email, l.
   l.brought_in_by_rep_id, l.found_on, l.status,
   l.closed_by_rep_id, l.onboarded_by_rep_id, l.closed_on, l.tenant_id, l.created_at,
   l.build_status, l.brand, l.brand_source, l.reward_amount_cents, l.built_at, l.declined_reason,
-  l.copy,
-  -- Whether the data allows this lead to be deleted, decided here with the
-  -- same test DELETE /rep-leads/:id makes. The page must not work this out for
-  -- itself: it cannot see rep_earnings, and a page guessing from what it CAN
-  -- see is exactly how the rep removal dialog came to promise one outcome
-  -- while the database did another. The caller still applies the admin rule,
-  -- which it knows reliably.
-  (l.status <> 'won'
+  l.copy`;
+
+// Whether the data allows a lead to be deleted, with the same test
+// DELETE /rep-leads/:id makes. The page must not work this out for itself: it
+// cannot see rep_earnings, and a page guessing from what it CAN see is exactly
+// how the rep removal dialog came to promise one outcome while the database did
+// another. The caller still applies the admin rule, which it knows reliably.
+//
+// Deliberately NOT part of LEAD_COLUMNS. Three callers reuse that list in a
+// RETURNING clause by stripping the `l.` prefix with a regex, which turns the
+// correlated `e.tenant_id = l.tenant_id` below into `e.tenant_id = tenant_id` —
+// where the unqualified name binds to rep_earnings itself, so the test silently
+// becomes "does any rep_earnings row exist at all". Adding it to the shared list
+// broke creating and editing leads outright.
+const LEAD_CAN_DELETE = `(l.status <> 'won'
    or l.tenant_id is null
    or not exists (select 1 from rep_earnings e where e.tenant_id = l.tenant_id)) as can_delete`;
 
@@ -413,7 +420,7 @@ router.get('/rep-leads', requireAuth, wrap(async (req, res) => {
   const rows = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { rep: true });
     const { rows } = await client.query(
-      `select ${LEAD_COLUMNS} from rep_leads l ${status ? 'where l.status = $1' : ''} order by l.found_on desc, l.created_at desc limit 500`,
+      `select ${LEAD_COLUMNS}, ${LEAD_CAN_DELETE} from rep_leads l ${status ? 'where l.status = $1' : ''} order by l.found_on desc, l.created_at desc limit 500`,
       status ? [status] : []
     );
     return rows;
