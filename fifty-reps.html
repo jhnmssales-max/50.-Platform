@@ -196,6 +196,59 @@
      each box followed by a line saying where that sentence shows up. */
   details.wording{border:1px dashed var(--line);border-radius:10px;padding:10px 14px;margin:14px 0 4px;}
   details.wording summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--primary);}
+
+  /* The wording wizard. Three steps, because nine boxes at once is what reps
+     found overwhelming, and a picture of the real page beside each box,
+     because the hard part was never the typing -- it was not knowing where
+     the words come out. See api/scripts/build-wording-shots.js for where the
+     pictures and the pin coordinates come from. */
+  .wiz{border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden;margin:10px 0 2px;}
+  .wizsteps{display:flex;border-bottom:1px solid var(--line);background:var(--bg);}
+  .wstep{flex:1;min-width:0;border:0;background:none;cursor:pointer;font:inherit;font-size:12px;
+         padding:9px 8px;color:var(--muted);border-bottom:2px solid transparent;text-align:center;}
+  .wstep .n{display:inline-flex;width:17px;height:17px;border-radius:50%;background:var(--line);color:var(--primary);
+            align-items:center;justify-content:center;font-size:10px;font-weight:700;margin-right:5px;vertical-align:-3px;}
+  .wstep.on{color:var(--primary);font-weight:600;border-bottom-color:var(--accent);background:var(--card);}
+  .wstep.on .n{background:var(--accent);color:#fff;}
+  .wstep.done .n{background:var(--ok);color:#fff;}
+  .wpane{display:none;padding:14px;gap:16px;}
+  .wpane.on{display:flex;align-items:flex-start;}
+  .wshot{flex:0 0 42%;position:sticky;top:0;border:1px solid var(--line);border-radius:9px;background:var(--bg);
+         overflow:auto;max-height:340px;position:relative;}
+  .wshot img{display:block;width:100%;}
+  .wshot.zoom img{width:auto;max-width:none;}
+  .wshotmsg{margin:0;padding:22px 14px;text-align:center;font-size:12px;color:var(--muted);}
+  .wshotcap{font-size:11px;color:var(--muted);padding:6px 9px;border-top:1px solid var(--line);background:var(--card);
+            position:sticky;bottom:0;display:flex;justify-content:space-between;gap:8px;}
+  .wpin{position:absolute;outline:2px solid var(--accent);background:rgba(201,151,75,.22);border-radius:3px;
+        box-shadow:0 0 0 3000px rgba(27,43,51,.26);pointer-events:none;}
+  .wfields{flex:1;min-width:0;}
+  .wbox{padding:0 0 14px;}
+  .wbox + .wbox{border-top:1px dashed var(--line);padding-top:14px;}
+  .wbox.act label{color:var(--accent-dark);}
+  .wrow{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:5px 0 0;}
+  .wcount{font-size:11px;color:var(--muted);margin-left:auto;font-variant-numeric:tabular-nums;}
+  /* The whole point of the rebuild: six of the nine boxes are fragments that
+     finish a sentence the rep could not see. This shows that sentence. */
+  .wprev{margin:7px 0 0;padding:8px 10px;border-left:3px solid var(--accent);background:var(--bg);
+         border-radius:0 7px 7px 0;font-size:12.5px;line-height:1.55;color:var(--primary-dark);}
+  .wprev b{background:#FFF4D6;padding:0 3px;border-radius:3px;font-weight:600;color:var(--charcoal);}
+  .wprev.gen{color:var(--muted);}
+  .wprev.gen b{background:var(--line);color:var(--muted);font-weight:500;}
+  .wnav{display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--line);background:var(--bg);}
+  .wpos{font-size:12px;color:var(--muted);margin:0 auto;}
+  /* On a phone the tab labels do not fit, so the tabs become numbered dots
+     and the step name moves into the pane -- a rep must never be looking at
+     three bare numbers wondering which page they are wording. */
+  .wtitle{display:none;}
+  @media(max-width:560px){
+    .wpane.on{display:block;}
+    .wshot{position:static;max-height:230px;margin:0 0 12px;}
+    .wstep{font-size:0;padding:11px 4px;}
+    .wstep .n{font-size:11px;margin:0;width:20px;height:20px;}
+    .wstep.on{border-bottom-width:3px;}
+    .wtitle{display:block;margin:0 0 10px;font-weight:600;font-size:13px;color:var(--primary);}
+  }
   .stagehead{font-family:'Fraunces',serif;font-weight:600;color:var(--primary);font-size:14px;
     margin:16px 0 0;padding-top:10px;border-top:1px solid var(--line);}
   .stagehead:first-of-type{border-top:0;padding-top:0;margin-top:8px;}
@@ -491,6 +544,9 @@ function openDialog(html, { wide = false } = {}){
   // Reports are sheets of twelve months and several charts; forms are not.
   d.classList.toggle('wide', wide);
   if(!d.open) d.showModal();
+  // Both the wording dialog and the build screen render a wizard; wiring it
+  // here means neither has to remember to.
+  wireWording(d);
   return d;
 }
 function closeDialog(){ const d = $('dlg'); if(d.open) d.close(); }
@@ -753,22 +809,261 @@ const COPY_FIELDS = [
     generic:'confirms the referred order has actually been placed and a qualifying deposit received. Cancelled, refunded, or unfulfilled orders do not qualify for a reward.' },
 ];
 
+// The three steps, and which fields belong to each. Grouped by the page the
+// words come out on, which is also the order a customer meets them in.
+const WORDING_STEPS = [
+  { title:'What their past customers get', keys:['offerHow','shareTitle','shareText'] },
+  { title:'The page their friend lands on', keys:['friendAction','afterPurchase','inquiryNoun'] },
+  { title:'Their terms page',               keys:['eligibility','qualifyingEvent','rewardCondition'] },
+];
+
+// The pictures and pin coordinates, built by api/scripts/build-wording-shots.js
+// from the real pages. Fetched once, lazily, and never load-bearing: a rep in
+// a bad signal area still gets every box and can still save.
+let WSHOTS = null;
+let wshotsPromise = null;
+function loadWordingShots(){
+  if(WSHOTS) return Promise.resolve(WSHOTS);
+  if(!wshotsPromise){
+    wshotsPromise = fetch('assets/wording/manifest.json', { cache:'force-cache' })
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error('no manifest')))
+      .then((m) => { WSHOTS = m; return m; })
+      .catch(() => null);
+  }
+  return wshotsPromise;
+}
+
+// Which picture pins a given field, and where on it.
+function wmarkFor(key){
+  if(!WSHOTS) return null;
+  for(const shot of WSHOTS.shots){
+    const mark = shot.marks.find((m) => m.key === key);
+    if(mark) return { shot, mark };
+  }
+  return null;
+}
+
+// {name} is substituted because the page knows the business being set up, so
+// the preview reads like a finished sentence. {reward} is deliberately LEFT
+// as a token: the card amount is set per dealer and is not known at lead
+// stage, so printing "$50" would be a guess -- and would put a money figure
+// in front of a helper, who is not supposed to see one anywhere on this page.
+function wfill(text, name){
+  return String(text == null ? '' : text)
+    .replace(/\*\*/g, '')
+    .replace(/\{name\}/g, name || 'their business');
+}
+
 // Every box carries its generic wording as the placeholder, so an empty box
 // shows exactly what will run instead of looking like something is missing.
-function copyFieldsHtml(values){
+// `name` is the business being set up, used only to make the preview read
+// naturally; it is never saved.
+function copyFieldsHtml(values, name){
   const v = values || {};
-  let stage = null;
-  return COPY_FIELDS.map((f) => {
-    const head = f.stage === stage ? '' : '<p class="stagehead">' + esc(f.stage) + '</p>';
-    stage = f.stage;
-    const val = esc(v[f.key] || '');
-    const common = 'name="copy_' + f.key + '" maxlength="' + f.max + '" placeholder="' + esc(f.generic) + '"';
-    return head + '<label>' + esc(f.label) + '</label>' +
-      (f.multiline
-        ? '<textarea ' + common + ' rows="3">' + val + '</textarea>'
-        : '<input ' + common + ' value="' + val + '">') +
-      '<p class="hint">' + esc(f.where) + '</p>';
+  const uid = 'w' + Math.random().toString(36).slice(2, 8);
+  const tabs = WORDING_STEPS.map((st, i) =>
+    '<button type="button" class="wstep' + (i ? '' : ' on') + '" data-wstep="' + i + '">' +
+      '<span class="n">' + (i + 1) + '</span>' + esc(st.title) + '</button>').join('');
+
+  const panes = WORDING_STEPS.map((st, i) => {
+    const boxes = st.keys.map((key) => {
+      const f = COPY_FIELDS.find((x) => x.key === key);
+      const val = esc(v[key] || '');
+      const common = 'name="copy_' + key + '" maxlength="' + f.max + '" data-wkey="' + esc(key) + '" ' +
+        'placeholder="' + esc(wfill(f.generic, name)) + '"';
+      return '<div class="wbox" data-wbox="' + esc(key) + '">' +
+        '<label>' + esc(f.label) + '</label>' +
+        (f.multiline
+          ? '<textarea ' + common + ' rows="3">' + val + '</textarea>'
+          : '<input ' + common + ' value="' + val + '">') +
+        '<div class="wrow">' +
+          '<button type="button" class="btn small secondary" data-wuse="' + esc(key) + '">Use this wording</button>' +
+          '<span class="wcount" data-wcount="' + esc(key) + '"></span>' +
+        '</div>' +
+        '<p class="wprev" data-wprev="' + esc(key) + '" hidden></p>' +
+        '<p class="hint">' + esc(f.where) + '</p>' +
+      '</div>';
+    }).join('');
+    return '<section class="wpane' + (i ? '' : ' on') + '" data-wpane="' + i + '">' +
+      '<p class="wtitle">' + esc(st.title) + '</p>' +
+      '<div class="wshot" data-wshot><p class="wshotmsg">Loading the page these words land on…</p></div>' +
+      '<div class="wfields">' + boxes + '</div></section>';
   }).join('');
+
+  return '<div class="wiz" data-wiz="' + uid + '" data-wname="' + esc(name || '') + '">' +
+    '<div class="wizsteps">' + tabs + '</div>' + panes +
+    '<div class="wnav">' +
+      '<button type="button" class="btn small secondary" data-wnav="back" disabled>Back</button>' +
+      '<span class="wpos">Step 1 of ' + WORDING_STEPS.length + '</span>' +
+      '<button type="button" class="btn small" data-wnav="next">Next</button>' +
+    '</div></div>';
+}
+
+// Called after the markup is on the page. Safe to call twice on the same
+// scope: a wizard already wired is skipped.
+function wireWording(scope){
+  (scope || document).querySelectorAll('.wiz').forEach((wiz) => {
+    if(wiz.dataset.wired) return;
+    wiz.dataset.wired = '1';
+    const name = wiz.dataset.wname || '';
+    let step = 0;
+    let active = WORDING_STEPS[0].keys[0];
+    let drawn = false;
+
+    const paneOf = (i) => wiz.querySelector('[data-wpane="' + i + '"]');
+    // Declared here so the focus handler below can reach it before the
+    // observer that normally triggers the first draw has fired.
+    let firstDrawOnFocus = (key) => { active = key; };
+
+    // The picture for whichever box the rep is in. Scrolled so the pin is in
+    // view rather than leaving them to hunt for it on a long terms page.
+    function showShot(key){
+      active = key;
+      const found = wmarkFor(key);
+      const pane = paneOf(step);
+      const host = pane && pane.querySelector('[data-wshot]');
+      if(!host) return;
+      wiz.querySelectorAll('.wbox').forEach((b) => b.classList.toggle('act', b.dataset.wbox === key));
+      if(!found){
+        // No manifest (offline, or the pictures were never built). The boxes
+        // still work; only the illustration is missing.
+        host.innerHTML = '<p class="wshotmsg">' + (WSHOTS ? 'No picture for this one yet.' : 'Pictures unavailable offline — the boxes still work.') + '</p>';
+        return;
+      }
+      const { shot, mark } = found;
+      host.innerHTML = '<img alt="' + esc(shot.title) + '" src="' + esc(shot.img) + '">' +
+        '<div class="wpin"></div>' +
+        '<div class="wshotcap"><span>' + esc(shot.title) + '</span><span>tap to zoom</span></div>';
+      const img = host.querySelector('img');
+      const pin = host.querySelector('.wpin');
+      const place = () => {
+        const scale = img.clientWidth / shot.page.w;
+        pin.style.left = (mark.box.x * scale) + 'px';
+        pin.style.top = (mark.box.y * scale) + 'px';
+        pin.style.width = Math.max(mark.box.w * scale, 6) + 'px';
+        pin.style.height = Math.max(mark.box.h * scale, 6) + 'px';
+        host.scrollTop = Math.max(0, (mark.box.y * scale) - (host.clientHeight / 2) + 20);
+        host.scrollLeft = Math.max(0, (mark.box.x * scale) - (host.clientWidth / 2));
+      };
+      if(img.complete) place(); else img.addEventListener('load', place, { once:true });
+      host.addEventListener('click', () => {
+        host.classList.toggle('zoom');
+        if(host.classList.contains('zoom')) img.style.width = shot.page.w + 'px';
+        else img.style.width = '';
+        requestAnimationFrame(place);
+      });
+    }
+
+    // The sentence the rep's words land inside. Blank for the three fields
+    // that are whole sentences on their own -- there is nothing to wrap.
+    function showPreview(key){
+      const el = wiz.querySelector('[data-wprev="' + key + '"]');
+      const input = wiz.querySelector('[data-wkey="' + key + '"]');
+      const found = wmarkFor(key);
+      if(!el || !input) return;
+      const f = COPY_FIELDS.find((x) => x.key === key);
+      const typed = input.value.trim();
+      if(!found || (!found.mark.before && !found.mark.after)){ el.hidden = true; return; }
+      const words = wfill(typed || f.generic, name);
+      el.hidden = false;
+      el.classList.toggle('gen', !typed);
+      el.innerHTML = (typed ? '' : '<span class="muted">If left empty: </span>') +
+        esc(wfill(found.mark.before, name)) + '<b>' + esc(words) + '</b>' + esc(wfill(found.mark.after, name));
+    }
+
+    function count(key){
+      const input = wiz.querySelector('[data-wkey="' + key + '"]');
+      const out = wiz.querySelector('[data-wcount="' + key + '"]');
+      const f = COPY_FIELDS.find((x) => x.key === key);
+      if(input && out) out.textContent = input.value.length + ' / ' + f.max;
+    }
+
+    function goto(i){
+      step = Math.max(0, Math.min(WORDING_STEPS.length - 1, i));
+      wiz.querySelectorAll('[data-wpane]').forEach((p) => p.classList.toggle('on', +p.dataset.wpane === step));
+      wiz.querySelectorAll('[data-wstep]').forEach((b) => {
+        b.classList.toggle('on', +b.dataset.wstep === step);
+        // A step counts as done once any of its boxes has the rep's own words.
+        const filled = WORDING_STEPS[+b.dataset.wstep].keys
+          .some((k) => { const el = wiz.querySelector('[data-wkey="' + k + '"]'); return el && el.value.trim(); });
+        b.classList.toggle('done', filled && +b.dataset.wstep !== step);
+      });
+      wiz.querySelector('.wpos').textContent = 'Step ' + (step + 1) + ' of ' + WORDING_STEPS.length;
+      wiz.querySelector('[data-wnav="back"]').disabled = step === 0;
+      const next = wiz.querySelector('[data-wnav="next"]');
+      next.textContent = step === WORDING_STEPS.length - 1 ? 'Done' : 'Next';
+      active = WORDING_STEPS[step].keys[0];
+      if(drawn) showShot(active);
+    }
+
+    wiz.querySelectorAll('[data-wstep]').forEach((b) =>
+      b.addEventListener('click', () => goto(+b.dataset.wstep)));
+    wiz.querySelector('[data-wnav="back"]').addEventListener('click', () => goto(step - 1));
+    wiz.querySelector('[data-wnav="next"]').addEventListener('click', () => {
+      if(step < WORDING_STEPS.length - 1) goto(step + 1);
+      else {
+        // On the last step "Done" hands over to whatever is wrapping the
+        // wizard -- the dialog's own Save button, or the add-lead form.
+        const save = (wiz.closest('form') || document).querySelector('#saveWording, [type="submit"]');
+        if(save) save.focus();
+      }
+    });
+
+    wiz.querySelectorAll('[data-wkey]').forEach((input) => {
+      const key = input.dataset.wkey;
+      count(key);
+      input.addEventListener('focus', () => { if(drawn) showShot(key); else firstDrawOnFocus(key); });
+      input.addEventListener('input', () => { showPreview(key); count(key); });
+    });
+
+    wiz.querySelectorAll('[data-wuse]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.wuse;
+        const input = wiz.querySelector('[data-wkey="' + key + '"]');
+        const f = COPY_FIELDS.find((x) => x.key === key);
+        if(!input) return;
+        // Dropped in raw, with {reward} and {name} intact: those are replaced
+        // per dealer at render time, so baking in "$50" here would freeze the
+        // amount for a dealer whose card is not $50.
+        input.value = f.generic;
+        input.focus();
+        showPreview(key); count(key);
+      });
+    });
+
+    WORDING_STEPS.forEach((st) => st.keys.forEach(showPreview));
+    goto(0);
+
+    // No PICTURE is fetched until the wizard is actually on screen. On the
+    // add-a-lead form it sits inside a <details> that starts shut, and most
+    // leads are written down without ever opening it -- a rep on cellular in
+    // someone's driveway should not pay for an image they never look at.
+    // An element inside a closed <details> has no box, so it never
+    // intersects; opening it is what triggers the first draw.
+    // The manifest is about 5KB and carries the sentences that wrap each box
+    // -- the whole point of the rebuild -- so it is fetched straight away and
+    // the previews fill in as soon as it lands. The pictures are about 630KB
+    // between them and wait for firstDraw() below.
+    loadWordingShots().then(() => {
+      if(WSHOTS) WORDING_STEPS.forEach((st) => st.keys.forEach(showPreview));
+      if(drawn) showShot(active);
+    });
+
+    firstDrawOnFocus = (key) => { active = key; firstDraw(); };
+    const firstDraw = () => {
+      if(drawn) return;
+      drawn = true;
+      loadWordingShots().then(() => showShot(active));
+    };
+    if(typeof IntersectionObserver === 'function'){
+      const io = new IntersectionObserver((entries) => {
+        if(entries.some((e) => e.isIntersecting)){ io.disconnect(); firstDraw(); }
+      });
+      io.observe(wiz);
+    } else {
+      firstDraw();
+    }
+  });
 }
 
 // Pulls the boxes back out. A box left empty is simply absent, which is what
@@ -955,6 +1250,13 @@ async function renderLeads(){
       if(el) el.focus();
     }
   }
+
+  // Wired AFTER the boxes above are refilled, not before: the wizard reads
+  // each box to draw its sentence preview, and `keep` puts values back by
+  // assigning .value, which fires no input event. Wiring first left a rep
+  // who had typed wording looking at "If left empty: …" the moment the list
+  // redrew behind them.
+  wireWording($('tab-leads'));
   wireSearch('tab-leads', 'leads');
   form.addEventListener('submit', (e) => { e.preventDefault(); submitLead(form, false); });
   // Pre-filled with the company name and tied to the lead, so a follow-up set
@@ -1126,7 +1428,7 @@ async function wordingDialog(leadId){
     '<h3>What ' + esc(lead.company_name) + '’s customers will read</h3>' +
     '<p class="muted">Their words, in their trade. Leave a box empty and the wording shown inside it is used instead. ' +
     '<b>{reward}</b> becomes their gift card amount, <b>{name}</b> their business name.</p>' +
-    '<form id="wordingForm">' + copyFieldsHtml(lead.copy) +
+    '<form id="wordingForm">' + copyFieldsHtml(lead.copy, lead.company_name) +
       '<div class="actions">' +
         '<button type="button" class="btn secondary" id="cancelDlg">Cancel</button>' +
         '<button class="btn" type="submit" id="saveWording">Save wording</button>' +
@@ -1576,7 +1878,7 @@ async function buildDialog(leadId){
       '<h3 style="font-size:15px;margin:16px 0 2px">What their customers will read</h3>' +
       '<p class="muted" style="margin:2px 0 0">' + esc(wordingSummary(lead.copy)) + '. This is the last point it can be changed before their first invite goes out.</p>' +
       '<details class="wording"' + (copyCount(lead.copy) ? '' : ' open') + '><summary>Their wording</summary>' +
-        copyFieldsHtml(lead.copy) +
+        copyFieldsHtml(lead.copy, lead.company_name) +
       '</details>' +
 
       '<p class="muted" style="margin:14px 0 0">Building it emails ' + esc(lead.contact_name || 'their contact') + ' a link to set their password, and tells the rep it is live.</p>' +

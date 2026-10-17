@@ -347,6 +347,28 @@ Both are bounded (8s, 1.5MB of HTML, a sampled grid rather than every pixel), be
   - `npm run e2e:rep-page` — the page in headless Chromium as Joseph, as the helper, as a rep and as a dealer's login, including dropping a real PNG on a lead and building the dealer from the review screen. 35 checks.
 
 
+## The wording wizard's pictures
+
+`scripts/build-wording-shots.js` regenerates everything the reps page shows beside each wording box.
+
+**Re-run it whenever you change a public page's wording or layout, or add a field to `COPY_FIELDS`:**
+
+```
+node api/scripts/build-wording-shots.js
+```
+
+It writes `assets/wording/*.webp` and `assets/wording/manifest.json`, which are committed to the repo and served as static files. Nothing regenerates them at deploy time, so a change to a public page without a re-run leaves the pictures showing the old layout.
+
+**Why a script rather than a folder of screenshots.** Every rewordable sentence is already wrapped in `<span data-copy="theKey">` so `tenant-branding.js` can swap the words at run time. The script loads the real page, finds those spans, and records three things in the same pass: the page as an image, the box coordinates of each span, and the fixed words on either side of it. Picture and pin come from one DOM, so they cannot drift. Hand-shot screenshots would go stale silently — still plausible-looking, pointing at the wrong line.
+
+The surrounding words are what let the reps page show *"When you ___, you and Sarah will each get a $50 card"* rather than a box labelled "What the friend has to do". Six of the nine fields are sentence fragments, and not being able to see the sentence is what made the old flat form confusing.
+
+**It fails loudly rather than producing a wrong picture.** The run aborts if a `data-copy` span is missing, if one has a zero-size box (almost always a field on a screen that is hidden until something is clicked — `afterPurchase` lives on the post-submit confirmation panel, which is why that shot has a `prep` step), or if any key in `COPY_KEYS` ends up with no picture at all. `rep-page-e2e.js` re-checks the last of those against the committed manifest, so adding a field and forgetting to re-run is caught by the suite rather than by a rep.
+
+**Two fields have no real page.** `shareTitle` and `shareText` are handed to `navigator.share()` and never render anywhere, so the only place a rep can see them is the phone's own share sheet. That one picture is drawn by the script (`shareSheetHtml`) rather than shot from a page.
+
+**The sample business.** Pictures are shot with a stand-in name so a rep showing them to a roofer never sees "50." or shed wording — the generic, trade-neutral `GENERIC_COPY` is applied, not `tenant-branding.js`'s `DEFAULT_COPY`, which is still the original shed wording. In the captured sentences that name is swapped back to a `{name}` token, so the reps page can show the real company in the preview.
+
 ## Stripe safety gate: `assertRealStripeConfigured()`
 
 The Stripe counterpart of the reward worker's `assertRealGiftCardProviderConfigured()` (`src/lib/stripe.js`), with the same stance: it throws — never returns a boolean — and it runs before every action on this path that could create a checkout, charge a card, or unlock a tenant (the checkout endpoint, the usage fee, and the webhook's activation, twice). It refuses:
