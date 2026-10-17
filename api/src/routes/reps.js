@@ -396,6 +396,22 @@ const LEAD_COLUMNS = `l.id, l.company_name, l.contact_name, l.phone, l.email, l.
   l.build_status, l.brand, l.brand_source, l.reward_amount_cents, l.built_at, l.declined_reason,
   l.copy`;
 
+// Whether the data allows a lead to be deleted, with the same test
+// DELETE /rep-leads/:id makes. The page must not work this out for itself: it
+// cannot see rep_earnings, and a page guessing from what it CAN see is exactly
+// how the rep removal dialog came to promise one outcome while the database did
+// another. The caller still applies the admin rule, which it knows reliably.
+//
+// Deliberately NOT part of LEAD_COLUMNS. Three callers reuse that list in a
+// RETURNING clause by stripping the `l.` prefix with a regex, which turns the
+// correlated `e.tenant_id = l.tenant_id` below into `e.tenant_id = tenant_id` —
+// where the unqualified name binds to rep_earnings itself, so the test silently
+// becomes "does any rep_earnings row exist at all". Adding it to the shared list
+// broke creating and editing leads outright.
+const LEAD_CAN_DELETE = `(l.status <> 'won'
+   or l.tenant_id is null
+   or not exists (select 1 from rep_earnings e where e.tenant_id = l.tenant_id)) as can_delete`;
+
 // A rep calling this gets only their own leads — not because of anything
 // here, but because RLS gives them no other rows.
 router.get('/rep-leads', requireAuth, wrap(async (req, res) => {
@@ -404,7 +420,7 @@ router.get('/rep-leads', requireAuth, wrap(async (req, res) => {
   const rows = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { rep: true });
     const { rows } = await client.query(
-      `select ${LEAD_COLUMNS} from rep_leads l ${status ? 'where l.status = $1' : ''} order by l.found_on desc, l.created_at desc limit 500`,
+      `select ${LEAD_COLUMNS}, ${LEAD_CAN_DELETE} from rep_leads l ${status ? 'where l.status = $1' : ''} order by l.found_on desc, l.created_at desc limit 500`,
       status ? [status] : []
     );
     return rows;
@@ -541,9 +557,9 @@ router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
   const id = parseOr400(uuid, req.params.id);
 
   const lead = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId, { rep: true });
+    const ctx = await requirePlatform(client, req.userId, { rep: true });
     const { rows: [l] } = await client.query(
-      `select id, company_name, status, build_status,
+      `select id, company_name, status, build_status, tenant_id,
               coalesce(brought_in_by_rep_id, closed_by_rep_id) as owner_rep_id,
               to_char(found_on, 'YYYY-MM') as found_month
        from rep_leads where id = $1`,
@@ -551,8 +567,41 @@ router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
     );
     // Not theirs, or not there: RLS has already made those the same thing.
     if (!l) throw httpError(404, 'No such lead');
+    // A won lead is normally the record of who closed a dealer, and stays.
+    // What makes it worth keeping is MONEY: once a rep has earned from that
+    // company, the lead is part of how that came about.
+    //
+    // The first version of this tested "has no company attached" instead, as a
+    // proxy for the same thing. That was wrong, and Joseph found it: the three
+    // in-house companies (Good Steward, North Mountain, 50. itself) have
+    // companies that can never be removed, and are billing-exempt so they can
+    // never earn a rep anything either. Their leads would have been stuck for
+    // good, refused with a message telling him to remove a company the system
+    // refuses to remove.
+    //
+    // So the test is the real one. Note what is NOT at risk: rep_earnings and
+    // rep_assignments reference the tenant and the rep, never the lead, so
+    // deleting a lead cannot move a penny or un-credit anyone — a rep whose
+    // dealer has not paid yet is still paid through their assignment. What
+    // goes is the pipeline record of who found and closed them.
+    //
+    // Admin only, deliberately: a rep must not be able to erase the record of
+    // what they closed, or anyone else's.
     if (l.status === 'won') {
-      throw httpError(409, 'That lead was won, so it cannot be deleted — it is the record of who closed them.', 'won_cannot_delete');
+      if (!ctx.is_admin) {
+        throw httpError(403, 'That lead was won, so only the 50. admin can delete it — it is the record of who closed them.', 'won_admin_only');
+      }
+      if (l.tenant_id) {
+        const { rows: [m] } = await client.query(
+          'select exists (select 1 from rep_earnings where tenant_id = $1) as earned',
+          [l.tenant_id]
+        );
+        if (m && m.earned) {
+          throw httpError(409,
+            `${l.company_name} has earned a rep money, so this lead is part of that record and cannot be deleted.`,
+            'won_rep_earned');
+        }
+      }
     }
     const { rows: files } = await client.query('select storage_path from rep_lead_files where lead_id = $1', [id]);
     return { ...l, files };
@@ -560,15 +609,27 @@ router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
 
   await withServiceRole(async (client) => {
     // rep_lead_files cascades on the lead's delete, so the rows go with it.
+    // The same condition again as a WHERE, so the one place that actually
+    // removes the row cannot be reached by a path that skipped the checks.
     await assertRowsAffected(
       client,
-      await client.query(`delete from rep_leads where id = $1 and status <> 'won'`, [id]),
+      await client.query(
+        `delete from rep_leads l
+          where l.id = $1
+            and (l.status <> 'won'
+                 or l.tenant_id is null
+                 or not exists (select 1 from rep_earnings e where e.tenant_id = l.tenant_id))`,
+        [id]
+      ),
       { table: 'rep_leads', id }
     );
     // A bare count survives, so "how many did they lose" still has an answer.
     // Nothing about WHO: a rep, a month, a number. Counted against the month
     // the lead came in, which is where the rest of that month's figures put it.
-    if (lead.owner_rep_id) {
+    //
+    // Not counted for a WON lead: it was not lost, and inflating the lost
+    // column would quietly ruin the conversion rate it exists to compute.
+    if (lead.owner_rep_id && lead.status !== 'won') {
       await client.query(
         `insert into rep_lead_outcomes (rep_id, month, lost_count)
          values ($1, $2, 1)

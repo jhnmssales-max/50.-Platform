@@ -165,6 +165,22 @@ async function main() {
     auth.addUser({ id: u.id, email: u.email, password: PASSWORD });
   }
 
+  // A request as a given signed-in user, for checking what the API refuses.
+  // Separate from the browser: a refusal the page never offers still has to be
+  // refused when it is asked for directly.
+  async function apiAs(user, path, init = {}) {
+    const t = await fetch(`${AUTH_BASE}/auth/v1/token?grant_type=password`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: user.email, password: PASSWORD }),
+    });
+    const { access_token } = await t.json();
+    const res = await fetch(`${API_ORIGIN}/api${path}`, {
+      ...init,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}`, ...(init.headers || {}) },
+    });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  }
+
   const apiLines = [];
   const apiChild = spawn(process.execPath, ['src/server.js'], {
     cwd: API_DIR,
@@ -751,6 +767,103 @@ async function main() {
       return `dialog said "${heading}", database said "${outcome}"`;
     });
 
+    await check('A won lead can be deleted unless a rep earned from its company', async () => {
+      const [alice2] = await sql(`select id from reps where name = 'Alice Rep'`);
+
+      // (a) Won, built, and its company then removed — the state
+      // remove_company leaves behind, and the clutter Joseph could not clear.
+      const [orphan] = await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on, build_status, declined_reason)
+         values ('Gone Company', $1, $1, 'won', current_date, 'declined', 'Company removed') returning id`,
+        [alice2.id]
+      );
+
+      // (b) Won and attached to an IN-HOUSE company. This is the case Joseph
+      // found: Good Steward Structures is billing-exempt, so it can never earn
+      // a rep anything, and it can never be removed either. Testing "has a
+      // company" instead of "a rep earned" left this lead stuck for good.
+      const inHouse = tenants['good-steward-structures'].id;
+      const [exempt] = await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on, tenant_id, build_status, built_at)
+         values ('Good Steward Structures', $1, $1, 'won', current_date, $2, 'built', now()) returning id`,
+        [alice2.id, inHouse]
+      );
+
+      // (c) Won, and a rep has actually earned from that company. This one
+      // stays, whatever else is true of it.
+      const [paidCo] = await sql(
+        `insert into tenants (slug, name, billing_required, billing_status, activation_paid_at, activation_livemode)
+         values ('earned-from-co','Earned From Co', true, 'active', now(), true) returning id`
+      );
+      const [ev] = await sql(
+        `insert into billing_events (tenant_id, event_type, amount_cents, status, livemode, stripe_payment_intent_id)
+         values ($1,'activation_charge',50000,'succeeded',true,'pi_earned_from') returning id`, [paidCo.id]
+      );
+      await sql(
+        `insert into rep_earnings (rep_id, tenant_id, role, kind, amount_cents, source_billing_event_id, earned_at)
+         values ($1, $2, 'closer', 'activation', 5000, $3, now())`,
+        [alice2.id, paidCo.id, ev.id]
+      );
+      const [earnedLead] = await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, closed_by_rep_id, status, closed_on, tenant_id, build_status, built_at)
+         values ('Earned From Co', $1, $1, 'won', current_date, $2, 'built', now()) returning id`,
+        [alice2.id, paidCo.id]
+      );
+
+      // From here on in a try/finally: an assertion that throws must still take
+      // its fixtures with it, or it becomes the reason three later checks fail
+      // — which is exactly what happened twice while writing this.
+      try {
+      await page.click('[data-tab=leads]');
+      await page.waitForFunction(() => document.querySelector('#tab-leads').textContent.includes('Earned From Co'), { timeout: 10000 });
+      await page.waitForLoadState('networkidle').catch(() => {});
+
+      const row = (name) => page.locator('#tab-leads tr', { hasText: name });
+      eq(await row('Gone Company').locator('[data-dellead]').count(), 1, 'no Delete on a won lead whose company is gone');
+      eq(await row('Good Steward Structures').locator('[data-dellead]').count(), 1, 'no Delete on an in-house company\u2019s lead \u2014 it can never be cleared');
+      eq(await row('Earned From Co').locator('[data-dellead]').count(), 0, 'Delete offered on a lead a rep earned from');
+
+      // The API refuses the earned one even when asked directly.
+      const refused = await apiAs(USERS.admin, `/rep-leads/${earnedLead.id}`, { method: 'DELETE' });
+      eq(refused.status, 409, `expected 409, got ${refused.status} ${JSON.stringify(refused.body)}`);
+      assert(/earned a rep money/i.test(refused.body.error || ''), `unhelpful refusal: ${refused.body.error}`);
+
+      // Deleting a won lead is admin-only. Checked as the helper rather than as
+      // a rep: the helper's password is set up by this suite, while a rep's is
+      // chosen through the emailed-link flow, so a token for one is not ours to
+      // mint. The gate being tested is the same one either way.
+      const asHelper = await apiAs(USERS.helper, `/rep-leads/${orphan.id}`, { method: 'DELETE' });
+      eq(asHelper.status, 403, `a non-admin got ${asHelper.status} deleting a won lead`);
+
+      // Deleting the in-house one works from the page, and leaves the company
+      // completely alone — that is what Joseph was worried about.
+      const before = await sql('select lost_count from rep_lead_outcomes where rep_id = $1', [alice2.id]);
+      await row('Good Steward Structures').locator('[data-dellead]').click();
+      await page.waitForSelector('#confirmDelLead', { timeout: 6000 });
+      const text = (await page.textContent('#dlg')).replace(/\s+/g, ' ');
+      assert(/company is not touched/i.test(text), `the dialog does not reassure about the company: ${text.slice(0, 240)}`);
+      assert(/does not count as a lost lead/i.test(text), 'the dialog does not say it is not a loss');
+      await page.click('#confirmDelLead');
+      await page.waitForFunction(
+        () => !document.querySelector('#tab-leads').textContent.includes('Good Steward Structures'),
+        null, { timeout: 10000 }
+      );
+      const [{ leads }] = await sql(`select count(*)::int as leads from rep_leads where id = $1`, [exempt.id]);
+      eq(leads, 0, 'the lead row survived');
+      const [{ co }] = await sql(`select count(*)::int as co from tenants where id = $1`, [inHouse]);
+      eq(co, 1, 'deleting a lead removed its company');
+      const after = await sql('select lost_count from rep_lead_outcomes where rep_id = $1', [alice2.id]);
+      eq((after[0] || {}).lost_count || 0, (before[0] || {}).lost_count || 0, 'a tidy-up was counted against the rep as a lost lead');
+
+      return 'orphan and in-house leads deletable, earned-from refused 409, non-admin refused 403, company untouched';
+      } finally {
+        await sql('delete from rep_leads where id in ($1, $2, $3)', [orphan.id, exempt.id, earnedLead.id]).catch(() => {});
+        await sql('delete from rep_earnings where tenant_id = $1', [paidCo.id]).catch(() => {});
+        await sql('delete from billing_events where tenant_id = $1', [paidCo.id]).catch(() => {});
+        await sql('delete from tenants where id = $1', [paidCo.id]).catch(() => {});
+      }
+    });
+
     await check('An in-house company has no Remove button at all', async () => {
       const gss = page.locator(`tr[data-tenant="${tenants['good-steward-structures'].id}"]`);
       eq(await gss.locator('[data-delco]').count(), 0, 'in-house row offers a Remove button');
@@ -824,12 +937,39 @@ async function main() {
     });
 
     await check('A search survives the list redrawing underneath it, without stealing the cursor', async () => {
+      // A row that must NOT match, so narrowing is observable. Without one,
+      // whatever leads happen to survive earlier checks decide whether this
+      // check can prove anything — and at one matching row it cannot.
+      const [alice3] = await sql(`select id from reps where name = 'Alice Rep'`);
+      const [decoy] = await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, status) values ('Zzz Decoy Fencing', $1, 'open') returning id`,
+        [alice3.id]
+      );
+      try {
       await page.click('[data-tab=leads]');
       await page.waitForSelector('#tab-leads tr[data-search]');
+      // Opening the tab refetches and redraws, and the selector above matches
+      // the rows already in the DOM from the last visit. Typing into a box
+      // that is about to be replaced lands in a node whose input handler has
+      // not been attached yet, so the keystroke filters nothing — harmless in
+      // a browser, where the next keystroke fixes it, but it made this check
+      // pass or fail on timing.
+      await page.waitForLoadState('networkidle').catch(() => {});
+      await page.waitForFunction(() => document.querySelector('#tab-leads').textContent.includes('Zzz Decoy Fencing'), { timeout: 10000 });
       await page.fill('#tab-leads .searchbox', 'acme');
       await page.waitForTimeout(80);
-      const before = await page.$$eval('#tab-leads tbody tr[data-search]', (r) => r.filter((x) => !x.hidden).length);
+      const counted = await page.$$eval('#tab-leads tbody tr[data-search]', (r) => ({
+        shown: r.filter((x) => !x.hidden).length,
+        total: r.length,
+        matching: r.filter((x) => (x.getAttribute('data-search') || '').includes('acme')).length,
+      }));
+      const before = counted.shown;
+      // Deliberately not "before >= 1". That passes when the filter never ran
+      // at all, because then nothing is hidden and every row counts — which is
+      // exactly how a lost keystroke hid here instead of failing.
       assert(before >= 1, 'nothing matched acme to begin with');
+      eq(before, counted.matching, 'the filter is showing rows that do not match');
+      assert(before < counted.total, `typing filtered nothing: ${before} of ${counted.total} rows still shown`);
 
       // Something else redraws the tab entirely.
       await page.evaluate(() => renderLeads());
@@ -842,6 +982,9 @@ async function main() {
       assert(!/searchbox/.test(String(focused)), 'the search box grabbed focus on a redraw');
       await page.fill('#tab-leads .searchbox', '');
       return 'query and filter both survive a redraw; focus is left alone';
+      } finally {
+        await sql('delete from rep_leads where id = $1', [decoy.id]).catch(() => {});
+      }
     });
 
     await check('Signing out clears the session', async () => {
