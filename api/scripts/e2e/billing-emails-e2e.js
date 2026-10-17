@@ -240,6 +240,12 @@ async function main() {
     // ===========================================================================
     section('Activation receipt — sent when the $500 goes through');
     const pay = await makeTenant({ slug: 'payer', receiptSent: false, paidAt: 'null', livemode: false });
+    // Without a renewal date the annual-fee sentence never renders, and the
+    // "$100.00" the check below looks for was being satisfied by the PAYOUT
+    // figure in the old percentage wording instead -- an assertion labelled
+    // "annual fee" passing for an unrelated reason. Set it so the sentence
+    // it claims to check is actually in the email.
+    await sql(`update tenants set renewal_due_at = now() + interval '1 year' where id = $1`, [pay.id]);
     await sql(`update tenants set billing_status = 'pending', activation_livemode = null, stripe_customer_id = null, stripe_payment_method_id = null where id = $1`, [pay.id]);
     let paySessionId;
     await check('Paying on the hosted page with a DIFFERENT email typed in still makes the dealer the Stripe customer; the webhook activates the tenant', async () => {
@@ -261,7 +267,7 @@ async function main() {
       eq(customer.email, 'admin1@payer.example', 'Stripe customer email');
       return `Stripe customer ${customer.id} email = ${customer.email} (not the address typed on the payment page)`;
     });
-    await check('The dealer gets exactly one receipt, from 50., with the amount, card, Stripe receipt link, first-year coverage and the 30% explanation — support on cc', async () => {
+    await check('The dealer gets exactly one receipt, from 50., with the amount, card, Stripe receipt link, first-year coverage and the flat per-referral fee — support on cc', async () => {
       await waitFor(() => sentTo('payer').length >= 1, 'activation receipt email');
       await sleep(300);
       const mine = sentTo('payer');
@@ -276,7 +282,12 @@ async function main() {
       assert(e.TextBody.includes('https://receipts.stripe-stand-in.test/'), 'text body missing the Stripe receipt link');
       assert(e.HtmlBody.includes('https://receipts.stripe-stand-in.test/'), 'html body missing the Stripe receipt link');
       assert(e.TextBody.includes('$100.00'), 'text body missing the annual fee');
-      assert(/30%/.test(e.TextBody), 'text body missing the 30% explanation');
+      // A flat amount per rewarded referral, not a percentage. The dealer
+      // sends their own cards here (charge_card_cost off), so the email must
+      // say so rather than quoting a gift-card payout 50. is not funding.
+      assert(/\$30\.00/.test(e.TextBody), `text body missing the flat per-referral fee: ${e.TextBody}`);
+      assert(!/%/.test(e.TextBody), `the receipt still quotes a percentage: ${e.TextBody}`);
+      assert(/cards themselves are yours to send/.test(e.TextBody), 'receipt does not say who sends the cards');
       assert(!/\bjust\b/i.test(e.TextBody), 'the word "just" appears');
       assert(!e.To.includes('jhnmssales'), 'went to Joseph');
       const rows = await ledger(pay.id, 'activation_receipt');

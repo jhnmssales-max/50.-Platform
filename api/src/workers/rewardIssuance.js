@@ -180,11 +180,15 @@ async function runRewardIssuanceCycle({ now = new Date(), batchSize = 25, dryRun
        where r.closed_at is not null
          and r.reward_eligible_at <= $1
          and r.reward_issued_at is null
+         -- Both event types: 'referral_charge' is this worker's own, and
+         -- 'referral_fee' is what the live path writes when a referral is
+         -- marked paid. Narrowed to one, this batch would pick up every
+         -- referral the live path had already billed.
          and not exists (
            select 1 from billing_events be
            where be.referral_id = r.id
-             and be.event_type = 'referral_charge'
-             and be.status in ('succeeded', 'needs_refund')
+             and be.event_type in ('referral_charge', 'referral_fee')
+             and be.status in ('succeeded', 'needs_refund', 'pending')
          )
        order by r.reward_eligible_at asc
        limit $2`,
@@ -480,8 +484,14 @@ async function fetchReferralBillingInfo(client, referralId, now, { lockForUpdate
        and not exists (
          select 1 from billing_events be
          where be.referral_id = r.id
-           and be.event_type = 'referral_charge'
-           and be.status in ('succeeded', 'needs_refund')
+           -- BOTH billing event types, not only this worker's own. The
+           -- live path (routes/referrals.js -> lib/referralFee.js) writes
+           -- 'referral_fee' when the referral is marked paid. Checking only
+           -- 'referral_charge' here meant that the day a gift-card provider
+           -- was finally connected, this worker would wake up and charge
+           -- again every referral the live path had already billed.
+           and be.event_type in ('referral_charge', 'referral_fee')
+           and be.status in ('succeeded', 'needs_refund', 'pending')
        )
      ${lockForUpdate ? 'for update of r skip locked' : ''}`,
     [referralId, now]
@@ -529,7 +539,10 @@ async function fetchReferralBillingInfo(client, referralId, now, { lockForUpdate
     `select coalesce(sum(amount_cents), 0) as spent
      from billing_events
      where tenant_id = $1
-       and event_type = 'referral_charge'
+       -- Both paths' charges count toward the cap. Counting only this
+       -- worker's own would measure a tenant's spend against half of what
+       -- they were actually charged.
+       and event_type in ('referral_charge', 'referral_fee')
        and status = 'succeeded'
        and created_at >= date_trunc('month', $2::timestamptz)`,
     [row.tenant_id, now]

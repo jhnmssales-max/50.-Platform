@@ -60,7 +60,11 @@ router.get('/me', requireAuth, async (req, res, next) => {
     const { ctx } = result;
     const billingRequired = ctx.billing_required !== false;
     const fee = billingRequired
-      ? computeReferralFee({ rewardAmountCents: ctx.reward_amount_cents, rateBps: ctx.referral_fee_bps })
+      ? computeReferralFee({
+          rewardAmountCents: ctx.reward_amount_cents,
+          feeCents: ctx.referral_fee_cents,
+          chargeCardCost: ctx.charge_card_cost,
+        })
       : null;
 
     res.json({

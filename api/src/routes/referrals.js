@@ -381,7 +381,11 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
     const responseBody = { id: referralId, status: transition.status };
     if (fee) {
       responseBody.fee = {
-        amount_cents: fee.feeCents,
+        // What left the card, and the split: 50.'s flat fee, plus the gift
+        // cards' face value when this dealer is charged for cards 50. buys.
+        amount_cents: fee.chargedCents,
+        fee_cents: fee.feeCents,
+        card_cents: fee.cardCents,
         payout_cents: fee.payoutCents,
         rate_bps: fee.rateBps,
         currency: fee.currency,

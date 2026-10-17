@@ -101,6 +101,7 @@ async function getCallerContext(client, userId, { allowUnactivatedTenant = false
        t.reward_amount_cents, t.reward_currency,
        t.send_from_address, t.send_from_name, t.send_domain_verified,
        t.billing_status, t.activation_fee_cents, t.activation_paid_at,
+       t.referral_fee_cents, t.charge_card_cost, t.reward_fulfillment,
        t.platform_fee_cents, t.per_referral_charge_cents, t.per_card_rate_cents,
        t.monthly_spend_cap_cents, t.payment_method_type,
        t.stripe_customer_id, t.stripe_payment_method_id,

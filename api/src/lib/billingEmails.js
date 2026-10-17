@@ -46,10 +46,6 @@ function formatMonth(period) {
   return `${names[month - 1]} ${year}`;
 }
 
-function formatPercent(bps) {
-  const pct = Number(bps) / 100;
-  return `${Number.isInteger(pct) ? pct : pct.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}%`;
-}
 
 function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
@@ -171,7 +167,8 @@ function buildActivationReceiptEmail({
   annualFeeCents,
   renewalDueAt,
   rewardAmountCents,
-  feeRateBps,
+  referralFeeCents,
+  chargeCardCost,
   paymentMethodType,
   supportEmail: support = supportEmail(),
 }) {
@@ -196,11 +193,21 @@ function buildActivationReceiptEmail({
       : `That ${amount} covers your first 12 months.`,
   });
 
-  const rate = Number(feeRateBps) > 0 ? feeRateBps : null;
-  if (rate && Number(rewardAmountCents) > 0) {
-    const { payoutCents, feeCents } = computeReferralFee({ rewardAmountCents: Number(rewardAmountCents), rateBps: Number(rate) });
+  // A flat amount per rewarded referral, not a percentage. When this dealer
+  // is also charged for gift cards 50. buys, the cards are named separately
+  // so the total on their statement is never an unexplained lump.
+  const perReferral = Number(referralFeeCents) > 0 ? Number(referralFeeCents) : null;
+  if (perReferral) {
+    const { payoutCents, totalCents } = computeReferralFee({
+      rewardAmountCents: Number(rewardAmountCents) || 0,
+      feeCents: perReferral,
+      chargeCardCost: !!chargeCardCost,
+    });
+    const cards = formatMoney(rewardAmountCents, currency);
     blocks.push({
-      p: `There's no monthly fee. When you mark a referral rewarded, 50. charges ${formatPercent(rate)} of the total gift card payout to the ${methodWord(paymentMethodType)} on file — for two ${formatMoney(rewardAmountCents, currency)} gift cards (${formatMoney(payoutCents, currency)}), that's ${formatMoney(feeCents, currency)}. In any month that has rewarded referrals, you'll get one summary email at the start of the next month listing every charge.`,
+      p: chargeCardCost
+        ? `There's no monthly fee. When you mark a referral rewarded, 50. charges the ${methodWord(paymentMethodType)} on file for the two ${cards} gift cards (${formatMoney(payoutCents, currency)}) plus a ${formatMoney(perReferral, currency)} fee — ${formatMoney(totalCents, currency)} in total — and sends the cards out for you. In any month that has rewarded referrals, you'll get one summary email at the start of the next month listing every charge.`
+        : `There's no monthly fee. When you mark a referral rewarded, 50. charges ${formatMoney(perReferral, currency)} to the ${methodWord(paymentMethodType)} on file. The gift cards themselves are yours to send. In any month that has rewarded referrals, you'll get one summary email at the start of the next month listing every charge.`,
     });
   }
   blocks.push({ p: `Questions? Reply to this email or write ${support}.` });
@@ -277,7 +284,8 @@ function buildAnnualSummaryEmail({
   months,
   currency,
   nextRenewalAt,
-  feeRateBps,
+  referralFeeCents,
+  chargeCardCost,
   supportEmail: support = supportEmail(),
 }) {
   const renewalTotal = renewals.reduce((sum, r) => sum + r.amountCents, 0);
@@ -309,8 +317,8 @@ function buildAnnualSummaryEmail({
   if (nextRenewalAt) {
     blocks.push({ p: `Your next annual fee is due ${formatDate(nextRenewalAt)}. We'll email you two weeks before it's charged.` });
   }
-  if (fees.count === 0 && Number(feeRateBps) > 0) {
-    blocks.push({ p: `Your program is ready whenever you are — each rewarded referral is charged only then, at ${formatPercent(feeRateBps)} of the gift card payout.` });
+  if (fees.count === 0 && Number(referralFeeCents) > 0) {
+    blocks.push({ p: `Your program is ready whenever you are — each rewarded referral is charged only then, at ${formatMoney(referralFeeCents, currency)} a time.` });
   }
   blocks.push({ p: `Questions? Reply to this email or write ${support}.` });
   return finish(adminName, `Your ${year} with 50.: ${tenantName}`, blocks);
