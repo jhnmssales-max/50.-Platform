@@ -849,15 +849,25 @@ async function renderLeads(){
       '<td class="num"><button class="btn small secondary" data-wording="' + x.id + '">Wording</button> ' +
         '<button class="btn small secondary" data-files="' + x.id + '">Files</button> ' +
         '<button class="btn small secondary" data-leadfu="' + x.id + '">Follow up</button> ' +
-        (x.status === 'won' ? (x.build_status === 'awaiting_approval' ? '<span class="muted">waiting on Joseph</span>'
-          // can_delete comes from the API, which decides it with the same test
-          // the DELETE route makes: a won lead stays only while a rep has
-          // earned from its company. The page cannot see rep_earnings, so it
-          // must not try to work this out for itself. The admin rule is the
-          // page's own to apply — it knows that reliably.
-          : (state.isAdmin && x.can_delete ? '<button class="btn small danger" data-dellead="' + x.id + '">Delete</button>' : '')) :
+        (x.status === 'won' ? (x.build_status === 'awaiting_approval' ? '<span class="muted">waiting on Joseph</span>' : '') :
         '<button class="btn small" data-win="' + x.id + '">Mark won</button> ' +
-        '<button class="btn small danger" data-lost="' + x.id + '">Lost</button>') + '</td></tr>'
+        '<button class="btn small danger" data-lost="' + x.id + '">Lost</button> ') +
+        // Delete sits on EVERY row for the admin, whatever the status. The
+        // first version put it inside the "won" branch only, so none of
+        // Joseph's four open test leads could ever show one — the button
+        // existed and was unreachable.
+        //
+        // It is not the same thing as Lost. Lost means they said no, and
+        // counts against that rep's conversion rate. Delete means the row
+        // should never have been there, and counts for nothing.
+        //
+        // can_delete comes from the API, which decides it with the same test
+        // the DELETE route makes: a lead stays only while a rep has earned
+        // from its company. The page cannot see rep_earnings, so it must not
+        // try to work this out for itself. The admin rule is the page's own to
+        // apply — it knows that reliably.
+        (state.isAdmin && x.can_delete ? '<button class="btn small danger" data-dellead="' + x.id + '">Delete</button>' : '') +
+        '</td></tr>'
     ).join('') || '<tr data-empty-row><td colspan="7" class="muted" style="padding:18px">No leads yet.</td></tr>') +
     '</tbody></table></div>';
 
@@ -967,8 +977,9 @@ function deleteWonLeadDialog(id){
     (lead.tenant_id
       ? '<p><b>Their company is not touched.</b> Its dashboard, referral program, customers and links all carry on exactly as they are. No rep has earned anything from them, so this row is not part of any money record.</p>'
       : '<p>There is no company on the platform for them \u2014 either it was never built, or it was removed \u2014 and nobody earned anything from them, so there is nothing here to keep.</p>') +
-    '<p class="muted">It does not count as a lost lead against '
-      + esc(repName(lead.closed_by_rep_id) || repName(lead.brought_in_by_rep_id) || 'the rep') + '. It cannot be undone.</p>' +
+    '<p class="muted">This is not the same as <b>Lost</b>: it does not count as a lead '
+      + esc(repName(lead.closed_by_rep_id) || repName(lead.brought_in_by_rep_id) || 'the rep')
+      + ' failed to close. Use Lost for a company that said no. It cannot be undone.</p>' +
     '<div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Keep it</button>' +
     '<button class="btn danger" id="confirmDelLead" type="button">Delete this lead</button></div>'
   );
@@ -977,7 +988,7 @@ function deleteWonLeadDialog(id){
     const btn = $('confirmDelLead');
     btn.disabled = true; btn.textContent = 'Deleting\u2026';
     try{
-      const out = await api('/rep-leads/' + id, { method:'DELETE' });
+      const out = await api('/rep-leads/' + id, { method:'DELETE', body: JSON.stringify({ tidy: true }) });
       closeDialog();
       flash(out.deleted + ' is deleted.', true);
       await renderLeads();

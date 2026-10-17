@@ -767,6 +767,76 @@ async function main() {
       return `dialog said "${heading}", database said "${outcome}"`;
     });
 
+    // The case Joseph hit in production: every lead he wanted gone was OPEN,
+    // and the Delete button was rendered inside the "won" branch only, so it
+    // could never appear on any of them. The button existed and was
+    // unreachable.
+    await check('An OPEN lead has a Delete, and using it is not a lost lead', async () => {
+      const [alice4] = await sql(`select id from reps where name = 'Alice Rep'`);
+      const [open1] = await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, status) values ('Open Test Row', $1, 'open') returning id`,
+        [alice4.id]
+      );
+      const [open2] = await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, status) values ('Said No Co', $1, 'open') returning id`,
+        [alice4.id]
+      );
+      try {
+        await page.click('[data-tab=leads]');
+        await page.waitForFunction(() => document.querySelector('#tab-leads').textContent.includes('Open Test Row'), { timeout: 10000 });
+        await page.waitForLoadState('networkidle').catch(() => {});
+
+        const row = page.locator('#tab-leads tr', { hasText: 'Open Test Row' });
+        // All three live together: an open lead can be won, lost, or removed.
+        eq(await row.locator('[data-dellead]').count(), 1, 'an open lead has no Delete button');
+        eq(await row.locator('[data-lost]').count(), 1, 'an open lead lost its Lost button');
+        eq(await row.locator('[data-win]').count(), 1, 'an open lead lost its Mark won button');
+
+        const lostBefore = Number((await sql('select coalesce(sum(lost_count),0)::int as n from rep_lead_outcomes where rep_id = $1', [alice4.id]))[0].n);
+
+        // Delete says "this should not have been here" and counts for nothing.
+        await row.locator('[data-dellead]').click();
+        await page.waitForSelector('#confirmDelLead', { timeout: 6000 });
+        const text = (await page.textContent('#dlg')).replace(/\s+/g, ' ');
+        assert(/not the same as/i.test(text) && /Lost/.test(text), `the dialog does not distinguish Delete from Lost: ${text.slice(0, 240)}`);
+        await page.click('#confirmDelLead');
+        await page.waitForFunction(
+          () => !document.querySelector('#tab-leads').textContent.includes('Open Test Row'),
+          null, { timeout: 10000 }
+        );
+        const afterDelete = Number((await sql('select coalesce(sum(lost_count),0)::int as n from rep_lead_outcomes where rep_id = $1', [alice4.id]))[0].n);
+        eq(afterDelete, lostBefore, 'a tidy-up was counted against the rep as a lost lead');
+
+        // Lost still means they said no, and still counts. If this stops
+        // working, the conversion rate quietly loses its denominator.
+        await page.locator('#tab-leads tr', { hasText: 'Said No Co' }).locator('[data-lost]').click();
+        await page.waitForSelector('#confirmLost', { timeout: 6000 });
+        await page.click('#confirmLost');
+        await page.waitForFunction(
+          () => !document.querySelector('#tab-leads').textContent.includes('Said No Co'),
+          null, { timeout: 10000 }
+        );
+        const afterLost = Number((await sql('select coalesce(sum(lost_count),0)::int as n from rep_lead_outcomes where rep_id = $1', [alice4.id]))[0].n);
+        eq(afterLost, lostBefore + 1, 'Lost stopped counting against the rep');
+
+        // And a non-admin cannot delete a lead in a way that dodges their own
+        // lost column.
+        const [sneaky] = await sql(
+          `insert into rep_leads (company_name, brought_in_by_rep_id, status) values ('Sneaky Row', $1, 'open') returning id`,
+          [alice4.id]
+        );
+        const asHelper = await apiAs(USERS.helper, `/rep-leads/${sneaky.id}`, {
+          method: 'DELETE', body: JSON.stringify({ tidy: true }),
+        });
+        eq(asHelper.status, 403, `a non-admin got ${asHelper.status} asking for a tidy delete`);
+        await sql('delete from rep_leads where id = $1', [sneaky.id]);
+
+        return `open lead: Delete + Lost + Mark won all present; delete kept lost at ${lostBefore}, Lost raised it to ${afterLost}`;
+      } finally {
+        await sql('delete from rep_leads where id in ($1, $2)', [open1.id, open2.id]).catch(() => {});
+      }
+    });
+
     await check('A won lead can be deleted unless a rep earned from its company', async () => {
       const [alice2] = await sql(`select id from reps where name = 'Alice Rep'`);
 

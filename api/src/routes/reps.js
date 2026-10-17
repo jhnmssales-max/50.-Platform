@@ -553,11 +553,22 @@ router.patch('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
 // other read of this lead — a rep can only reach their own. The delete itself
 // then runs as the service role, because rep_leads grants no DELETE to a
 // signed-in role at all; the authorization already happened a line earlier.
+// `tidy` means "this row should never have been here" rather than "they said
+// no". Both remove the lead; only a loss counts against the rep's conversion
+// rate. The Lost button sends nothing and still counts, exactly as before.
+const leadDeleteBody = z.object({ tidy: z.boolean().optional() });
+
 router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
   const id = parseOr400(uuid, req.params.id);
+  const opts = parseOr400(leadDeleteBody, req.body || {});
 
   const lead = await withUserTransaction(req.userId, async (client) => {
     const ctx = await requirePlatform(client, req.userId, { rep: true });
+    // Admin only: a rep must not be able to delete their own lead in a way
+    // that keeps it out of their lost column.
+    if (opts.tidy && !ctx.is_admin) {
+      throw httpError(403, 'Only the 50. admin can remove a lead without it counting as a lost lead.', 'tidy_admin_only');
+    }
     const { rows: [l] } = await client.query(
       `select id, company_name, status, build_status, tenant_id,
               coalesce(brought_in_by_rep_id, closed_by_rep_id) as owner_rep_id,
@@ -628,8 +639,10 @@ router.delete('/rep-leads/:id', requireAuth, wrap(async (req, res) => {
     // the lead came in, which is where the rest of that month's figures put it.
     //
     // Not counted for a WON lead: it was not lost, and inflating the lost
-    // column would quietly ruin the conversion rate it exists to compute.
-    if (lead.owner_rep_id && lead.status !== 'won') {
+    // column would quietly ruin the conversion rate it exists to compute. Nor
+    // for an admin tidy-up, for the same reason — a test row someone typed is
+    // not a deal anybody failed to close.
+    if (lead.owner_rep_id && lead.status !== 'won' && !opts.tidy) {
       await client.query(
         `insert into rep_lead_outcomes (rep_id, month, lost_count)
          values ($1, $2, 1)
