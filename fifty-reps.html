@@ -213,13 +213,24 @@
   .wstep.done .n{background:var(--ok);color:#fff;}
   .wpane{display:none;padding:14px;gap:16px;}
   .wpane.on{display:flex;align-items:flex-start;}
-  .wshot{flex:0 0 42%;position:sticky;top:0;border:1px solid var(--line);border-radius:9px;background:var(--bg);
-         overflow:auto;max-height:340px;position:relative;}
-  .wshot img{display:block;width:100%;}
-  .wshot.zoom img{width:auto;max-width:none;}
+  /* A FIXED height, not max-height: the picture arrives after the boxes are
+     already on screen, and in the stacked phone layout it sits above them.
+     Sized only by its content, the panel is ~60px of "Loading..." until the
+     image lands and then jumps to full height, shoving every box below it
+     down by about 200px -- which lands a rep's tap on the wrong control.
+     Holding the space from the first paint costs nothing and stops that.
+     position:relative is what the pin below is absolutely placed against. */
+  .wshot{flex:0 0 42%;border:1px solid var(--line);border-radius:9px;background:var(--bg);
+         height:340px;display:flex;flex-direction:column;overflow:hidden;}
+  /* The scrolling half, and what the pin is absolutely placed against. Kept
+     separate from .wshot so the caption below can stay a fixed row rather
+     than floating wherever a short picture happens to end. */
+  .wscroll{flex:1;min-height:0;overflow:auto;position:relative;}
+  .wscroll img{display:block;width:100%;}
+  .wshot.zoom .wscroll img{width:auto;max-width:none;}
   .wshotmsg{margin:0;padding:22px 14px;text-align:center;font-size:12px;color:var(--muted);}
-  .wshotcap{font-size:11px;color:var(--muted);padding:6px 9px;border-top:1px solid var(--line);background:var(--card);
-            position:sticky;bottom:0;display:flex;justify-content:space-between;gap:8px;}
+  .wshotcap{flex:0 0 auto;font-size:11px;color:var(--muted);padding:6px 9px;border-top:1px solid var(--line);
+            background:var(--card);display:flex;justify-content:space-between;gap:8px;}
   .wpin{position:absolute;outline:2px solid var(--accent);background:rgba(201,151,75,.22);border-radius:3px;
         box-shadow:0 0 0 3000px rgba(27,43,51,.26);pointer-events:none;}
   .wfields{flex:1;min-width:0;}
@@ -243,7 +254,7 @@
   .wtitle{display:none;}
   @media(max-width:560px){
     .wpane.on{display:block;}
-    .wshot{position:static;max-height:230px;margin:0 0 12px;}
+    .wshot{height:230px;margin:0 0 12px;}
     .wstep{font-size:0;padding:11px 4px;}
     .wstep .n{font-size:11px;margin:0;width:20px;height:20px;}
     .wstep.on{border-bottom-width:3px;}
@@ -931,27 +942,33 @@ function wireWording(scope){
         return;
       }
       const { shot, mark } = found;
-      host.innerHTML = '<img alt="' + esc(shot.title) + '" src="' + esc(shot.img) + '">' +
-        '<div class="wpin"></div>' +
+      host.innerHTML = '<div class="wscroll"><img alt="' + esc(shot.title) + '" src="' + esc(shot.img) + '">' +
+        '<div class="wpin"></div></div>' +
         '<div class="wshotcap"><span>' + esc(shot.title) + '</span><span>tap to zoom</span></div>';
-      const img = host.querySelector('img');
-      const pin = host.querySelector('.wpin');
+      const scroll = host.querySelector('.wscroll');
+      const img = scroll.querySelector('img');
+      const pin = scroll.querySelector('.wpin');
       const place = () => {
         const scale = img.clientWidth / shot.page.w;
         pin.style.left = (mark.box.x * scale) + 'px';
         pin.style.top = (mark.box.y * scale) + 'px';
         pin.style.width = Math.max(mark.box.w * scale, 6) + 'px';
         pin.style.height = Math.max(mark.box.h * scale, 6) + 'px';
-        host.scrollTop = Math.max(0, (mark.box.y * scale) - (host.clientHeight / 2) + 20);
-        host.scrollLeft = Math.max(0, (mark.box.x * scale) - (host.clientWidth / 2));
+        // Long pages (the terms page is 1500px) open scrolled to the pin
+        // rather than at the top, so the rep is not left hunting for it.
+        scroll.scrollTop = Math.max(0, (mark.box.y * scale) - (scroll.clientHeight / 2) + 20);
+        scroll.scrollLeft = Math.max(0, (mark.box.x * scale) - (scroll.clientWidth / 2));
       };
       if(img.complete) place(); else img.addEventListener('load', place, { once:true });
-      host.addEventListener('click', () => {
+      // onclick, not addEventListener: the host element survives every
+      // showShot while its contents are replaced, so adding a listener would
+      // stack one per picture change and a single tap would toggle zoom
+      // several times over.
+      host.onclick = () => {
         host.classList.toggle('zoom');
-        if(host.classList.contains('zoom')) img.style.width = shot.page.w + 'px';
-        else img.style.width = '';
+        img.style.width = host.classList.contains('zoom') ? shot.page.w + 'px' : '';
         requestAnimationFrame(place);
-      });
+      };
     }
 
     // The sentence the rep's words land inside. Blank for the three fields

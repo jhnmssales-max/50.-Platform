@@ -1274,6 +1274,20 @@ async function main() {
       return `filled with: ${v}`;
     });
 
+    await check('The picture panel holds its space before the picture arrives', async () => {
+      // The picture is fetched only once the wizard is on screen, so it lands
+      // after the boxes are already drawn -- and on a phone it sits ABOVE
+      // them. A panel sized by its content is ~60px of "Loading..." until the
+      // image arrives and then jumps to full height, shoving every box down
+      // by about 200px and landing a rep's tap on the wrong control.
+      await openAddLead(repPage);
+      await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
+      await repPage.waitForSelector('#leadForm .wpane.on .wshot');
+      const h = await repPage.$eval('#leadForm .wpane.on .wshot', (el) => el.getBoundingClientRect().height);
+      assert(h > 150, `the picture panel collapses to ${Math.round(h)}px before the image loads, so the boxes below it will jump when it arrives`);
+      return `panel reserves ${Math.round(h)}px from the first paint`;
+    });
+
     await check('Every wording field has a picture pinning it to a real page', async () => {
       // Guards the seam between api/scripts/build-wording-shots.js and the
       // field list: add a tenth field and forget to re-run the script, and a
