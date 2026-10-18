@@ -313,12 +313,23 @@ router.get('/reports/company', requireAuth, wrap(async (req, res) => {
     });
 
     const sum = (k) => rows.reduce((n, m) => n + m[k], 0);
-    const { rows: [dealers] } = await client.query(
-      `select count(*) filter (where billing_required is true)::int as dealers,
-              count(*) filter (where billing_required is true and activation_paid_at is not null and activation_livemode is true)::int as paid,
-              count(*) filter (where billing_required is false)::int as in_house
-       from tenants`
-    );
+    // Service role, for the same reason the revenue query above needs it:
+    // tenants_select_own shows a signed-in user only the tenant they belong
+    // to, so counting under RLS reported Joseph's own company and nothing
+    // else -- "0 dealers, 0 paid, 1 in-house" on a platform with a paying
+    // dealer and three in-house companies. It read as a quiet year rather
+    // than as a permission problem, which is exactly how this class of bug
+    // hides. The admin check happened above, under RLS, before any of this.
+    const dealers = await withServiceRole(async (sc) => {
+      await assertServiceRoleConnection(sc);
+      const { rows: [counts] } = await sc.query(
+        `select count(*) filter (where billing_required is true)::int as dealers,
+                count(*) filter (where billing_required is true and activation_paid_at is not null and activation_livemode is true)::int as paid,
+                count(*) filter (where billing_required is false)::int as in_house
+         from tenants`
+      );
+      return counts;
+    });
 
     return {
       year,
