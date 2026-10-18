@@ -402,10 +402,23 @@ async function main() {
       assert(e.To.includes('admin1@monthly.example') && e.To.includes('admin2@monthly.example'), `To: ${e.To}`);
       assert(!e.Cc, `Cc on a monthly summary: ${e.Cc}`);
       assert(/September 2026/.test(e.Subject), `Subject: ${e.Subject}`);
-      // 3 succeeded fees in September ($30 + $60 + $30) = $120.00; the failed one and the October one are not on it.
-      assert(e.Subject.includes('$120.00'), `Subject total: ${e.Subject}`);
+      // The subject now leads with the rewards the dealer's customers received,
+      // not with what 50. charged: that is the part a dealer acts on, and the
+      // charge is already taken. 3 succeeded September fees of $30 + $60 + $30
+      // = $120.00 in fees, against 4 x $50 x 2 sides... see below.
+      // The payout total must be in the subject and the fee total must NOT be,
+      // or the reorder silently half-happened.
+      const payoutTotal = '$400.00';
+      assert(e.Subject.includes(payoutTotal), `Subject should name the rewards total: ${e.Subject}`);
+      assert(!e.Subject.includes('$120.00'), `Subject still leads with the fee total: ${e.Subject}`);
+      assert(/rewards went out/.test(e.Subject), `Subject should say what happened: ${e.Subject}`);
       assert(e.TextBody.includes('Pat Referrer') && e.TextBody.includes('Fran Friend') && e.TextBody.includes('Sam Sharer') && e.TextBody.includes('Finn Friend'), 'names missing');
-      assert(e.TextBody.includes('$120.00'), 'total missing');
+      // Both totals belong in the body, and the rewards must come first in it.
+      assert(e.TextBody.includes(payoutTotal), 'rewards total missing from the body');
+      assert(e.TextBody.includes('$120.00'), 'fee total missing from the body');
+      assert(e.TextBody.indexOf(payoutTotal) < e.TextBody.indexOf('$120.00'),
+        'the fee total appears above the rewards -- the body is still money-first');
+      assert(/Already charged/.test(e.TextBody), 'the body no longer says the fees were already charged');
       assert(!/\bjust\b/i.test(e.TextBody), 'the word "just" appears');
       eq(sentTo('quiet').length, 0, 'dealer with no fees was emailed');
       return `"${e.Subject}" -> ${e.To}`;

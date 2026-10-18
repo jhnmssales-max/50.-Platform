@@ -216,9 +216,19 @@ function buildActivationReceiptEmail({
 }
 
 // ---------------------------------------------------------------------------
-// Monthly referral summary
+// Monthly incentive summary
 // ---------------------------------------------------------------------------
-// rows: [{ at, referrerName, friendName, payoutCents, feeCents }], oldest first.
+// Leads with the rewards the dealer's customers received, because that is the
+// part a dealer cares about and the part that proves the program is working.
+// What 50. charged comes last, in a box, as a closing fact rather than the
+// headline -- it is already paid and there is nothing to do about it.
+//
+// rows: [{ at, referrerName, friendName, payoutCents, feeCents }], oldest
+// first. pendingCount is referrals sitting at 'ordered' -- the job closed and
+// the reward has not been marked yet, which is work the dealer owes someone.
+// billingExempt tenants (North Mountain, Good Steward, 50. itself) get the
+// same email with the same sections; their fee lines are genuinely $0 and the
+// wording never claims a charge that never happened.
 function buildReferralStatementEmail({
   tenantName,
   adminName,
@@ -227,46 +237,105 @@ function buildReferralStatementEmail({
   earlierCount = 0,
   currency,
   paymentMethodType,
+  pendingCount = 0,
+  rewardFulfillment = 'dealer',
+  cardNoun = 'gift card',
+  dashboardUrl = null,
+  billingExempt = false,
   supportEmail: support = supportEmail(),
 }) {
   const month = formatMonth(period);
-  const totalCents = rows.reduce((sum, r) => sum + r.feeCents, 0);
-  const total = formatMoney(totalCents, currency);
+  const feeTotalCents = rows.reduce((sum, r) => sum + (r.feeCents || 0), 0);
+  const payoutTotalCents = rows.reduce((sum, r) => sum + (r.payoutCents || 0), 0);
+  const feeTotal = formatMoney(feeTotalCents, currency);
+  const payoutTotal = formatMoney(payoutTotalCents, currency);
+  const noun = String(cardNoun || 'gift card').trim() || 'gift card';
+  const weSend = rewardFulfillment === 'platform';
+  const cardsPlural = `${noun}s`;
 
-  const describe = (r) => {
-    const who = r.referrerName && r.friendName ? `${r.referrerName} referred ${r.friendName}` : r.friendName ? `Referral from ${r.friendName}` : 'Referral';
-    return { who, sub: `${formatMoney(r.payoutCents, currency)} in gift cards` };
-  };
+  const blocks = [];
 
-  const blocks = [
-    {
+  // 1. The incentives, first.
+  if (rows.length) {
+    blocks.push({
       p:
-        `Here's what 50. charged to the ${methodWord(paymentMethodType)} on file for ${tenantName} when you marked referrals rewarded in ${month}.` +
-        // A bank debit that cleared after its month's summary went out (or a
-        // charge from before these summaries began) is listed here, once.
-        (earlierCount > 0 ? ` It also includes ${plural(earlierCount, 'charge', 'charges')} from earlier that hadn't been on a summary yet.` : ''),
-    },
-    {
+        `${plural(rows.length, 'customer', 'customers')} of ${tenantName} earned a reward in ${month}` +
+        `, and so did the ${rows.length === 1 ? 'friend they' : 'friends they'} referred` +
+        ` \u2014 ${payoutTotal} in ${cardsPlural} altogether.`,
+    });
+    blocks.push({
       table: {
-        head: ['Date', 'Referral', '50. fee'],
+        head: ['Date', 'Who earned it', 'Reward'],
         rows: rows.map((r) => {
-          const d = describe(r);
+          const who = r.referrerName && r.friendName
+            ? `${r.referrerName} referred ${r.friendName}`
+            : r.friendName ? `Referral from ${r.friendName}` : 'Referral';
+          const each = formatMoney(Math.round((r.payoutCents || 0) / 2), currency);
           return [
             formatShortDate(r.at),
             {
-              html: `${escapeHtml(d.who)}<br><span style="font-size:12px;color:#6B6A63;">${escapeHtml(d.sub)}</span>`,
-              text: `${d.who} (${d.sub})`,
+              html: `${escapeHtml(who)}<br><span style="font-size:12px;color:#6B6A63;">${escapeHtml(`${each} each`)}</span>`,
+              text: `${who} (${each} each)`,
             },
-            formatMoney(r.feeCents, currency),
+            formatMoney(r.payoutCents, currency),
           ];
         }),
-        foot: ['Total', plural(rows.length, 'referral', 'referrals'), total],
+        foot: ['Total', plural(rows.length, 'referral', 'referrals'), payoutTotal],
       },
-    },
-    { p: `That total has already been charged — there's nothing to pay. This is the only email you'll get for these charges: 50. sends one summary a month, and only for months with rewarded referrals.` },
-    { p: `Questions? Reply to this email or write ${support}.` },
-  ];
-  return finish(adminName, `Your 50. referral summary for ${month}: ${total} charged`, blocks);
+    });
+    blocks.push({
+      p: weSend
+        ? `We emailed ${rows.length === 1 ? 'both cards' : 'every card'} the day you marked the referral rewarded, so there is nothing for you to send.`
+        : `You send ${cardsPlural} for these yourself \u2014 50. does not send them on your behalf.`,
+    });
+  } else {
+    blocks.push({ p: `No rewards went out for ${tenantName} in ${month}.` });
+  }
+
+  // 2. What is still waiting on them. The only part of this email that asks
+  //    for anything, so it sits on its own and names the number plainly.
+  if (pendingCount > 0) {
+    blocks.push({
+      p:
+        `${plural(pendingCount, 'referral', 'referrals')} ${pendingCount === 1 ? 'is' : 'are'} waiting on you` +
+        ` \u2014 the job closed and the reward has not been marked yet. Nobody is paid until you mark it.`,
+    });
+    if (dashboardUrl) blocks.push({ link: { text: 'Mark them in your dashboard', url: dashboardUrl } });
+  }
+
+  // 3. The money, last.
+  if (!billingExempt && rows.length) {
+    blocks.push({
+      box: [
+        [plural(rows.length, 'referral fee', 'referral fees'), feeTotal],
+        ['Already charged', `to the ${methodWord(paymentMethodType)} on file`],
+      ],
+    });
+    blocks.push({
+      p:
+        `There is nothing to pay \u2014 that total was charged as each referral was marked.` +
+        (earlierCount > 0 ? ` It includes ${plural(earlierCount, 'charge', 'charges')} from earlier that had not been on a summary yet.` : ''),
+    });
+  } else if (billingExempt) {
+    blocks.push({
+      box: [
+        [plural(Math.max(rows.length, 1), 'referral fee', 'referral fees'), formatMoney(0, currency)],
+        ['Why', 'this is one of your own companies'],
+      ],
+    });
+  }
+
+  blocks.push({ p: `Questions? Reply to this email or write ${support}.` });
+
+  // The subject names whichever of the two the dealer should act on. An email
+  // whose only content is "3 referrals are waiting on you" must not arrive
+  // calling itself a summary -- that is how it gets left unopened.
+  const subject = rows.length
+    ? `${tenantName}: ${payoutTotal} in rewards went out in ${month}`
+    : pendingCount > 0
+      ? `${plural(pendingCount, 'referral', 'referrals')} waiting on you at ${tenantName}`
+      : `${tenantName}: your ${month} referral summary`;
+  return finish(adminName, subject, blocks);
 }
 
 // ---------------------------------------------------------------------------
