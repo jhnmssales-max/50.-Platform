@@ -190,6 +190,10 @@
   }
   .notice{background:var(--warn-bg);border:1px solid #E8D79C;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:14px;}
   .neg{color:var(--danger);}
+  /* A figure worth noticing without being an error: a dealer gone quiet, a
+     renewal coming up, a missing card. Weight as well as colour, so it does
+     not rely on colour alone to carry the point. */
+  .warn{color:#8A5A00;font-weight:bold;}
   dialog{border:0;border-radius:14px;padding:22px;max-width:560px;width:calc(100% - 32px);box-shadow:0 20px 60px rgba(0,0,0,.35);}
   dialog.wide{max-width:900px;}
   dialog::backdrop{background:rgba(0,0,0,.45);}
@@ -379,6 +383,25 @@ function plainDate(ymd){ if(!ymd) return ''; const [y,m,d] = String(ymd).slice(0
 function monthLabel(ym){ const [y,m] = ym.split('-').map(Number); return new Date(Date.UTC(y, m-1, 1)).toLocaleDateString('en-US', { month:'long', year:'numeric', timeZone:'UTC' }); }
 function flash(text, ok){ const el = $('appMsg'); el.textContent = text; el.className = 'msg show ' + (ok ? 'okmsg' : 'err'); if(ok) setTimeout(() => { el.className = 'msg'; }, 3500); window.scrollTo({ top: 0, behavior: 'smooth' }); }
 function clearFlash(){ $('appMsg').className = 'msg'; }
+// "how long ago", in the units a person actually uses. Eastern, like every
+// other date on this page.
+function daysSince(iso){
+  if(!iso) return null;
+  const then = new Date(iso);
+  if(isNaN(then)) return null;
+  const a = new Date(todayYmd() + 'T00:00:00Z');
+  const b = new Date(String(iso).slice(0,10) + 'T00:00:00Z');
+  return Math.max(0, Math.round((a - b) / 86400000));
+}
+function agoText(iso){
+  const d = daysSince(iso);
+  if(d === null) return '';
+  if(d === 0) return 'today';
+  if(d === 1) return 'yesterday';
+  if(d < 31) return d + ' days ago';
+  const m = Math.round(d / 30.44);
+  return m <= 1 ? 'about a month ago' : m + ' months ago';
+}
 // Wraps a click handler so the button is disabled while it runs. Without this
 // an impatient second tap on a slow connection sends the request twice --
 // which for "reverse this earning" or "delete this payment" means doing it
@@ -1396,7 +1419,16 @@ async function renderLeads(){
         '<div class="muted">Wording: ' + esc(wordingSummary(x.copy)) + '</div></td>' +
       '<td>' + esc(x.contact_name || '') + '<div class="muted">' + esc([x.phone, x.email].filter(Boolean).join(' · ')) + '</div></td>' +
       (state.isRep ? '' : '<td' + (repName(x.brought_in_by_rep_id) ? '' : ' class="nomob"') + '>' + esc(repName(x.brought_in_by_rep_id) || '—') + '</td>') +
-      '<td>' + esc(plainDate(x.found_on)) + '</td>' +
+      // A bare date makes you do the arithmetic. The age is the thing you
+      // actually want: an open lead sitting 47 days is the one to chase, and
+      // past 30 it says so in its own right. Only open leads -- a won or
+      // lost lead's age is history, not a prompt.
+      '<td>' + esc(plainDate(x.found_on)) +
+        (x.status === 'open' && daysSince(x.found_on) !== null
+          ? '<div class="muted" style="font-size:12px"><span' +
+            (daysSince(x.found_on) >= 30 ? ' class="warn"' : '') + '>open ' +
+            daysSince(x.found_on) + ' day' + (daysSince(x.found_on) === 1 ? '' : 's') + '</span></div>'
+          : '') + '</td>' +
       '<td><span class="pill ' + x.status + '">' + x.status + '</span></td>' +
       (state.isRep ? '' : '<td' + (x.status === 'won' ? '' : ' class="nomob"') + '>' + (x.status === 'won' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>') +
       '<td class="num"><button class="btn small secondary" data-wording="' + x.id + '">Wording</button> ' +
@@ -1816,6 +1848,35 @@ function repDialog(id){
 }
 
 /* ---------- Dealers ---------- */
+// One line under a company's name: when it last had a referral, and how much
+// has gone out and come back. Tinted when it has gone quiet, because the
+// whole point is to see that without opening fourteen reports one at a time.
+function dealerActivityHtml(x){
+  const bits = [];
+  const since = daysSince(x.last_referral_at);
+  if(x.last_referral_at){
+    const quiet = since !== null && since >= 60;
+    bits.push('<span' + (quiet ? ' class="warn"' : '') + '>Last referral ' + esc(agoText(x.last_referral_at)) + '</span>');
+  } else if(x.invites_total > 0){
+    bits.push('<span class="warn">No referrals yet</span>');
+  } else {
+    bits.push('<span class="warn">No invites sent yet</span>');
+  }
+  if(x.invites_total || x.referrals_total){
+    bits.push(x.invites_total + ' invited \u00b7 ' + x.referrals_total + ' referred');
+  }
+  // Admin only: whether the automatic yearly charge has a card to take.
+  if(x.renewal_due_at){
+    const d = daysSince(x.renewal_due_at);
+    const soon = d !== null && d >= -30;
+    bits.push('<span' + (soon ? ' class="warn"' : '') + '>Renews ' + esc(plainDate(String(x.renewal_due_at).slice(0,10))) + '</span>');
+  }
+  if(x.has_card === false && !x.billing_exempt){
+    bits.push('<span class="warn">No card on file</span>');
+  }
+  return '<div class="muted" style="font-size:12px">' + bits.join(' \u00b7 ') + '</div>';
+}
+
 async function renderDealers(){
   const d = await api('/rep-dealers' + (state.showClosed ? '?closed=1' : ''));
   state.dealers = d.dealers;
@@ -1853,7 +1914,12 @@ async function renderDealers(){
         (state.isRep ? '<b>' + esc(x.name) + '</b>'
           : '<button type="button" class="linkish" data-company="' + x.tenant_id + '">' + esc(x.name) + '</button>') +
         (x.billing_exempt ? '<div class="muted">In-house \u00b7 no fees</div>' : '') +
-        (x.closed_at ? '<div class="muted">Closed ' + esc(plainDate(String(x.closed_at).slice(0,10))) + '</div>' : '') + '</td>' +
+        (x.closed_at ? '<div class="muted">Closed ' + esc(plainDate(String(x.closed_at).slice(0,10))) + '</div>' : '') +
+        // The question this tab could not answer: is this dealer still
+        // working the program? Every figure here was already collected and
+        // shown nowhere, so a dealer who stopped months ago looked identical
+        // to one referring every week.
+        (x.closed_at ? '' : dealerActivityHtml(x)) + '</td>' +
       // An in-house company never pays the $500, so "not yet" would read as a
       // dealer who is overdue rather than one who was never billed.
       '<td>' + (x.billing_exempt ? '<span class="muted">\u2014</span>'

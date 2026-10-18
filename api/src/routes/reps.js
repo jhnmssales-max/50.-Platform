@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
-const { withUserTransaction, withServiceRole, assertRowsAffected, getCallerContext } = require('../db');
+const { withUserTransaction, withServiceRole, assertRowsAffected, assertServiceRoleConnection, getCallerContext } = require('../db');
 const supabaseAdmin = require('../lib/supabaseAdmin');
 const storage = require('../lib/supabaseStorage');
 const brandGuess = require('../lib/brandGuess');
@@ -945,11 +945,41 @@ router.get('/rep-dealers', requireAuth, wrap(async (req, res) => {
   // Closed companies are left out unless asked for, and the function itself
   // refuses to hand one to a rep however this is called.
   const includeClosed = req.query.closed === '1' || req.query.closed === 'true';
-  const rows = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId, { rep: true });
+  const { rows, isAdmin } = await withUserTransaction(req.userId, async (client) => {
+    const ctx = await requirePlatform(client, req.userId, { rep: true });
     const { rows } = await client.query('select * from rep_dealer_list($1)', [includeClosed]);
-    return rows;
+    return { rows, isAdmin: !!ctx.is_admin };
   });
+
+  // Activity per company, for the one question the Companies tab could not
+  // answer: is this dealer still working the program, or did it go quiet?
+  // Everything here was already being collected and shown nowhere, so
+  // answering it needed no new data -- only a read.
+  //
+  // Under the service role, because referrals and referral_links are scoped
+  // to each dealer's own tenant: counting them as Joseph returns his own
+  // rows and nothing else. Keyed to the tenant ids rep_dealer_list already
+  // decided this caller may see, so this adds no new door -- a rep still
+  // only gets their own dealers. The permission check above ran under RLS
+  // first.
+  const ids = rows.map((d) => d.tenant_id);
+  const activity = ids.length ? await withServiceRole(async (sc) => {
+    await assertServiceRoleConnection(sc);
+    const { rows: a } = await sc.query(
+      `select t.id as tenant_id,
+              (select max(r.submitted_at) from referrals r where r.tenant_id = t.id) as last_referral_at,
+              (select count(*)::int from referrals r where r.tenant_id = t.id) as referrals_total,
+              (select count(*)::int from referral_links l
+                where l.tenant_id = t.id and l.kind = 'invite') as invites_total,
+              t.renewal_due_at,
+              (t.stripe_payment_method_id is not null) as has_card
+         from tenants t
+        where t.id = any($1::uuid[])`,
+      [ids]
+    );
+    return new Map(a.map((r) => [r.tenant_id, r]));
+  }) : new Map();
+
   res.json({
     dealers: rows.map((d) => ({
       tenant_id: d.tenant_id,
@@ -964,6 +994,17 @@ router.get('/rep-dealers', requireAuth, wrap(async (req, res) => {
       // pay no setup, renewal or 30% fee. Staff see them; a rep never does.
       billing_exempt: d.billing_exempt === true,
       closed_at: d.closed_at || null,
+      // Activity: who is still being invited and still referring.
+      last_referral_at: (activity.get(d.tenant_id) || {}).last_referral_at || null,
+      referrals_total: (activity.get(d.tenant_id) || {}).referrals_total || 0,
+      invites_total: (activity.get(d.tenant_id) || {}).invites_total || 0,
+      // The renewal date and whether a card is on file decide whether the
+      // automatic yearly charge will succeed or fail silently, so they are
+      // the admin's alone -- the helper sees no billing state.
+      ...(isAdmin ? {
+        renewal_due_at: (activity.get(d.tenant_id) || {}).renewal_due_at || null,
+        has_card: (activity.get(d.tenant_id) || {}).has_card === true,
+      } : {}),
     })),
   });
 }));
