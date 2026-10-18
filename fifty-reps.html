@@ -135,6 +135,11 @@
       border-radius:12px;padding:12px 14px;margin:0 0 10px;}
     tbody tr > td{display:block;border:0;padding:2px 0;}
     tbody tr > td:empty{display:none;}
+    /* `display:block` above is an author rule, so it beats the browser's
+       built-in [hidden]{display:none} -- which meant search set tr.hidden on
+       a phone and every row stayed on screen while the counter read "3 of
+       412". It worked on desktop, which is why it survived this long. */
+    tbody tr[hidden]{display:none!important;}
     td.num{text-align:left;}
     /* The actions cell: a wrapped row of buttons under a hairline, and never
        sticky — there is nothing to stick to once the row is a card. */
@@ -374,6 +379,38 @@ function plainDate(ymd){ if(!ymd) return ''; const [y,m,d] = String(ymd).slice(0
 function monthLabel(ym){ const [y,m] = ym.split('-').map(Number); return new Date(Date.UTC(y, m-1, 1)).toLocaleDateString('en-US', { month:'long', year:'numeric', timeZone:'UTC' }); }
 function flash(text, ok){ const el = $('appMsg'); el.textContent = text; el.className = 'msg show ' + (ok ? 'okmsg' : 'err'); if(ok) setTimeout(() => { el.className = 'msg'; }, 3500); window.scrollTo({ top: 0, behavior: 'smooth' }); }
 function clearFlash(){ $('appMsg').className = 'msg'; }
+// Wraps a click handler so the button is disabled while it runs. Without this
+// an impatient second tap on a slow connection sends the request twice --
+// which for "reverse this earning" or "delete this payment" means doing it
+// twice to what a rep is owed. Re-enables in a finally so a thrown error
+// leaves a usable button behind.
+function once(btn, fn){
+  return async (ev) => {
+    if(btn.disabled) return;
+    btn.disabled = true;
+    try{ await fn(ev); }
+    finally{ btn.disabled = false; }
+  };
+}
+// An error raised while a dialog is open used to go through flash(), which
+// writes into the page BEHIND the modal backdrop and scrolls there -- so the
+// dialog closed, everything typed was lost, and the reason appeared somewhere
+// the person could not see. This keeps the dialog open and puts the reason in
+// it. Falls back to flash() when no dialog is open.
+function dialogError(text){
+  const d = $('dlg');
+  if(!d || !d.open){ flash(text); return; }
+  let el = d.querySelector('[data-dlg-msg]');
+  if(!el){
+    el = document.createElement('div');
+    el.setAttribute('data-dlg-msg', '');
+    el.setAttribute('role', 'alert');
+    d.insertBefore(el, d.firstChild);
+  }
+  el.className = 'msg err show';
+  el.textContent = text;
+  el.scrollIntoView({ block: 'nearest' });
+}
 function repName(id){ const r = state.reps.find((x) => x.id === id); return r ? r.name : ''; }
 function repOptions(selected, { blank = '— none —', activeOnly = false } = {}){
   const list = state.reps.filter((r) => !activeOnly || r.active || r.id === selected);
@@ -1536,12 +1573,12 @@ function winLeadDialog(id){
       '<button class="btn" id="confirmWin" type="button">Yes, they said yes</button></div>'
     );
     $('cancelDlg').addEventListener('click', closeDialog);
-    $('confirmWin').addEventListener('click', async () => {
+    $('confirmWin').addEventListener('click', once($('confirmWin'), async () => {
       try{
         await post('/rep-leads/' + id + '/win', {});
         closeDialog(); flash('Marked won. Joseph builds their dashboard from here.', true); await renderLeads();
-      }catch(err){ flash(err.message); closeDialog(); }
-    });
+      }catch(err){ dialogError(err.message); }
+    }));
     return;
   }
   openDialog(
@@ -1561,7 +1598,7 @@ function winLeadDialog(id){
     try{
       await post('/rep-leads/' + id + '/win', { closed_by_rep_id: d.closed_by_rep_id, onboarded_by_rep_id: d.onboarded_by_rep_id || null, tenant_id: d.tenant_id || null });
       closeDialog(); flash('Marked won.', true); await loadReps(); await renderLeads();
-    }catch(err){ flash(err.message); closeDialog(); }
+    }catch(err){ dialogError(err.message); }
   });
 }
 
@@ -1761,7 +1798,7 @@ function repDialog(id){
       if(id) await patch('/reps/' + id, { name: d.name, phone: d.phone, email: d.email, notes: d.notes });
       else await post('/reps', { name: d.name, phone: d.phone, email: d.email, notes: d.notes });
       closeDialog(); flash('Saved.', true); await renderReps();
-    }catch(err){ flash(err.message); closeDialog(); }
+    }catch(err){ dialogError(err.message); }
   });
   if(id) $('toggleActive').addEventListener('click', async () => {
     try{
@@ -1774,7 +1811,7 @@ function repDialog(id){
         $('cancelDlg').addEventListener('click', closeDialog);
         $('goDealers').addEventListener('click', () => { closeDialog(); showTab('dealers'); });
       } else flash(r.active ? 'Marked inactive.' : 'Marked active.', true);
-    }catch(err){ flash(err.message); closeDialog(); }
+    }catch(err){ dialogError(err.message); }
   });
 }
 
@@ -2679,7 +2716,7 @@ function expenseDialog(id){
     try{
       if(id) await patch('/reports/expenses/' + id, body); else await post('/reports/expenses', body);
       closeDialog(); flash('Saved.', true); await renderCompany(state.company.year);
-    }catch(err){ flash(err.message); closeDialog(); }
+    }catch(err){ dialogError(err.message); }
   });
 }
 
@@ -2795,7 +2832,7 @@ function payDialog(repId, suggestedCents){
     try{
       await post('/reps/' + repId + '/payouts', { amount_cents: Math.round(Number(d.amount) * 100), paid_on: d.paid_on, period: d.period || null, method: d.method || null, note: d.note || null });
       closeDialog(); flash('Payment recorded.', true); await renderMoney();
-    }catch(err){ flash(err.message); closeDialog(); }
+    }catch(err){ dialogError(err.message); }
   });
 }
 
@@ -2836,15 +2873,15 @@ async function statementDialog(repId){
   $('cancelDlg').addEventListener('click', closeDialog);
   $('printStmt').addEventListener('click', () => window.print());
   $('payFromStmt').addEventListener('click', () => { closeDialog(); payDialog(repId, s.closing_cents > 0 ? s.closing_cents : 0); });
-  $('dlg').querySelectorAll('[data-rev]').forEach((b) => b.addEventListener('click', async () => {
+  $('dlg').querySelectorAll('[data-rev]').forEach((b) => b.addEventListener('click', once(b, async () => {
     const note = window.prompt('Reverse this earning? Add a short reason (for example "refunded in Stripe"):', '');
     if(note === null) return;
-    try{ await post('/rep-earnings/' + b.dataset.rev + '/reverse', { note }); closeDialog(); flash('Reversed.', true); await renderMoney(); statementDialog(repId); }catch(err){ flash(err.message); }
-  }));
-  $('dlg').querySelectorAll('[data-delpay]').forEach((b) => b.addEventListener('click', async () => {
+    try{ await post('/rep-earnings/' + b.dataset.rev + '/reverse', { note }); closeDialog(); flash('Reversed.', true); await renderMoney(); statementDialog(repId); }catch(err){ dialogError(err.message); }
+  })));
+  $('dlg').querySelectorAll('[data-delpay]').forEach((b) => b.addEventListener('click', once(b, async () => {
     if(!window.confirm('Delete this payment record? What you owe goes back up by that amount.')) return;
-    try{ await api('/rep-payouts/' + b.dataset.delpay, { method:'DELETE' }); closeDialog(); flash('Payment deleted.', true); await renderMoney(); statementDialog(repId); }catch(err){ flash(err.message); }
-  }));
+    try{ await api('/rep-payouts/' + b.dataset.delpay, { method:'DELETE' }); closeDialog(); flash('Payment deleted.', true); await renderMoney(); statementDialog(repId); }catch(err){ dialogError(err.message); }
+  })));
 }
 
 /* ---------- boot ---------- */
