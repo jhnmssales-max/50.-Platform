@@ -204,11 +204,23 @@ router.get('/reports/rep/:id', requireAuth, wrap(async (req, res) => {
 // The whole company's year
 // ---------------------------------------------------------------------------
 router.get('/reports/company', requireAuth, wrap(async (req, res) => {
-  const out = await withUserTransaction(req.userId, async (client) => {
+  // ONE pooled connection at a time. This handler used to hold the
+  // user-transaction connection for its entire life and then ask the same
+  // pool for a second one inside it. The pool is pg's default of 10, so ten
+  // concurrent loads of this page held all ten and each waited for an
+  // eleventh that could never arrive -- and with no connectionTimeoutMillis
+  // set, waiting forever rather than erroring. /reports/tenant/:id already
+  // had the right shape: check permission, let that transaction commit, then
+  // do the reads. This now matches it.
+  const year = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { admin: true });
-    const year = yearParam(req.query.year, await currentYear(client));
-    const months = emptyMonths(year);
-    const bounds = [`${year}-01-01`, `${year + 1}-01-01`];
+    return yearParam(req.query.year, await currentYear(client));
+  });
+  const months = emptyMonths(year);
+  const bounds = [`${year}-01-01`, `${year + 1}-01-01`];
+
+  const out = await withServiceRole(async (sc) => {
+    await assertServiceRoleConnection(sc);
 
     // Money in: only what actually cleared, and only for real. A test-mode
     // charge is not revenue.
@@ -218,9 +230,7 @@ router.get('/reports/company', requireAuth, wrap(async (req, res) => {
     // the 50. admin sees 50.'s own rows and nothing else — which is not an
     // error, just an empty revenue line that looks like a quiet year. The
     // admin check happened a few lines up, under RLS, before any of this.
-    const revenue = await withServiceRole(async (sc) => {
-      await assertServiceRoleConnection(sc);
-      const { rows } = await sc.query(
+    const { rows: revenue } = await sc.query(
       `select to_char(created_at at time zone '${BILLING_TIME_ZONE}', 'YYYY-MM') as month,
               coalesce(sum(amount_cents) filter (where event_type = 'activation_charge'), 0)::int as activation_cents,
               coalesce(sum(amount_cents) filter (where event_type = 'annual_renewal'), 0)::int as renewal_cents,
@@ -238,13 +248,11 @@ router.get('/reports/company', requireAuth, wrap(async (req, res) => {
          and (created_at at time zone '${BILLING_TIME_ZONE}') >= $1::date
          and (created_at at time zone '${BILLING_TIME_ZONE}') < $2::date
        group by 1`,
-        bounds
-      );
-      return rows;
-    });
+      bounds
+    );
 
     // What the reps earned, which is a cost whether or not it has been paid yet.
-    const { rows: repCost } = await client.query(
+    const { rows: repCost } = await sc.query(
       `select to_char(earned_at at time zone '${BILLING_TIME_ZONE}', 'YYYY-MM') as month,
               coalesce(sum(amount_cents), 0)::int as rep_cost_cents
        from rep_earnings
@@ -255,17 +263,17 @@ router.get('/reports/company', requireAuth, wrap(async (req, res) => {
     );
 
     // Leads in and companies closed, the shape of the pipeline over the year.
-    const { rows: pipeline } = await client.query(
+    const { rows: pipeline } = await sc.query(
       `select to_char(found_on, 'YYYY-MM') as month, count(*)::int as leads
        from rep_leads where found_on >= $1::date and found_on < $2::date group by 1`,
       bounds
     );
-    const { rows: closed } = await client.query(
+    const { rows: closed } = await sc.query(
       `select to_char(closed_on, 'YYYY-MM') as month, count(*)::int as closed
        from rep_leads where status = 'won' and closed_on >= $1::date and closed_on < $2::date group by 1`,
       bounds
     );
-    const { rows: built } = await client.query(
+    const { rows: built } = await sc.query(
       `select to_char(built_at at time zone '${BILLING_TIME_ZONE}', 'YYYY-MM') as month, count(*)::int as built
        from rep_leads
        where build_status = 'built'
@@ -275,12 +283,12 @@ router.get('/reports/company', requireAuth, wrap(async (req, res) => {
       bounds
     );
 
-    const { rows: expenseRows } = await client.query(
+    const { rows: expenseRows } = await sc.query(
       `select id, name, category, amount_cents, recurrence,
               started_on::text as started_on, ended_on::text as ended_on, notes
        from platform_expenses order by category, name`
     );
-    const { rows: [fees] } = await client.query('select card_fee_bps, card_fee_fixed_cents from platform_finance_settings');
+    const { rows: [fees] } = await sc.query('select card_fee_bps, card_fee_fixed_cents from platform_finance_settings');
 
     const base = fill(months, [...revenue, ...repCost, ...pipeline, ...closed, ...built].reduce((acc, row) => {
       const at = acc.find((x) => x.month === row.month);
@@ -325,15 +333,13 @@ router.get('/reports/company', requireAuth, wrap(async (req, res) => {
     // dealer and three in-house companies. It read as a quiet year rather
     // than as a permission problem, which is exactly how this class of bug
     // hides. The admin check happened above, under RLS, before any of this.
-    const dealers = await withServiceRole(async (sc) => {
-      await assertServiceRoleConnection(sc);
-      // Closed companies are excluded from the three live counts and given
+    // Closed companies are excluded from the three live counts and given
       // their own, so this tile agrees with the Companies tab -- which hides
       // closed ones unless you ask (rep_dealer_list's p_include_closed).
       // Before, a dealer who was built, never paid and then closed was still
       // counted as a dealer here while being invisible two tabs over, and
       // the only way to notice was that the two numbers disagreed.
-      const { rows: [counts] } = await sc.query(
+      const { rows: [dealers] } = await sc.query(
         `select count(*) filter (where billing_required is true and closed_at is null)::int as dealers,
                 count(*) filter (where billing_required is true and closed_at is null
                                    and activation_paid_at is not null and activation_livemode is true)::int as paid,
@@ -341,8 +347,6 @@ router.get('/reports/company', requireAuth, wrap(async (req, res) => {
                 count(*) filter (where closed_at is not null)::int as closed
          from tenants`
       );
-      return counts;
-    });
 
     return {
       year,

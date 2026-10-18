@@ -5,7 +5,26 @@ if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL is not set — see .env.example');
 }
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// pg's default pool is 10 connections with NO connection timeout, which means
+// a pool that runs dry does not error -- every further request queues and
+// waits forever, and from the outside the API simply stops answering. The
+// timeout turns that into a 500 someone can see and act on. statement_timeout
+// is the matching guard at the other end: one pathological query can no
+// longer hold a connection indefinitely and starve everything else.
+// Both are env-overridable so they can be tuned in Render without a deploy.
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: Number(process.env.PGPOOL_MAX || 20),
+  connectionTimeoutMillis: Number(process.env.PGPOOL_CONNECT_TIMEOUT_MS || 10000),
+  statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS || 15000),
+});
+
+// A pool error with no listener is an unhandled 'error' event, which takes the
+// process down. An idle client dropped by the database (a Supabase restart, a
+// network blip) emits exactly that, so it is logged and the pool carries on.
+pool.on('error', (err) => {
+  console.error('PG_POOL idle client error:', err.message);
+});
 
 // Runs `fn` inside a transaction where the Postgres session is impersonating
 // the given (already JWT-verified) user: `role` is switched to
