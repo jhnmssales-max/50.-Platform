@@ -2554,7 +2554,10 @@ async function renderCompany(year){
       '<div class="stat"><b>' + dollars(t.revenue_cents) + '</b><span>Taken in ' + d.year + '</span></div>' +
       '<div class="stat"><b>' + dollars(t.cost_cents) + '</b><span>Cost to run</span></div>' +
       '<div class="stat"><b class="' + (t.profit_cents < 0 ? 'neg' : '') + '">' + dollars(t.profit_cents) + '</b><span>Profit' + (margin === null ? '' : ' · ' + margin + '%') + '</span></div>' +
-      '<div class="stat"><b>' + d.companies.dealers + '</b><span>Dealers · ' + d.companies.paid + ' paid · ' + d.companies.in_house + ' in-house</span></div>' +
+      '<div class="stat"><b>' + d.companies.dealers + '</b><span>Dealers · ' + d.companies.paid + ' paid · ' + d.companies.in_house + ' in-house' +
+        // Shown only when there are any, the same way the Companies tab does
+        // it, so a closed dealer is never silently folded into the live count.
+        (d.companies.closed ? ' · ' + d.companies.closed + ' closed' : '') + '</span></div>' +
     '</div>' +
 
     '<div class="chartcard"><h3>Money in and money out</h3>' +

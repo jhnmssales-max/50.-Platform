@@ -810,6 +810,33 @@ async function main() {
       return `${d} paying (${p} paid) and ${h} in-house, matching the table`;
     });
 
+    await check('A closed company is counted as closed, not as a live dealer', async () => {
+      const before = (await api('GET', '/reports/company', { as: USERS.admin })).body.companies;
+      // The Companies tab hides closed companies unless asked, so counting
+      // them as dealers here made the two screens disagree with no error
+      // anywhere -- which is how it went unnoticed on the live platform.
+      const [t] = await sql(
+        `select id, name from tenants where billing_required is true and closed_at is null
+          order by created_at limit 1`
+      );
+      await sql(`update tenants set closed_at = now() where id = $1`, [t.id]);
+      // try/finally because this mutates fixture state every later check
+      // shares: a failed assertion must not leave the company closed behind
+      // it, or the real failure gets buried under a cascade of unrelated ones.
+      try {
+        const after = (await api('GET', '/reports/company', { as: USERS.admin })).body.companies;
+        eq(after.dealers, before.dealers - 1, 'it leaves the live dealer count');
+        eq(after.closed, (before.closed || 0) + 1, 'and is reported as closed instead');
+        eq(after.in_house, before.in_house, 'in-house untouched');
+        assert(after.paid <= before.paid, 'a closed company cannot still read as paid');
+      } finally {
+        await sql(`update tenants set closed_at = null where id = $1`, [t.id]);
+      }
+      const restored = (await api('GET', '/reports/company', { as: USERS.admin })).body.companies;
+      eq(restored.dealers, before.dealers, 'restored cleanly');
+      return `closing ${t.name} moved it out of dealers and into closed`;
+    });
+
     await check('Pricing a cost moves the profit, and only for the months it covers', async () => {
       const c0 = (await api('GET', '/reports/company', { as: USERS.admin })).body;
       const render = c0.expenses.find((e) => e.name.startsWith('Render'));
