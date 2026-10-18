@@ -322,10 +322,18 @@ router.get('/reports/company', requireAuth, wrap(async (req, res) => {
     // hides. The admin check happened above, under RLS, before any of this.
     const dealers = await withServiceRole(async (sc) => {
       await assertServiceRoleConnection(sc);
+      // Closed companies are excluded from the three live counts and given
+      // their own, so this tile agrees with the Companies tab -- which hides
+      // closed ones unless you ask (rep_dealer_list's p_include_closed).
+      // Before, a dealer who was built, never paid and then closed was still
+      // counted as a dealer here while being invisible two tabs over, and
+      // the only way to notice was that the two numbers disagreed.
       const { rows: [counts] } = await sc.query(
-        `select count(*) filter (where billing_required is true)::int as dealers,
-                count(*) filter (where billing_required is true and activation_paid_at is not null and activation_livemode is true)::int as paid,
-                count(*) filter (where billing_required is false)::int as in_house
+        `select count(*) filter (where billing_required is true and closed_at is null)::int as dealers,
+                count(*) filter (where billing_required is true and closed_at is null
+                                   and activation_paid_at is not null and activation_livemode is true)::int as paid,
+                count(*) filter (where billing_required is false and closed_at is null)::int as in_house,
+                count(*) filter (where closed_at is not null)::int as closed
          from tenants`
       );
       return counts;
