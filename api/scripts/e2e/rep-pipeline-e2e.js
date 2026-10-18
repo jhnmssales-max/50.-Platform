@@ -820,6 +820,40 @@ async function main() {
       return 'monthly spread over twelve, one-off in its own month, profit follows';
     });
 
+    await check('A yearly cost is spread over twelve months, not charged whole', async () => {
+      const c0 = (await api('GET', '/reports/company', { as: USERS.admin })).body;
+      // The yearly branch had no test at all, and it is the one a real annual
+      // subscription goes through. $212 a year is 1/12 a month, in every month
+      // from the one it started in -- not $212 in January and nothing after.
+      const made = await api('POST', '/reports/expenses', {
+        as: USERS.admin,
+        body: { name: 'A yearly plan', category: 'software', amount_cents: 21200, recurrence: 'yearly', started_on: `${c0.year}-01-15` },
+      });
+      eq(made.status, 201, 'added');
+      const c1 = (await api('GET', '/reports/company', { as: USERS.admin })).body;
+      const perMonth = Math.round(21200 / 12);
+      const jan = c1.months.find((m) => m.month === `${c0.year}-01`);
+      const jul = c1.months.find((m) => m.month === `${c0.year}-07`);
+      eq(jan.running_cost_cents, perMonth, 'January carries one twelfth, not the whole bill');
+      eq(jul.running_cost_cents, perMonth, 'and so does July');
+      eq(c1.totals.running_cost_cents, perMonth * 12, 'twelve twelfths over the year');
+
+      // Started in October, it covers October to December of this year only --
+      // the remaining nine months of that subscription fall in the next one.
+      await api('PATCH', `/reports/expenses/${made.body.id}`, {
+        as: USERS.admin, body: { started_on: `${c0.year}-10-12` },
+      });
+      const c2 = (await api('GET', '/reports/company', { as: USERS.admin })).body;
+      eq(c2.months.find((m) => m.month === `${c0.year}-09`).running_cost_cents, 0, 'nothing before it started');
+      eq(c2.months.find((m) => m.month === `${c0.year}-10`).running_cost_cents, perMonth, 'October onwards');
+      eq(c2.totals.running_cost_cents, perMonth * 3, 'three months of it land in this year');
+
+      await api('DELETE', `/reports/expenses/${made.body.id}`, { as: USERS.admin });
+      const c3 = (await api('GET', '/reports/company', { as: USERS.admin })).body;
+      eq(c3.totals.running_cost_cents, c0.totals.running_cost_cents, 'removed cleanly');
+      return `$212/yr reads as ${perMonth} cents a month; three months of it when it starts in October`;
+    });
+
     await check('A cost that started mid-year is only charged from the month it started', async () => {
       const c0 = (await api('GET', '/reports/company', { as: USERS.admin })).body;
       const made = await api('POST', '/reports/expenses', {
