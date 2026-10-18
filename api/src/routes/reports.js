@@ -223,13 +223,18 @@ router.get('/reports/company', requireAuth, wrap(async (req, res) => {
       const { rows } = await sc.query(
       `select to_char(created_at at time zone '${BILLING_TIME_ZONE}', 'YYYY-MM') as month,
               coalesce(sum(amount_cents) filter (where event_type = 'activation_charge'), 0)::int as activation_cents,
-              coalesce(sum(amount_cents) filter (where event_type = 'annual_renewal_charge'), 0)::int as renewal_cents,
+              coalesce(sum(amount_cents) filter (where event_type = 'annual_renewal'), 0)::int as renewal_cents,
               coalesce(sum(amount_cents) filter (where event_type = 'referral_fee'), 0)::int as fee_cents,
               coalesce(sum(amount_cents), 0)::int as revenue_cents,
               count(*)::int as payments
        from billing_events
        where status = 'succeeded' and livemode is true
-         and event_type in ('activation_charge', 'annual_renewal_charge', 'referral_fee')
+         -- 'annual_renewal' is the value the worker writes and the only one the
+         -- check constraint allows; 'annual_renewal_charge' matched nothing, so
+         -- renewal money was excluded from this WHERE entirely -- missing from
+         -- the breakdown AND from total revenue, while the dealer's own yearly
+         -- email counted it correctly. The two would have disagreed.
+         and event_type in ('activation_charge', 'annual_renewal', 'referral_fee')
          and (created_at at time zone '${BILLING_TIME_ZONE}') >= $1::date
          and (created_at at time zone '${BILLING_TIME_ZONE}') < $2::date
        group by 1`,
@@ -387,9 +392,16 @@ router.get('/reports/company', requireAuth, wrap(async (req, res) => {
 // RLS, before any of it.
 router.get('/reports/tenant/:id', requireAuth, wrap(async (req, res) => {
   const id = z.string().uuid().parse(req.params.id);
-  const { year, tenant } = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId);
+  const { year, tenant, isAdmin } = await withUserTransaction(req.userId, async (client) => {
+    // Not {admin:true}: the helper has a legitimate use for the activity half
+    // of this report (invites out, referrals in, cards issued). But the money
+    // half is the admin's alone -- the rule this file opens by stating -- and
+    // every figure below is read under the service role, which RLS cannot
+    // then filter. So the check records whether the caller is an admin and
+    // the money keys are dropped for anyone who is not.
+    const ctx = await requirePlatform(client, req.userId);
     const y = yearParam(req.query.year, await currentYear(client));
+    const callerIsAdmin = !!ctx.is_admin;
     // rep_dealer_list() is the one place that decides which companies a
     // signed-in user may look at, so asking it keeps this endpoint honest
     // rather than giving staff a second, looser door into any tenant row.
@@ -398,7 +410,7 @@ router.get('/reports/tenant/:id', requireAuth, wrap(async (req, res) => {
       [id]
     );
     if (!t) throw httpError(404, 'No such company');
-    return { year: y, tenant: t };
+    return { year: y, tenant: t, isAdmin: callerIsAdmin };
   });
 
   const bounds = [`${year}-01-01`, `${year + 1}-01-01`];
@@ -485,7 +497,7 @@ router.get('/reports/tenant/:id', requireAuth, wrap(async (req, res) => {
     const { rows: paid } = await sc.query(
       `select to_char(created_at at time zone '${tz}', 'YYYY-MM') as month,
               sum(amount_cents) filter (where event_type = 'activation_charge')::int as activation_cents,
-              sum(amount_cents) filter (where event_type = 'renewal_charge')::int as renewal_cents,
+              sum(amount_cents) filter (where event_type = 'annual_renewal')::int as renewal_cents,
               sum(amount_cents) filter (where event_type = 'referral_fee')::int as fee_cents,
               sum(amount_cents)::int as paid_cents,
               sum(reward_amount_cents) filter (where event_type = 'referral_fee')::int as billed_reward_cents
@@ -533,8 +545,21 @@ router.get('/reports/tenant/:id', requireAuth, wrap(async (req, res) => {
     caveats.push('This is one of your own companies: it pays no setup, renewal or 30% fee, so it shows no money paid to 50.');
   }
 
+  // Money out, for anyone who is not the 50. admin. Dropped here rather than
+  // never queried, because the same aggregate rows carry the activity figures
+  // the helper is allowed to see -- and dropping keys is one place to audit
+  // instead of a second branch through every query above.
+  const MONEY_KEYS = ['paid_cents', 'activation_cents', 'renewal_cents', 'fee_cents', 'billed_reward_cents', 'card_cents'];
+  const stripMoney = (obj) => {
+    if (isAdmin || !obj) return obj;
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) if (!MONEY_KEYS.includes(k)) out[k] = v;
+    return out;
+  };
+
   res.json({
     year,
+    money_hidden: !isAdmin,
     tenant: {
       id: tenant.tenant_id,
       name: tenant.name,
@@ -543,8 +568,8 @@ router.get('/reports/tenant/:id', requireAuth, wrap(async (req, res) => {
       activated_on: tenant.activated_on,
       billing_exempt: tenant.billing_exempt,
     },
-    months: byMonth,
-    totals: {
+    months: byMonth.map(stripMoney),
+    totals: stripMoney({
       invites: total('invites'),
       customers: total('customers'),
       referrals,
@@ -556,7 +581,7 @@ router.get('/reports/tenant/:id', requireAuth, wrap(async (req, res) => {
       activation_cents: total('activation_cents'),
       renewal_cents: total('renewal_cents'),
       fee_cents: total('fee_cents'),
-    },
+    }),
     now: {
       customers_total: data.now.customers_total,
       invites_total: data.now.invites_total,

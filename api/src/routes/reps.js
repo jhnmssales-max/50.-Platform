@@ -700,7 +700,7 @@ router.post('/rep-leads/:id/win', requireAuth, wrap(async (req, res) => {
       throw httpError(400, 'effective_from only applies together with a dealer (tenant_id)');
     }
     const { rows: [l] } = await client.query(
-      `update rep_leads set status = 'won', closed_by_rep_id = $2, onboarded_by_rep_id = $3, closed_on = current_date, tenant_id = $4
+      `update rep_leads set status = 'won', closed_by_rep_id = $2, onboarded_by_rep_id = $3, closed_on = (now() at time zone 'America/New_York')::date, tenant_id = $4
        where id = $1 returning ${LEAD_COLUMNS.replace(/l\./g, '')}`,
       [id, closer, body.onboarded_by_rep_id || null, body.tenant_id || null]
     );
@@ -1639,7 +1639,10 @@ router.post('/rep-leads/:id/build', requireAuth, wrap(async (req, res) => {
           contactName: plan.adminName,
           contactEmail: plan.adminEmail,
           signInUrl: `${frontend}/reps`,
-          activationFeeCents: 50000,
+          // Read back from the created tenant, like the dealer email above.
+          // The commit that fixed the dealer email warned about exactly this
+          // and then left the rep's copy hardcoded ten lines below it.
+          activationFeeCents: terms.activation_fee_cents,
           logoUrl,
         });
         await sendEmail({ from: `Joseph at 50. <${from}>`, to: plan.lead.closed_by_email, replyTo, subject: mail.subject, htmlBody: mail.htmlBody, textBody: mail.textBody });

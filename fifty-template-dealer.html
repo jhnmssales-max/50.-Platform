@@ -468,8 +468,13 @@ function debounce(fn, wait){
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
 }
 
+// Escapes quotes as well as angle brackets, because some of these values go
+// into attributes (title="...") where &lt; alone is not enough to contain a
+// value that chose its own quoting.
 function escapeHtmlLite(s){
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 function showLoggedOut(){
@@ -909,11 +914,11 @@ async function renderList(query){
     return `
       <div class="refrow">
         <div class="who">
-          <div class="rname">${r.name}</div>
-          <div class="rcontact">${contact} · referred by ${r.referrer.name} · sent ${fmtDate(r.submitted_at)}</div>
+          <div class="rname">${escapeHtmlLite(r.name)}</div>
+          <div class="rcontact">${escapeHtmlLite(contact)} · referred by ${escapeHtmlLite(r.referrer.name)} · sent ${escapeHtmlLite(fmtDate(r.submitted_at))}</div>
           <div class="rstate ${isPaid ? 'paid' : 'pending'}">${isPaid ? 'Marked paid' : 'In progress'}</div>
         </div>
-        <label class="toggle" title="${toggleTitle}">
+        <label class="toggle" title="${escapeHtmlLite(toggleTitle)}">
           <input type="checkbox" data-referral-id="${r.id}" ${isPaid || !canMarkPaid ? 'disabled' : ''} ${isPaid ? 'checked' : ''} />
           <span class="slider"></span>
         </label>
