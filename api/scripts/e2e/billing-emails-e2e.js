@@ -622,6 +622,48 @@ async function main() {
       eq(emailLib.formatMonth('2026-09'), 'September 2026', 'formatMonth');
       return 'formatDate(2026-11-01T03:30Z) = October 31, 2026';
     });
+
+    await check('The monthly summary counts invites sent and forms filled in, and tells zero from unknown', async () => {
+      const row = { at: '2026-10-03T14:12:00Z', referrerName: 'Pat', friendName: 'Fran', payoutCents: 10000, feeCents: 3000 };
+      const base = {
+        tenantName: 'Funnel Co', adminName: 'Dana', period: '2026-10',
+        currency: 'USD', paymentMethodType: 'card', dashboardUrl: 'https://example.test/d',
+      };
+
+      const full = emailLib.buildReferralStatementEmail({ ...base, rows: [row], invitesSent: 24, formsSubmitted: 7 });
+      assert(/Invites sent\D+24/.test(full.textBody), `invites missing: ${full.textBody}`);
+      assert(/Referral forms filled in\D+7/.test(full.textBody), 'forms missing');
+      assert(/Referrals rewarded\D+1/.test(full.textBody), 'rewarded count missing');
+
+      // A month with no rewards is not an empty month: invites out and forms
+      // in still have something to say, and this is the shape that used to
+      // send nothing at all.
+      const quiet = emailLib.buildReferralStatementEmail({ ...base, rows: [], invitesSent: 18, formsSubmitted: 4, pendingCount: 3 });
+      assert(/Invites sent\D+18/.test(quiet.textBody), 'invites missing from a no-reward month');
+      assert(/Referrals rewarded\D+0/.test(quiet.textBody), 'should say zero rewarded, plainly');
+      assert(/3 referrals waiting on you/.test(quiet.subject), `subject should lead with the ask: ${quiet.subject}`);
+
+      // Unknown is not zero. A caller that did not supply the numbers must
+      // not produce an email claiming no invites went out.
+      const unknown = emailLib.buildReferralStatementEmail({ ...base, rows: [row] });
+      assert(!/Invites sent/.test(unknown.textBody), 'claimed a figure it was never given');
+      assert(!/forms filled in/.test(unknown.textBody), 'claimed a form count it was never given');
+      assert(/Referrals rewarded\D+1/.test(unknown.textBody), 'the reward count is always known');
+
+      // And an in-house company never reads as having been charged.
+      const house = emailLib.buildReferralStatementEmail({
+        ...base, tenantName: 'North Mountain Structures', rows: [row],
+        invitesSent: 61, formsSubmitted: 5, billingExempt: true, paymentMethodType: null,
+      });
+      assert(/your own companies/.test(house.textBody), 'in-house reason missing');
+      assert(!/Already charged/.test(house.textBody), 'an in-house company was told it was charged');
+      assert(/\$0\.00/.test(house.textBody), 'in-house fee should read $0.00');
+
+      for (const e of [full, quiet, unknown, house]) {
+        assert(!/\bjust\b/i.test(e.textBody), `the word "just" appears: ${e.subject}`);
+      }
+      return 'invites and forms counted; unknown stays blank; in-house never claims a charge';
+    });
   } finally {
     await db.end().catch(() => {});
     await pool.end().catch(() => {});

@@ -238,6 +238,8 @@ function buildReferralStatementEmail({
   currency,
   paymentMethodType,
   pendingCount = 0,
+  invitesSent = null,
+  formsSubmitted = null,
   rewardFulfillment = 'dealer',
   cardNoun = 'gift card',
   dashboardUrl = null,
@@ -253,7 +255,26 @@ function buildReferralStatementEmail({
   const weSend = rewardFulfillment === 'platform';
   const cardsPlural = `${noun}s`;
 
+  // The month at a glance: invites out, forms in, rewards paid. Counted the
+  // same way the dashboard's own per-company report counts them (an invite by
+  // when its link was minted, which is when the email went out; a form by
+  // submitted_at), so the email and the dashboard can never disagree. Null
+  // means the caller did not supply the number, which is different from zero
+  // and is therefore left out rather than shown as "0".
+  const glanceRows = () => {
+    const out = [];
+    if (invitesSent !== null && invitesSent !== undefined) out.push(['Invites sent', String(invitesSent)]);
+    if (formsSubmitted !== null && formsSubmitted !== undefined) out.push(['Referral forms filled in', String(formsSubmitted)]);
+    out.push(['Referrals rewarded', String(rows.length)]);
+    return out;
+  };
   const blocks = [];
+  // Pushed only when there is something in it: a box whose single line is
+  // "Referrals rewarded: 0" is worse than no box.
+  const pushGlance = () => {
+    const r = glanceRows();
+    if (r.length > 1 || rows.length > 0) blocks.push({ box: r });
+  };
 
   // 1. The incentives, first.
   if (rows.length) {
@@ -263,6 +284,7 @@ function buildReferralStatementEmail({
         `, and so did the ${rows.length === 1 ? 'friend they' : 'friends they'} referred` +
         ` \u2014 ${payoutTotal} in ${cardsPlural} altogether.`,
     });
+    pushGlance();
     blocks.push({
       table: {
         head: ['Date', 'Who earned it', 'Reward'],
@@ -290,6 +312,7 @@ function buildReferralStatementEmail({
     });
   } else {
     blocks.push({ p: `No rewards went out for ${tenantName} in ${month}.` });
+    pushGlance();
   }
 
   // 2. What is still waiting on them. The only part of this email that asks
