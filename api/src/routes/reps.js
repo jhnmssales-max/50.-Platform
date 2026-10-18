@@ -419,13 +419,24 @@ router.get('/rep-leads', requireAuth, wrap(async (req, res) => {
   if (status !== undefined && !['open', 'won', 'lost'].includes(status)) throw httpError(400, 'status must be open, won or lost');
   const rows = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { rep: true });
+    // The 500 cap stays -- the page renders every row it is given, so lifting
+    // it would just move the problem. What changes is that the cap is no
+    // longer silent: the real total comes back alongside, so the page can say
+    // "showing 500 of 812" instead of quietly dropping the oldest leads and
+    // printing a total that is really just the length of what fitted.
     const { rows } = await client.query(
       `select ${LEAD_COLUMNS}, ${LEAD_CAN_DELETE} from rep_leads l ${status ? 'where l.status = $1' : ''} order by l.found_on desc, l.created_at desc limit 500`,
       status ? [status] : []
     );
-    return rows;
+    const { rows: [counts] } = await client.query(
+      `select count(*)::int as total,
+              count(*) filter (where l.status = 'open')::int as open
+         from rep_leads l ${status ? 'where l.status = $1' : ''}`,
+      status ? [status] : []
+    );
+    return { rows, counts };
   });
-  res.json({ leads: rows });
+  res.json({ leads: rows.rows, total: rows.counts.total, open_total: rows.counts.open, limit: 500 });
 }));
 
 // Leads that look like the same company: the same name (ignoring case and

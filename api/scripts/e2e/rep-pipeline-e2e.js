@@ -734,6 +734,36 @@ async function main() {
       return 'rep -> 403, helper -> 200, unknown id -> 404';
     });
 
+    await check('Past the row cap the leads tab reports the real total, not the number that fitted', async () => {
+      const before = (await api('GET', '/rep-leads', { as: USERS.admin })).body;
+      assert(typeof before.total === 'number', 'the route does not report a total at all');
+      eq(before.total, before.leads.length, 'under the cap, total should equal what was sent');
+
+      // Push past the cap. 505 rows so the 500 sent is provably short of the
+      // truth, which is the condition that used to be invisible: the page
+      // printed the length of the array it got and called it the total.
+      await sql(`insert into rep_leads (company_name, contact_name, status, found_on)
+                 select 'Bulk Co ' || g, 'Contact ' || g, 'open', current_date - (g % 200)
+                   from generate_series(1, 505) g`);
+      try {
+        const after = (await api('GET', '/rep-leads', { as: USERS.admin })).body;
+        eq(after.leads.length, 500, 'the cap still applies');
+        assert(after.total > 500, `total should exceed the cap, got ${after.total}`);
+        assert(after.total !== after.leads.length,
+          'total still equals the row count -- the cap is silent again');
+        assert(after.open_total >= 505, `open_total should count every open lead, got ${after.open_total}`);
+
+        // A status filter must count within that status, not across all leads.
+        const open = (await api('GET', '/rep-leads?status=open', { as: USERS.admin })).body;
+        eq(open.total, after.open_total, 'filtered total should match the open count');
+        const lost = (await api('GET', '/rep-leads?status=lost', { as: USERS.admin })).body;
+        assert(lost.total < after.total, 'a filtered total should be smaller than the unfiltered one');
+      } finally {
+        await sql(`delete from rep_leads where company_name like 'Bulk Co %'`);
+      }
+      return 'cap still 500, total and open_total come from the table';
+    });
+
     await check('The Finances handler never holds two pooled connections at once', async () => {
       // This is a source-shape guard, not a load test, and deliberately so.
       // I first wrote this as "fire 24 concurrent requests and see", which
