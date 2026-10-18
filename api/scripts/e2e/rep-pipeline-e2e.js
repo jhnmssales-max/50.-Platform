@@ -734,6 +734,42 @@ async function main() {
       return 'rep -> 403, helper -> 200, unknown id -> 404';
     });
 
+    await check('The Finances handler never holds two pooled connections at once', async () => {
+      // This is a source-shape guard, not a load test, and deliberately so.
+      // I first wrote this as "fire 24 concurrent requests and see", which
+      // passed happily with the bug put back: the requests never actually
+      // held 20 connections simultaneously, so the deadlock never formed.
+      // A test that cannot fail for the reason it names is worse than none.
+      //
+      // The real invariant is structural. /reports/company must acquire its
+      // user-transaction connection, let it go, and only then take a
+      // service-role one. Nesting the second inside the first is what made
+      // ten concurrent loads able to exhaust the pool and hang forever.
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../../src/routes/reports.js'), 'utf8');
+      const at = src.indexOf("router.get('/reports/company'");
+      assert(at !== -1, 'could not find the /reports/company handler');
+      const nextRoute = src.indexOf('router.get(', at + 10);
+      const handler = src.slice(at, nextRoute === -1 ? undefined : nextRoute);
+
+      eq((handler.match(/withUserTransaction\(/g) || []).length, 1, 'user transactions in the handler');
+      eq((handler.match(/withServiceRole\(/g) || []).length, 1, 'service-role blocks in the handler');
+
+      // Walk the parens from the user transaction to find where it closes,
+      // then require the service-role call to start after that point.
+      const utAt = handler.indexOf('withUserTransaction(');
+      let depth = 0, utEnd = -1;
+      for (let i = handler.indexOf('(', utAt); i < handler.length; i += 1) {
+        if (handler[i] === '(') depth += 1;
+        else if (handler[i] === ')') { depth -= 1; if (depth === 0) { utEnd = i; break; } }
+      }
+      assert(utEnd !== -1, 'could not find the end of the user transaction');
+      const srAt = handler.indexOf('withServiceRole(');
+      assert(srAt > utEnd,
+        'the service-role block opens inside the user transaction -- two pooled connections at once, which deadlocks the pool under concurrent load');
+      return 'permission check commits before any service-role read; one connection at a time';
+    });
+
     await check('The helper sees a company\'s activity but none of its money', async () => {
       const A = tenants['dealer-a'].id;
       // The check above asserted the helper gets a 200 and never looked at the
