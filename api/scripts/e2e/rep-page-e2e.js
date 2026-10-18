@@ -1862,6 +1862,43 @@ async function main() {
     await check('No script errors or failed API calls were logged in the browser', async () => {
       assert(consoleErrors.length === 0, consoleErrors.join('\n'));
     });
+    await check('The Companies tab shows which dealers have gone quiet, and the helper sees no billing state', async () => {
+      const ap = await newPage('admin');
+      try {
+        await signIn(ap, USERS.admin);
+        await ap.click('[data-tab=dealers]');
+        await ap.waitForSelector('#tab-dealers tr[data-tenant]');
+        const text = await ap.textContent('#tab-dealers');
+        // Every company must say something about its activity -- silence is
+        // what the old tab did, and a dealer who stopped referring months ago
+        // looked exactly like one referring every week.
+        assert(/No invites sent yet|No referrals yet|Last referral/.test(text),
+          `no activity line anywhere on the tab: ${text.slice(0, 200)}`);
+        assert(/invited/.test(text) || /No invites sent yet/.test(text), 'no invite figure shown');
+
+        // The renewal date and the card state are billing, so they are the
+        // admin's alone. A rep or the helper must see neither.
+        const hp = await newPage('helper');
+        try {
+          await signIn(hp, USERS.helper);
+          await hp.click('[data-tab=dealers]');
+          await hp.waitForSelector('#tab-dealers tr[data-tenant]');
+          const htext = await hp.textContent('#tab-dealers');
+          assert(!/Renews /.test(htext), 'the helper can see a renewal date');
+          assert(!/No card on file/.test(htext), 'the helper can see the card state');
+          // But she keeps the activity, which is the useful half.
+          assert(/No invites sent yet|No referrals yet|Last referral/.test(htext),
+            'the helper lost the activity line too');
+          assert(!/\$/.test(htext), `a dollar sign reached the helper: ${htext.match(/.{20}\$.{20}/)}`);
+        } finally {
+          await hp.close();
+        }
+        return 'activity shown to both; renewal date and card state admin-only';
+      } finally {
+        await ap.close();
+      }
+    });
+
     await check('A rejected save keeps the dialog, the typing, and shows why', async () => {
       // Every one of these handlers used to do flash(err.message) then
       // closeDialog(): the form vanished with everything in it, and the
@@ -1920,12 +1957,21 @@ async function main() {
         const before = await visible();
         assert(before > 1, `need several rows to test filtering, saw ${before}`);
 
+        // Wait for the filter to settle, not a fixed sleep: the tab refetches
+        // and redraws when opened, and I had this exact race in another check
+        // ten minutes ago. A sleep here passes or fails on machine speed.
         await phone.fill('#tab-leads .searchbox', 'zzzznothingmatchesthis');
-        await phone.waitForTimeout(250);
+        await phone.waitForFunction(() => {
+          const rows = Array.from(document.querySelectorAll('#tab-leads tbody tr[data-search]'));
+          return rows.length > 0 && rows.every((r) => r.offsetParent === null && r.offsetHeight === 0);
+        }, { timeout: 5000 }).catch(() => {});
         eq(await visible(), 0, 'rows stayed on screen at 390px while the search matched nothing');
 
         await phone.fill('#tab-leads .searchbox', '');
-        await phone.waitForTimeout(250);
+        await phone.waitForFunction((n) => {
+          const rows = Array.from(document.querySelectorAll('#tab-leads tbody tr[data-search]'));
+          return rows.filter((r) => r.offsetParent !== null || r.offsetHeight > 0).length === n;
+        }, before, { timeout: 5000 }).catch(() => {});
         eq(await visible(), before, 'clearing the box did not bring the rows back');
         return `${before} rows at 390px, all hidden by a non-matching search and all back after clearing`;
       } finally {
