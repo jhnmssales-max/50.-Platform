@@ -43,7 +43,7 @@
 //
 // A heads-up email goes out NOTICE_LEAD_DAYS before each charge, once per
 // renewal period (tenants.renewal_notice_sent_for).
-const { pool, withServiceRole, assertRowsAffected } = require('../db');
+const { pool, withServiceRole, assertRowsAffected, assertServiceRoleConnection } = require('../db');
 const { assertRealStripeConfigured, chargeOffSession, retrievePaymentIntent } = require('../lib/stripe');
 const { activationState } = require('../lib/activation');
 const { sendEmail } = require('../lib/postmark');
@@ -442,6 +442,12 @@ async function runAnnualRenewalCycle({ dryRun = false } = {}) {
       log('lock_not_acquired', { note: 'another renewal cycle is already running; exiting' });
       return { aborted: false, skippedForLock: true, errored: 0 };
     }
+    // The other three hourly workers each do this and this one did not. Its
+    // first meaningful step is a broad read of `tenants`, so a DATABASE_URL
+    // role that RLS applies to would return zero rows due -- and the cycle
+    // would log a healthy "considered: 0" every hour while no dealer was ever
+    // charged their yearly fee. The guard turns that silence into an error.
+    await assertServiceRoleConnection(lockClient);
     try {
       const { rows: due } = await pool.query(
         `select id, slug from tenants

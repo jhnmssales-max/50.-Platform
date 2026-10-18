@@ -734,6 +734,42 @@ async function main() {
       return 'rep -> 403, helper -> 200, unknown id -> 404';
     });
 
+    await check('The helper sees a company\'s activity but none of its money', async () => {
+      const A = tenants['dealer-a'].id;
+      // The check above asserted the helper gets a 200 and never looked at the
+      // body. It did: a full month-by-month record of what that dealer had
+      // paid 50., read under the service role where RLS could not filter it.
+      // The helper account exists precisely so money is invisible to it.
+      // billed_reward_cents only ever appears on the monthly rows, not in totals.
+      const MONEY = ['paid_cents', 'activation_cents', 'renewal_cents', 'fee_cents', 'billed_reward_cents', 'card_cents'];
+      const MONEY_IN_TOTALS = ['paid_cents', 'activation_cents', 'renewal_cents', 'fee_cents', 'card_cents'];
+      const asAdmin = (await api('GET', `/reports/tenant/${A}`, { as: USERS.admin })).body;
+      const asHelper = (await api('GET', `/reports/tenant/${A}`, { as: USERS.helper })).body;
+
+      // The admin must still get them, or this "fix" is just a broken report.
+      for (const k of MONEY_IN_TOTALS) {
+        assert(k in asAdmin.totals, `admin lost ${k} from totals`);
+      }
+      assert(asAdmin.months.some((m) => 'billed_reward_cents' in m), 'admin lost billed_reward_cents from the monthly rows');
+      assert(asAdmin.months.some((m) => 'paid_cents' in m), 'admin lost the monthly money lines');
+      eq(asAdmin.money_hidden, false, 'admin should not be told money is hidden');
+
+      for (const k of MONEY) {
+        assert(!(k in asHelper.totals), `helper can see ${k}: ${JSON.stringify(asHelper.totals)}`);
+        assert(!asHelper.months.some((m) => k in m), `helper can see ${k} in a monthly row`);
+      }
+      eq(asHelper.money_hidden, true, 'helper is not told money is hidden');
+
+      // And the activity half is still there, or the helper has no report.
+      for (const k of ['invites', 'customers', 'referrals', 'ordered']) {
+        assert(k in asHelper.totals, `helper lost the activity figure ${k}`);
+      }
+      assert(asHelper.now && 'last_referral_at' in asHelper.now, 'helper lost the standing figures');
+      // Belt and braces: no money word anywhere in the helper's JSON.
+      assert(!/_cents/.test(JSON.stringify(asHelper)), `a _cents key survived: ${JSON.stringify(asHelper).match(/.{0,40}_cents.{0,20}/)}`);
+      return 'admin keeps every money figure; helper keeps activity and no _cents key at all';
+    });
+
     await check('A deleted lead still counts as lost, with nothing kept about who it was', async () => {
       const doomed = (await api('POST', '/rep-leads', {
         as: ALICE,

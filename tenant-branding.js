@@ -42,7 +42,13 @@
     eligibility: "have placed an order with us",
     qualifyingEvent: "places and completes an order for a building",
     rewardCondition: "confirms the referred order has actually been placed and a qualifying deposit received. Cancelled, refunded, or unfulfilled orders do not qualify for a reward.",
-    inquiryNoun: "building inquiry"
+    inquiryNoun: "building inquiry",
+    // mergeCopy only keeps keys that exist here, so a key missing from this
+    // object is silently dropped from every tenant's wording. cardNoun was
+    // added to fill() without being added here, which meant a dealer who
+    // mails physical cards still had "electronic gift card" on their
+    // customers' pages while the wizard showed their chosen wording.
+    cardNoun: "electronic gift card"
   };
   DEFAULT.copy = DEFAULT_COPY;
 
