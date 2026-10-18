@@ -791,6 +791,25 @@ async function main() {
       return `${c.expenses.length} costs listed, all unpriced, rep pay ${repEarned} cents counted`;
     });
 
+    await check('The company counts on Finances see every tenant, not only the admin\'s own', async () => {
+      const c = (await api('GET', '/reports/company', { as: USERS.admin })).body;
+      // This count ran under RLS, where tenants_select_own shows a signed-in
+      // user only the tenant they belong to. On the live platform it read
+      // "0 dealers, 0 paid, 1 in-house" next to a real $500 payment -- a
+      // permission problem wearing the clothes of a quiet year.
+      const [{ d, p, h }] = await sql(
+        `select count(*) filter (where billing_required is true)::int d,
+                count(*) filter (where billing_required is true and activation_paid_at is not null and activation_livemode is true)::int p,
+                count(*) filter (where billing_required is false)::int h
+           from tenants`
+      );
+      eq(c.companies.dealers, d, 'paying companies counted');
+      eq(c.companies.paid, p, 'paid companies counted');
+      eq(c.companies.in_house, h, 'in-house companies counted');
+      assert(d >= 2 && h >= 3, `fixture should have several of each, got ${d} paying and ${h} in-house`);
+      return `${d} paying (${p} paid) and ${h} in-house, matching the table`;
+    });
+
     await check('Pricing a cost moves the profit, and only for the months it covers', async () => {
       const c0 = (await api('GET', '/reports/company', { as: USERS.admin })).body;
       const render = c0.expenses.find((e) => e.name.startsWith('Render'));
