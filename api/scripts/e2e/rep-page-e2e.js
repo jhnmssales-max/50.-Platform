@@ -1465,7 +1465,17 @@ async function main() {
       // two sibling search checks already needed.
       await repPage.waitForLoadState('networkidle').catch(() => {});
       await repPage.fill('#tab-leads .searchbox', 'acme');
-      await repPage.waitForTimeout(120);
+      // Wait for the filter to settle rather than guessing at a sleep. This
+      // check failed intermittently with the unfiltered list in hand: the tab
+      // refetches and redraws when opened, so a fixed 120ms raced that
+      // redraw. Adding a count query to /rep-leads made losing the race a
+      // little likelier, which is how it surfaced.
+      await repPage.waitForFunction(() => {
+        const rows = Array.from(document.querySelectorAll('#tab-leads tbody tr[data-search]'));
+        const shown = rows.filter((r) => !r.hidden);
+        return rows.length > 0 && shown.length > 0
+          && shown.every((r) => /acme/i.test(r.querySelector('b').textContent));
+      }, { timeout: 5000 });
       const names = await repPage.$$eval('#tab-leads tbody tr[data-search]', (rows) =>
         rows.filter((r) => !r.hidden).map((r) => r.querySelector('b').textContent));
       assert(names.length >= 1 && names.every((n) => /acme/i.test(n)), `matched: ${JSON.stringify(names)}`);
@@ -1852,6 +1862,77 @@ async function main() {
     await check('No script errors or failed API calls were logged in the browser', async () => {
       assert(consoleErrors.length === 0, consoleErrors.join('\n'));
     });
+    await check('A rejected save keeps the dialog, the typing, and shows why', async () => {
+      // Every one of these handlers used to do flash(err.message) then
+      // closeDialog(): the form vanished with everything in it, and the
+      // reason was written into the page behind the modal backdrop where it
+      // could not be read. The cost of a server-side rejection was retyping
+      // the whole thing while not knowing what was wrong.
+      const dp = await newPage('admin');
+      try {
+      await signIn(dp, USERS.admin);
+      await dp.click('[data-tab=company]');
+      await dp.waitForSelector('#addExpense');
+      await dp.click('#addExpense');
+      await dp.waitForSelector('#expForm');
+
+      // An amount the server refuses: negative money.
+      await dp.fill('#expForm [name=name]', 'A cost worth keeping');
+      await dp.fill('#expForm [name=amount]', '-5');
+      await dp.fill('#expForm [name=notes]', 'notes I do not want to retype');
+      await dp.evaluate(() => {
+        // The number input's own min=0 would block submission client-side, so
+        // this clears that to exercise the SERVER's rejection, which is the
+        // path that used to discard the form.
+        document.querySelector('#expForm [name=amount]').removeAttribute('min');
+      });
+      await dp.click('#expForm button[type=submit]');
+      await dp.waitForTimeout(600);
+
+      assert(await dp.locator('#expForm').count() === 1, 'the dialog closed and took the form with it');
+      eq(await dp.inputValue('#expForm [name=name]'), 'A cost worth keeping', 'the name was lost');
+      eq(await dp.inputValue('#expForm [name=notes]'), 'notes I do not want to retype', 'the notes were lost');
+      const shown = await dp.locator('#dlg [data-dlg-msg]').count();
+      eq(shown, 1, 'no reason was shown inside the dialog');
+      const msg = (await dp.textContent('#dlg [data-dlg-msg]')).trim();
+      assert(msg.length > 0, 'the in-dialog message is empty');
+
+      await dp.click('#cancelDlg');
+      return `dialog stayed open, both fields kept, reason shown: "${msg.slice(0, 48)}"`;
+      } finally {
+        await dp.close();
+      }
+    });
+
+    await check('Search hides rows at phone width, not only on desktop', async () => {
+      // tbody tr{display:block} in the phone media query is an author rule,
+      // so it beat the browser's [hidden]{display:none}. Search set
+      // tr.hidden and every row stayed on screen while the counter claimed
+      // "3 of 412". Desktop was fine, which is why nobody caught it.
+      const phone = await newPage('admin');
+      try {
+        await phone.setViewportSize({ width: 390, height: 844 });
+        await signIn(phone, USERS.admin);
+        await phone.click('[data-tab=leads]');
+        await phone.waitForSelector('#tab-leads tr[data-search]');
+        const visible = () => phone.$$eval('#tab-leads tbody tr[data-search]', (rows) =>
+          rows.filter((r) => r.offsetParent !== null || r.offsetHeight > 0).length);
+        const before = await visible();
+        assert(before > 1, `need several rows to test filtering, saw ${before}`);
+
+        await phone.fill('#tab-leads .searchbox', 'zzzznothingmatchesthis');
+        await phone.waitForTimeout(250);
+        eq(await visible(), 0, 'rows stayed on screen at 390px while the search matched nothing');
+
+        await phone.fill('#tab-leads .searchbox', '');
+        await phone.waitForTimeout(250);
+        eq(await visible(), before, 'clearing the box did not bring the rows back');
+        return `${before} rows at 390px, all hidden by a non-matching search and all back after clearing`;
+      } finally {
+        await phone.close();
+      }
+    });
+
     await check('Phone width: the Reps page does not scroll sideways', async () => {
       const ctx = await browser.newContext({ viewport: { width: 400, height: 800 } });
       const p = await ctx.newPage();
