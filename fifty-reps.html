@@ -1315,10 +1315,21 @@ async function renderLeads(){
 
   const [l, dl] = await Promise.all([api('/rep-leads'), api('/rep-dealers')]);
   state.leads = l.leads; state.dealers = dl.dealers;
-  const open = state.leads.filter((x) => x.status === 'open').length;
+  // The API caps the rows it sends and now reports the real totals, so these
+  // come from the database rather than from the length of what arrived. They
+  // used to be the same number, which is why nothing looked wrong until the
+  // 501st lead would have quietly stopped existing.
+  state.leadTotal = (typeof l.total === 'number') ? l.total : state.leads.length;
+  const open = (typeof l.open_total === 'number') ? l.open_total : state.leads.filter((x) => x.status === 'open').length;
+  const capped = state.leads.length < state.leadTotal;
   captureSearch('tab-leads', 'leads');
   $('tab-leads').innerHTML =
-    '<div class="head"><h2>Leads</h2><span class="muted">' + open + ' open · ' + state.leads.length + ' total</span></div>' +
+    '<div class="head"><h2>Leads</h2><span class="muted">' + open + ' open · ' + state.leadTotal + ' total' +
+      (capped ? ' · showing the newest ' + state.leads.length : '') + '</span></div>' +
+    (capped
+      ? '<div class="notice">This tab shows the newest ' + state.leads.length + ' of ' + state.leadTotal +
+        ' leads. Filter by status, or search, to reach the rest.</div>'
+      : '') +
     '<details class="card" ' + (state.leads.length ? '' : 'open') + '><summary>Add a lead</summary>' +
       '<form id="leadForm"><div class="row">' +
         '<div><label>Company</label><input name="company_name" required maxlength="200"></div>' +
