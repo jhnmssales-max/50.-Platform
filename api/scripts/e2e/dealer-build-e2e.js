@@ -593,6 +593,53 @@ async function main() {
       return 'a one-time link, no password, no figures';
     });
 
+    await check('Resend sends an existing login a fresh link, and cannot be aimed at another company', async () => {
+      // The case this exists for: a dealer admin never got the first email,
+      // or their link expired. Adding them again is refused because they
+      // already have a login, so without this they are simply locked out.
+      const id = global.__standardTenantId;
+      const list = await api('GET', `/rep-dealers/${id}/admins`, { as: USERS.admin });
+      eq(list.status, 200, 'list');
+      const who = list.body.admins[0];
+
+      const before = sent.length;
+      const r = await api('POST', `/rep-dealers/${id}/admins/${who.id}/resend`, { as: USERS.admin, body: {} });
+      eq(r.status, 200, `resend: ${JSON.stringify(r.body)}`);
+      eq(r.body.emailed_to, who.email, 'sent to the wrong address');
+      eq(sent.length, before + 1, 'no email went out');
+
+      const mail = sent[sent.length - 1];
+      eq(mail.To, who.email, `To: ${mail.To}`);
+      // It must read as a fresh link, not as a first welcome -- and it must
+      // say the old one is dead, because minting this one killed it.
+      assert(/fresh link/i.test(mail.TextBody), `not worded as a resend: ${mail.TextBody.slice(0, 160)}`);
+      assert(/stopped working/i.test(mail.TextBody), 'does not warn that the earlier link is dead');
+      assert(!/password is/i.test(mail.TextBody) || !/password: /i.test(mail.TextBody), 'a password appears in the email');
+      // No prices, same rule as the add-a-colleague email.
+      assert(!/\$/.test(mail.TextBody), `prices quoted in a resend: ${mail.TextBody}`);
+
+      // Scoped to the company in the URL. A user id alone must not be enough
+      // to aim a sign-in link at somebody on a different account.
+      //
+      // The precondition is asserted rather than guarded with an `if`: the
+      // first version read a global nothing ever set, so this never ran
+      // while the check's own summary claimed it had.
+      const [other] = await sql('select id from tenants where id <> $1 limit 1', [id]);
+      assert(other, 'need a second company to prove the scoping');
+      const crossed = await api('POST', `/rep-dealers/${other.id}/admins/${who.id}/resend`,
+        { as: USERS.admin, body: {} });
+      eq(crossed.status, 404, `a login was resent through the wrong company: ${crossed.status}`);
+      const bogus = await api('POST', `/rep-dealers/${id}/admins/00000000-0000-4000-8000-00000000dead/resend`,
+        { as: USERS.admin, body: {} });
+      eq(bogus.status, 404, 'an unknown person got a link');
+
+      // Admin only, like everything else about logins.
+      const asHelper = await api('POST', `/rep-dealers/${id}/admins/${who.id}/resend`, { as: USERS.helper, body: {} });
+      eq(asHelper.status, 403, `the helper resent a login: ${asHelper.status}`);
+      eq(sent.length, before + 1, 'a refused resend still sent mail');
+      return `fresh link to ${who.email}; cross-company and helper both refused`;
+    });
+
     await check('A rep and the helper cannot see or change who holds a dealer\'s logins', async () => {
       const id = global.__standardTenantId;
       const g = await api('GET', `/rep-dealers/${id}/admins`, { as: USERS.helper });

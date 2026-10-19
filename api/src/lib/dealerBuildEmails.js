@@ -153,13 +153,20 @@ function forRep({ repName, companyName, contactName, contactEmail, signInUrl, ac
 // no setup payment ahead of them, and quoting prices to a colleague who was
 // added to help is both wrong and none of their business. What they need is
 // the link, where to sign in, and what the platform will email them about.
-function forExtraAdmin({ contactName, companyName, link, signInUrl, logoUrl }) {
+// `resend` is for the case this exists to solve: the first email did not
+// arrive, or the link in it expired, and someone is waiting to get in. The
+// opening line says so rather than repeating "you have been given a login",
+// which reads like a mistake to anyone who already had one.
+function forExtraAdmin({ contactName, companyName, link, signInUrl, logoUrl, resend = false }) {
   const hi = firstName(contactName);
+  const opener = resend
+    ? `Here is a fresh link to set your password for ${companyName}'s 50. referral program. Any earlier link has stopped working.`
+    : `You have been given a login for ${companyName}'s 50. referral program.`;
 
   const text = [
     `Hi ${hi},`,
     '',
-    `You have been given a login for ${companyName}'s 50. referral program.`,
+    opener,
     '',
     'Set your password here (this link works once, and expires):',
     link,
@@ -179,7 +186,9 @@ function forExtraAdmin({ contactName, companyName, link, signInUrl, logoUrl }) {
 <div style="${FONT}max-width:480px;margin:0 auto;color:#1B1B1B;">
   ${logoBlock(logoUrl)}
   <p style="${PARA}">Hi ${escapeHtml(hi)},</p>
-  <p style="${PARA}">You have been given a login for <b>${escapeHtml(companyName)}</b>'s 50. referral program.</p>
+  <p style="${PARA}">${resend
+    ? `Here is a fresh link to set your password for <b>${escapeHtml(companyName)}</b>'s 50. referral program. Any earlier link has stopped working.`
+    : `You have been given a login for <b>${escapeHtml(companyName)}</b>'s 50. referral program.`}</p>
   ${button(link, 'Set your password')}
   ${fallbackLink(link)}
   <p style="${PARA}">Then sign in any time at <a href="${escapeHtml(signInUrl)}" style="color:#33475A;font-weight:bold;">${escapeHtml(signInUrl)}</a>.</p>
@@ -191,7 +200,13 @@ function forExtraAdmin({ contactName, companyName, link, signInUrl, logoUrl }) {
   <p style="${PARA}">— 50.</p>
 </div>`;
 
-  return { subject: `Your login for ${companyName}'s referral program`, textBody: text, htmlBody: html };
+  return {
+    subject: resend
+      ? `Your new sign-in link for ${companyName}`
+      : `Your login for ${companyName}'s referral program`,
+    textBody: text,
+    htmlBody: html,
+  };
 }
 
 module.exports = { forDealer, forRep, forExtraAdmin };
