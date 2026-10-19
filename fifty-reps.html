@@ -1436,13 +1436,20 @@ async function renderLeads(){
       // only leads they brought in or closed, rep_leads_platform_staff_update
       // lets Joseph touch any -- and a rep is only ever shown their own, so
       // every row in front of someone is one they may edit.
+      // Three buttons at most, not seven. Seven covered the Email, Date and
+      // Status columns even on a full-width screen and buried the row
+      // entirely on a narrow one -- the table could not be read without
+      // scrolling sideways past its own controls. What stays is what a
+      // pipeline decision needs: edit the details, and say won or lost.
+      // Wording, Files, Follow up and Delete move behind More, which opens a
+      // dialog rather than a dropdown: an absolutely positioned menu inside
+      // .tablewrap{overflow-x:auto} gets clipped by its own scroller, and
+      // every other action on this page is already a dialog.
       '<td class="num"><button class="btn small secondary" data-editlead="' + x.id + '">Edit</button> ' +
-        '<button class="btn small secondary" data-wording="' + x.id + '">Wording</button> ' +
-        '<button class="btn small secondary" data-files="' + x.id + '">Files</button> ' +
-        '<button class="btn small secondary" data-leadfu="' + x.id + '">Follow up</button> ' +
-        (x.status === 'won' ? (x.build_status === 'awaiting_approval' ? '<span class="muted">waiting on Joseph</span>' : '') :
+        (x.status === 'won' ? (x.build_status === 'awaiting_approval' ? '<span class="muted">waiting on Joseph</span> ' : '') :
         '<button class="btn small" data-win="' + x.id + '">Mark won</button> ' +
         '<button class="btn small danger" data-lost="' + x.id + '">Lost</button> ') +
+        '<button class="btn small secondary" data-leadmore="' + x.id + '">More</button>' +
         // Delete sits on EVERY row for the admin, whatever the status. The
         // first version put it inside the "won" branch only, so none of
         // Joseph's four open test leads could ever show one — the button
@@ -1457,7 +1464,6 @@ async function renderLeads(){
         // from its company. The page cannot see rep_earnings, so it must not
         // try to work this out for itself. The admin rule is the page's own to
         // apply — it knows that reliably.
-        (state.isAdmin && x.can_delete ? '<button class="btn small danger" data-dellead="' + x.id + '">Delete</button>' : '') +
         '</td></tr>'
     ).join('') || '<tr data-empty-row><td colspan="7" class="muted" style="padding:18px">No leads yet.</td></tr>') +
     '</tbody></table></div>';
@@ -1489,20 +1495,10 @@ async function renderLeads(){
   form.addEventListener('submit', (e) => { e.preventDefault(); submitLead(form, false); });
   // Pre-filled with the company name and tied to the lead, so a follow-up set
   // from here needs one word typed and still points back at the right row.
-  $('tab-leads').querySelectorAll('[data-leadfu]').forEach((b) => b.addEventListener('click', () => {
-    const lead = state.leads.find((x) => x.id === b.dataset.leadfu);
-    followupDialog(null, {
-      title: lead ? 'Follow up with ' + lead.company_name : '',
-      lead_id: b.dataset.leadfu,
-      tenant_id: (lead && lead.tenant_id) || null,
-    });
-  }));
   $('tab-leads').querySelectorAll('[data-win]').forEach((b) => b.addEventListener('click', () => winLeadDialog(b.dataset.win)));
-  $('tab-leads').querySelectorAll('[data-files]').forEach((b) => b.addEventListener('click', () => filesDialog(b.dataset.files)));
-  $('tab-leads').querySelectorAll('[data-wording]').forEach((b) => b.addEventListener('click', () => wordingDialog(b.dataset.wording)));
   $('tab-leads').querySelectorAll('[data-editlead]').forEach((b) => b.addEventListener('click', () => editLeadDialog(b.dataset.editlead)));
+  $('tab-leads').querySelectorAll('[data-leadmore]').forEach((b) => b.addEventListener('click', () => leadMoreDialog(b.dataset.leadmore)));
   $('tab-leads').querySelectorAll('[data-lost]').forEach((b) => b.addEventListener('click', () => lostDialog(b.dataset.lost)));
-  $('tab-leads').querySelectorAll('[data-dellead]').forEach((b) => b.addEventListener('click', () => deleteWonLeadDialog(b.dataset.dellead)));
 }
 function todayYmd(){ return new Date().toLocaleDateString('en-CA', { timeZone: TZ }); }
 function formData(form){ const o = {}; new FormData(form).forEach((v, k) => { o[k] = typeof v === 'string' ? v.trim() : v; }); return o; }
@@ -1540,6 +1536,42 @@ async function submitLead(form, confirmDuplicate){
 // Edit a lead's details. The same boxes as "Add a lead", minus the wording
 // (that has its own dialog) and minus the status (Mark won and Lost own that,
 // and the API refuses a status change on a won lead anyway).
+// The rest of a lead's actions, off the row. Each one opens the dialog it
+// always opened; this just replaces #dlg's contents, so there is nothing to
+// close first.
+function leadMoreDialog(id){
+  const lead = state.leads.find((x) => x.id === id);
+  if(!lead) return flash('That lead is gone. Refresh the tab.');
+  openDialog(
+    '<h3>' + esc(lead.company_name) + '</h3>' +
+    '<p class="hint">Everything else you can do with this lead.</p>' +
+    '<div class="actions" style="justify-content:flex-start;flex-wrap:wrap">' +
+      '<button class="btn secondary" type="button" data-more="wording">Wording</button> ' +
+      '<button class="btn secondary" type="button" data-more="files">Files</button> ' +
+      '<button class="btn secondary" type="button" data-more="followup">Follow up</button> ' +
+      // Delete is the admin's and only while the API says the lead may still
+      // go -- the same test the DELETE route makes. Kept last and apart from
+      // the others, because it is not the same thing as Lost.
+      (state.isAdmin && lead.can_delete
+        ? '<button class="btn danger" type="button" data-more="delete">Delete</button>' : '') +
+    '</div>' +
+    '<div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Close</button></div>'
+  );
+  $('cancelDlg').addEventListener('click', closeDialog);
+  const go = {
+    wording: () => wordingDialog(id),
+    files: () => filesDialog(id),
+    followup: () => followupDialog(null, {
+      title: 'Follow up with ' + lead.company_name,
+      lead_id: id,
+      tenant_id: lead.tenant_id || null,
+    }),
+    delete: () => deleteWonLeadDialog(id),
+  };
+  $('dlg').querySelectorAll('[data-more]').forEach((b) =>
+    b.addEventListener('click', () => go[b.dataset.more]()));
+}
+
 function editLeadDialog(id){
   const lead = state.leads.find((x) => x.id === id);
   // Another device may have deleted it since this table was drawn. Three
