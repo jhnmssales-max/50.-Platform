@@ -1002,31 +1002,44 @@ async function main() {
       const visible = () => page.$$eval('#tab-dealers tbody tr[data-search]', (rows) =>
         rows.filter((r) => !r.hidden).map((r) => r.querySelector('b, [data-company]').textContent));
 
+      // Waits for the filtered list to BE the expected list, instead of
+      // sleeping 80ms and hoping the redraw finished. The Companies tab grew
+      // an activity line and an extra query, which pushed its redraw past
+      // that sleep; the two sibling search checks had the same race.
+      const settles = async (expected) => {
+        await page.waitForFunction((want) => {
+          const rows = Array.from(document.querySelectorAll('#tab-dealers tbody tr[data-search]'));
+          const shown = rows.filter((r) => !r.hidden)
+            .map((r) => r.querySelector('b, [data-company]').textContent);
+          return shown.length === want.length && shown.every((n, i) => n === want[i]);
+        }, expected, { timeout: 6000 }).catch(() => {});
+      };
+
       const all = await visible();
       assert(all.length >= 4, `expected several companies, got ${all.length}`);
 
       // By name.
       await page.fill('#tab-dealers .searchbox', 'roofing');
-      await page.waitForTimeout(80);
+      await settles(['Dealer A Roofing']);
       eq(await visible(), ['Dealer A Roofing'], 'searching a name');
       assert(/1 of /.test(await page.textContent('#tab-dealers [data-search-count]')), 'no count shown');
 
       // Case does not matter, and neither does word order.
       await page.fill('#tab-dealers .searchbox', 'ROOFING a dealer');
-      await page.waitForTimeout(80);
+      await settles(['Dealer A Roofing']);
       eq(await visible(), ['Dealer A Roofing'], 'words in any order, any case');
 
       // A rep's name must NOT match a company: every Companies row carries a
       // dropdown listing every rep, which is exactly why rows are matched on
       // their own fields rather than on their text.
       await page.fill('#tab-dealers .searchbox', 'Alice Rep');
-      await page.waitForTimeout(80);
+      await settles([]);
       eq((await visible()).length, 0, 'a rep name leaked through the dropdowns');
       assert(/nothing matches/.test(await page.textContent('#tab-dealers [data-search-count]')), 'no empty message');
 
       // Clearing brings everything back.
       await page.fill('#tab-dealers .searchbox', '');
-      await page.waitForTimeout(80);
+      await settles(all);
       eq((await visible()).length, all.length, 'clearing did not restore the list');
       eq(await page.textContent('#tab-dealers [data-search-count]'), '', 'count still shown when not searching');
       return `${all.length} companies; name, case and word order all match; a rep name does not`;
@@ -1489,6 +1502,40 @@ async function main() {
       return 'a rep searches her own leads and her own dealers, with her own wording';
     });
 
+    await check('A rep can edit her own lead, and is not offered the rep selector', async () => {
+      await repPage.click('[data-tab=leads]');
+      await repPage.waitForSelector('#tab-leads tr[data-search]');
+      const row = repPage.locator('#tab-leads tr', { hasText: 'Her Own Prospect' });
+      eq(await row.locator('[data-editlead]').count(), 1, 'a rep gets no Edit button on her own lead');
+      await row.locator('[data-editlead]').click();
+      await repPage.waitForSelector('#editLeadForm');
+
+      // Reassigning a lead to another rep is the admin's alone, and the API
+      // refuses it for a rep -- so the box is not offered rather than being
+      // offered and then rejected.
+      eq(await repPage.locator('#editLeadForm [name=brought_in_by_rep_id]').count(), 0,
+        'a rep was offered "Brought in by"');
+
+      // "Her Own Prospect" is a shared fixture the next checks use, so the
+      // note it had is put back before leaving.
+      const [before] = await sql(`select notes from rep_leads where company_name = 'Her Own Prospect'`);
+      const stamp = 'Her note ' + Date.now();
+      try {
+        await repPage.fill('#editLeadForm [name=notes]', stamp);
+        await repPage.click('#saveLead');
+        await repPage.waitForFunction((t) => document.getElementById('tab-leads').textContent.includes(t),
+          stamp, { timeout: 8000 });
+        const [saved] = await sql(`select notes from rep_leads where notes = $1`, [stamp]);
+        assert(saved, 'the rep\'s edit never reached the database');
+      } finally {
+        await sql(`update rep_leads set notes = $1 where company_name = 'Her Own Prospect'`,
+          [before ? before.notes : null]);
+        await repPage.click('[data-tab=leads]');
+        await repPage.waitForSelector('#tab-leads tr[data-search]');
+      }
+      return 'a rep edited her own lead; no rep selector offered';
+    });
+
     await check('Marking her own lead won is a plain confirmation and builds nothing', async () => {
       const tenantsBefore = (await sql('select count(*)::int n from tenants'))[0].n;
       await repPage.locator('#tab-leads tr', { hasText: 'Her Own Prospect' }).locator('[data-win]').click();
@@ -1862,6 +1909,49 @@ async function main() {
     await check('No script errors or failed API calls were logged in the browser', async () => {
       assert(consoleErrors.length === 0, consoleErrors.join('\n'));
     });
+    await check('Joseph can edit any lead, and the edit saves', async () => {
+      const ep = await newPage('admin');
+      try {
+        await signIn(ep, USERS.admin);
+        await ep.click('[data-tab=leads]');
+        await ep.waitForSelector('#tab-leads tr[data-search]');
+        // Its OWN lead, not whichever row happens to be first. Editing a
+        // shared fixture row broke three later checks that depend on its
+        // contents -- the same mutate-and-don't-restore mistake as the
+        // closed-company check, which is why that one uses try/finally.
+        const marker = 'Edit Target Co ' + Date.now();
+        await sql(`insert into rep_leads (company_name, contact_name, status, found_on)
+                   values ($1, 'Target Contact', 'open', current_date)`, [marker]);
+        await ep.reload();
+        await ep.click('[data-tab=leads]');
+        await ep.waitForFunction((m) => document.getElementById('tab-leads').textContent.includes(m),
+          marker, { timeout: 10000 });
+        const row = ep.locator('#tab-leads tr', { hasText: marker });
+        eq(await row.locator('[data-editlead]').count(), 1, 'no Edit button on a lead row');
+        await row.locator('[data-editlead]').click();
+        await ep.waitForSelector('#editLeadForm');
+
+        // The admin's form offers the rep selector; a rep's must not.
+        eq(await ep.locator('#editLeadForm [name=brought_in_by_rep_id]').count(), 1,
+          'the admin was not offered "Brought in by"');
+
+        const stamp = 'Edited ' + Date.now();
+        await ep.fill('#editLeadForm [name=notes]', stamp);
+        await ep.fill('#editLeadForm [name=phone]', '717-555-0101');
+        await ep.click('#saveLead');
+        await ep.waitForFunction((t) => document.getElementById('tab-leads').textContent.includes(t),
+          stamp, { timeout: 8000 });
+        // And it is actually in the database, not only on screen.
+        const [saved] = await sql(`select notes, phone from rep_leads where notes = $1`, [stamp]);
+        assert(saved, 'the edit never reached the database');
+        eq(saved.phone, '717-555-0101', 'the phone did not save');
+        return 'edited a lead as admin; notes and phone persisted';
+      } finally {
+        await sql(`delete from rep_leads where company_name like 'Edit Target Co %'`);
+        await ep.close();
+      }
+    });
+
     await check('The Companies tab shows which dealers have gone quiet, and the helper sees no billing state', async () => {
       const ap = await newPage('admin');
       try {
