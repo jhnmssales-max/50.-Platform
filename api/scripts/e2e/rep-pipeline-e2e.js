@@ -764,6 +764,55 @@ async function main() {
       return 'cap still 500, total and open_total come from the table';
     });
 
+    await check('A rep can edit her own lead but not another rep\'s', async () => {
+      // The Edit button is new on the page; this is the rule underneath it.
+      // The page only ever shows a rep her own leads, so the UI alone would
+      // look correct even if the API let her through -- which is exactly the
+      // kind of permission bug that hides. So this goes at the API.
+      const mine = await api('POST', '/rep-leads', {
+        as: ALICE, body: { company_name: 'Alice Edit Co', contact_name: 'A' },
+      });
+      eq(mine.status, 201, 'Alice could not create her own lead');
+      const hers = await api('POST', '/rep-leads', {
+        as: BOB, body: { company_name: 'Bob Edit Co', contact_name: 'B' },
+      });
+      eq(hers.status, 201, 'Bob could not create his own lead');
+
+      // Her own: allowed, and it actually changes.
+      const ok = await api('PATCH', `/rep-leads/${mine.body.id}`, {
+        as: ALICE, body: { notes: 'she edited this', phone: '717-555-0199' },
+      });
+      eq(ok.status, 200, `editing her own lead: ${JSON.stringify(ok.body)}`);
+      const [after] = await sql('select notes, phone from rep_leads where id = $1', [mine.body.id]);
+      eq(after.notes, 'she edited this', 'her edit did not save');
+
+      // Bob's: refused, and -- the part that matters -- UNCHANGED. A policy
+      // that filters to zero rows can return a cheerful 200 having done
+      // nothing, so checking the status alone would not prove anything.
+      const denied = await api('PATCH', `/rep-leads/${hers.body.id}`, {
+        as: ALICE, body: { notes: 'she should not be able to write this' },
+      });
+      assert(denied.status >= 400, `Alice edited Bob's lead and got ${denied.status}`);
+      const [bobs] = await sql('select notes from rep_leads where id = $1', [hers.body.id]);
+      assert(bobs.notes !== 'she should not be able to write this',
+        `Alice's text reached Bob's lead: ${bobs.notes}`);
+
+      // And a rep cannot hand her lead to someone else.
+      const reassign = await api('PATCH', `/rep-leads/${mine.body.id}`, {
+        as: ALICE, body: { brought_in_by_rep_id: rep.Bob.id },
+      });
+      eq(reassign.status, 403, 'a rep reassigned her own lead to another rep');
+
+      // Joseph can edit either of them.
+      const asAdmin = await api('PATCH', `/rep-leads/${hers.body.id}`, {
+        as: USERS.admin, body: { notes: 'Joseph edited this one' },
+      });
+      eq(asAdmin.status, 200, 'the admin could not edit a rep\'s lead');
+
+      await sql(`delete from rep_leads where company_name in ('Alice Edit Co', 'Bob Edit Co')`);
+      return 'own lead edits; another rep\'s is refused and left unchanged; admin edits both';
+    });
+
     await check('The Finances handler never holds two pooled connections at once', async () => {
       // This is a source-shape guard, not a load test, and deliberately so.
       // I first wrote this as "fire 24 concurrent requests and see", which

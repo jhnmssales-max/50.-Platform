@@ -1431,7 +1431,13 @@ async function renderLeads(){
           : '') + '</td>' +
       '<td><span class="pill ' + x.status + '">' + x.status + '</span></td>' +
       (state.isRep ? '' : '<td' + (x.status === 'won' ? '' : ' class="nomob"') + '>' + (x.status === 'won' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>') +
-      '<td class="num"><button class="btn small secondary" data-wording="' + x.id + '">Wording</button> ' +
+      // Edit sits on every row the viewer can see. The database already
+      // decides who may change what -- rep_leads_own_update lets a rep touch
+      // only leads they brought in or closed, rep_leads_platform_staff_update
+      // lets Joseph touch any -- and a rep is only ever shown their own, so
+      // every row in front of someone is one they may edit.
+      '<td class="num"><button class="btn small secondary" data-editlead="' + x.id + '">Edit</button> ' +
+        '<button class="btn small secondary" data-wording="' + x.id + '">Wording</button> ' +
         '<button class="btn small secondary" data-files="' + x.id + '">Files</button> ' +
         '<button class="btn small secondary" data-leadfu="' + x.id + '">Follow up</button> ' +
         (x.status === 'won' ? (x.build_status === 'awaiting_approval' ? '<span class="muted">waiting on Joseph</span>' : '') :
@@ -1494,6 +1500,7 @@ async function renderLeads(){
   $('tab-leads').querySelectorAll('[data-win]').forEach((b) => b.addEventListener('click', () => winLeadDialog(b.dataset.win)));
   $('tab-leads').querySelectorAll('[data-files]').forEach((b) => b.addEventListener('click', () => filesDialog(b.dataset.files)));
   $('tab-leads').querySelectorAll('[data-wording]').forEach((b) => b.addEventListener('click', () => wordingDialog(b.dataset.wording)));
+  $('tab-leads').querySelectorAll('[data-editlead]').forEach((b) => b.addEventListener('click', () => editLeadDialog(b.dataset.editlead)));
   $('tab-leads').querySelectorAll('[data-lost]').forEach((b) => b.addEventListener('click', () => lostDialog(b.dataset.lost)));
   $('tab-leads').querySelectorAll('[data-dellead]').forEach((b) => b.addEventListener('click', () => deleteWonLeadDialog(b.dataset.dellead)));
 }
@@ -1530,6 +1537,61 @@ async function submitLead(form, confirmDuplicate){
 // Lost removes the lead for good: the company, the contact, the notes and any
 // files on it. Worth a real dialog rather than a browser confirm, because it
 // cannot be undone and the list is where someone's work lives.
+// Edit a lead's details. The same boxes as "Add a lead", minus the wording
+// (that has its own dialog) and minus the status (Mark won and Lost own that,
+// and the API refuses a status change on a won lead anyway).
+function editLeadDialog(id){
+  const lead = state.leads.find((x) => x.id === id);
+  // Another device may have deleted it since this table was drawn. Three
+  // other dialogs in this file used to read straight through and throw,
+  // which showed the person nothing at all.
+  if(!lead) return flash('That lead is gone. Refresh the tab.');
+  openDialog(
+    '<h3>Edit ' + esc(lead.company_name) + '</h3>' +
+    '<form id="editLeadForm"><div class="row">' +
+      '<div><label>Company</label><input name="company_name" required maxlength="200" value="' + esc(lead.company_name || '') + '"></div>' +
+      '<div><label>Website</label><input name="website" maxlength="300" placeholder="theircompany.com" value="' + esc(lead.website || '') + '"></div></div>' +
+    '<div class="row"><div><label>Contact name</label><input name="contact_name" maxlength="120" value="' + esc(lead.contact_name || '') + '"></div>' +
+      '<div><label>Phone</label><input name="phone" maxlength="50" value="' + esc(lead.phone || '') + '"></div></div>' +
+    '<div class="row"><div><label>Email</label><input name="email" type="email" maxlength="200" value="' + esc(lead.email || '') + '"></div>' +
+      // A rep cannot hand a lead to another rep, and the API refuses it, so
+      // the box is not offered to one rather than being offered and refused.
+      (state.isRep ? '' : '<div><label>Brought in by</label><select name="brought_in_by_rep_id">' + repOptions(lead.brought_in_by_rep_id, { blank: '\u2014 nobody / me \u2014', activeOnly: true }) + '</select></div>') +
+      '<div><label>Date found</label><input name="found_on" type="date" value="' + esc(String(lead.found_on || '').slice(0,10)) + '"></div></div>' +
+    '<label>Notes</label><textarea name="notes" rows="3" maxlength="2000">' + esc(lead.notes || '') + '</textarea>' +
+    (lead.status === 'won'
+      ? '<p class="hint">This lead is won, so its status cannot be changed here. Everything else is editable.</p>'
+      : '') +
+    '<div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Cancel</button>' +
+      '<button class="btn" type="submit" id="saveLead">Save</button></div></form>'
+  );
+  $('cancelDlg').addEventListener('click', closeDialog);
+  const btn = $('saveLead');
+  $('editLeadForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if(btn.disabled) return;
+    btn.disabled = true;
+    try{
+      const f = formData(ev.target);
+      const body = {
+        company_name: f.company_name,
+        contact_name: f.contact_name || '',
+        phone: f.phone || '',
+        email: f.email || '',
+        website: f.website || '',
+        notes: f.notes || '',
+        found_on: f.found_on || undefined,
+      };
+      // Only the admin's form carries this box, and sending it as a rep
+      // would be refused by the API.
+      if(!state.isRep) body.brought_in_by_rep_id = f.brought_in_by_rep_id || null;
+      await patch('/rep-leads/' + id, body);
+      closeDialog(); flash('Saved.', true); await renderLeads();
+    }catch(err){ dialogError(err.message); }
+    finally{ btn.disabled = false; }
+  });
+}
+
 function lostDialog(id){
   const lead = state.leads.find((x) => x.id === id);
   const files = '';
