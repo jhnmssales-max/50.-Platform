@@ -126,7 +126,10 @@
      that changed a heading above nothing at all. A 7-column grid does fit —
      what does not fit is a chip with words in it, so each item becomes a dot
      and the list underneath stays the part you act on. */
-  @media (max-width:560px){
+  /* Raised from 560px. At 700px the table kept its min-width and its sticky
+     action column, so the buttons sat on top of Contact, Found and Status --
+     the cards are the readable layout well before a phone's width. */
+  @media (max-width:860px){
     .tablewrap{overflow-x:visible;background:transparent;border:0;border-radius:0;}
     table{min-width:0;display:block;}
     thead{display:none;}
@@ -1382,10 +1385,33 @@ async function renderLeads(){
   state.leadTotal = (typeof l.total === 'number') ? l.total : state.leads.length;
   const open = (typeof l.open_total === 'number') ? l.open_total : state.leads.filter((x) => x.status === 'open').length;
   const capped = state.leads.length < state.leadTotal;
+
+  // A won lead is not a lead any more -- it is a company, and it belongs on
+  // the Companies tab. Keeping it here left a row nobody would act on again,
+  // and it is what forced the "Won by" column onto this table, which is what
+  // pushed the table wider than its container and put the sticky action
+  // column on top of the rightmost column.
+  //
+  // Hidden rather than dropped, behind the same toggle the Companies tab
+  // already uses for closed companies: between winning and Joseph building
+  // it, a won lead is on no other screen a REP can reach, and the rep who
+  // closed it is the person most likely to wonder where it went.
+  const wonLeads = state.leads.filter((x) => x.status === 'won');
+  const shown = state.showWonLeads ? state.leads : state.leads.filter((x) => x.status !== 'won');
+  // With no won leads on screen there is nothing for a "Won by" column to
+  // say, so it goes too -- that is the column that did not fit.
+  const showWonBy = !state.isRep && state.showWonLeads;
   captureSearch('tab-leads', 'leads');
   $('tab-leads').innerHTML =
     '<div class="head"><h2>Leads</h2><span class="muted">' + open + ' open · ' + state.leadTotal + ' total' +
       (capped ? ' · showing the newest ' + state.leads.length : '') + '</span></div>' +
+    (wonLeads.length
+      ? '<p class="muted" style="margin:-6px 0 10px"><button type="button" class="linkish" id="toggleWon">' +
+        (state.showWonLeads
+          ? 'Hide won leads'
+          : 'Show won leads (' + wonLeads.length + ')') + '</button>' +
+        (state.showWonLeads ? '' : ' <span class="muted">— they are on the Companies tab once built.</span>') + '</p>'
+      : '') +
     (capped
       ? '<div class="notice">This tab shows the newest ' + state.leads.length + ' of ' + state.leadTotal +
         ' leads. Filter by status, or search, to reach the rest.</div>'
@@ -1411,8 +1437,8 @@ async function renderLeads(){
       '<div class="actions"><button class="btn" type="submit">Add lead</button></div></form>' +
       '<div id="dupBox"></div></details>' +
     searchBox('leads', state.isRep ? 'Search your leads \u2014 company, contact, email, phone' : 'Search leads \u2014 company, contact, email, phone') +
-    '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th>' + (state.isRep ? '' : '<th>Brought in by</th>') + '<th>Found</th><th>Status</th>' + (state.isRep ? '' : '<th>Won by</th>') + '<th></th></tr></thead><tbody>' +
-    (state.leads.map((x) =>
+    '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th>' + (state.isRep ? '' : '<th>Brought in by</th>') + '<th>Found</th><th>Status</th>' + (showWonBy ? '<th>Won by</th>' : '') + '<th></th></tr></thead><tbody>' +
+    (shown.map((x) =>
       '<tr data-search="' + searchable([x.company_name, x.contact_name, x.phone, x.email, x.website, x.notes, x.status]) + '"><td><b>' + esc(x.company_name) + '</b>' +
         (x.website ? '<div class="muted">' + esc(x.website) + '</div>' : '') +
         (x.notes ? '<div class="muted">' + esc(x.notes) + '</div>' : '') +
@@ -1430,7 +1456,7 @@ async function renderLeads(){
             daysSince(x.found_on) + ' day' + (daysSince(x.found_on) === 1 ? '' : 's') + '</span></div>'
           : '') + '</td>' +
       '<td><span class="pill ' + x.status + '">' + x.status + '</span></td>' +
-      (state.isRep ? '' : '<td' + (x.status === 'won' ? '' : ' class="nomob"') + '>' + (x.status === 'won' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>') +
+      (showWonBy ? '<td' + (x.status === 'won' ? '' : ' class="nomob"') + '>' + (x.status === 'won' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>' : '') +
       // Edit sits on every row the viewer can see. The database already
       // decides who may change what -- rep_leads_own_update lets a rep touch
       // only leads they brought in or closed, rep_leads_platform_staff_update
@@ -1465,7 +1491,8 @@ async function renderLeads(){
         // try to work this out for itself. The admin rule is the page's own to
         // apply — it knows that reliably.
         '</td></tr>'
-    ).join('') || '<tr data-empty-row><td colspan="7" class="muted" style="padding:18px">No leads yet.</td></tr>') +
+    ).join('') || '<tr data-empty-row><td colspan="' + (state.isRep ? 5 : (showWonBy ? 7 : 6)) + '" class="muted" style="padding:18px">' +
+      (state.leads.length ? 'Every lead here has been won. They are on the Companies tab.' : 'No leads yet.') + '</td></tr>') +
     '</tbody></table></div>';
 
   const form = $('leadForm');
@@ -1498,6 +1525,10 @@ async function renderLeads(){
   $('tab-leads').querySelectorAll('[data-win]').forEach((b) => b.addEventListener('click', () => winLeadDialog(b.dataset.win)));
   $('tab-leads').querySelectorAll('[data-editlead]').forEach((b) => b.addEventListener('click', () => editLeadDialog(b.dataset.editlead)));
   $('tab-leads').querySelectorAll('[data-leadmore]').forEach((b) => b.addEventListener('click', () => leadMoreDialog(b.dataset.leadmore)));
+  if($('toggleWon')) $('toggleWon').addEventListener('click', async () => {
+    state.showWonLeads = !state.showWonLeads;
+    await renderLeads();
+  });
   $('tab-leads').querySelectorAll('[data-lost]').forEach((b) => b.addEventListener('click', () => lostDialog(b.dataset.lost)));
 }
 function todayYmd(){ return new Date().toLocaleDateString('en-CA', { timeZone: TZ }); }
