@@ -238,6 +238,21 @@ async function main() {
   // "More" button, because seven buttons covered the Email, Date and Status
   // columns even on a full-width screen. Reaching one is now two steps, so
   // these do both: open More, then act on (or count) the action inside it.
+  // Won leads are hidden on the Leads tab now -- they are companies, and they
+  // live on the Companies tab. Checks that need one open the same toggle a
+  // person would.
+  async function revealWonLeads(pg) {
+    const t = await pg.$('#toggleWon');
+    if (!t) return false;
+    if (!/Show won/.test(await t.textContent())) return true;
+    await t.click();
+    await pg.waitForFunction(() => {
+      const b = document.getElementById('toggleWon');
+      return b && /Hide won/.test(b.textContent);
+    }, { timeout: 8000 });
+    return true;
+  }
+
   async function leadAction(pg, row, action) {
     await row.locator('[data-leadmore]').click();
     await pg.waitForSelector('#dlg [data-more]', { timeout: 6000 });
@@ -394,7 +409,15 @@ async function main() {
       await page.selectOption('#winForm [name=onboarded_by_rep_id]', { label: 'Bob Rep' });
       await page.selectOption('#winForm [name=tenant_id]', { label: 'Dealer A Roofing' });
       await page.click('#winForm button[type=submit]');
-      await page.waitForFunction(() => document.querySelector('.pill.won'));
+      // The row leaves the Leads tab the moment it is won -- it is a company
+      // now. So this waits for it to GO, then reveals it to read the result,
+      // which is what a person would do.
+      await page.waitForFunction(() => {
+        const b = document.getElementById('toggleWon');
+        return b && /Show won leads/.test(b.textContent);
+      }, { timeout: 15000 });
+      await revealWonLeads(page);
+      await page.waitForFunction(() => document.querySelector('.pill.won'), { timeout: 15000 });
       const [a] = await sql(`select ra.*, (select name from reps where id = ra.closer_rep_id) as closer, (select name from reps where id = ra.onboarder_rep_id) as onboarder from rep_assignments ra where tenant_id = $1 and effective_to is null`, [tenants['dealer-a'].id]);
       assert(a && a.closer === 'Alice Rep' && a.onboarder === 'Bob Rep', JSON.stringify(a));
       return `assignment: closer ${a.closer}, onboarder ${a.onboarder}`;
@@ -921,6 +944,8 @@ async function main() {
       // — which is exactly what happened twice while writing this.
       try {
       await page.click('[data-tab=leads]');
+      // These three are all WON leads, so they are behind the toggle now.
+      await revealWonLeads(page);
       await page.waitForFunction(() => document.querySelector('#tab-leads').textContent.includes('Earned From Co'), { timeout: 10000 });
       await page.waitForLoadState('networkidle').catch(() => {});
 
@@ -1083,8 +1108,15 @@ async function main() {
       // pass or fail on timing.
       await page.waitForLoadState('networkidle').catch(() => {});
       await page.waitForFunction(() => document.querySelector('#tab-leads').textContent.includes('Zzz Decoy Fencing'), { timeout: 10000 });
+      // Acme Roofing is won, so it is behind the toggle -- without this the
+      // search has nothing to match and the check fails for the wrong reason.
+      await revealWonLeads(page);
       await page.fill('#tab-leads .searchbox', 'acme');
-      await page.waitForTimeout(80);
+      await page.waitForFunction(() => {
+        const rows = Array.from(document.querySelectorAll('#tab-leads tbody tr[data-search]'));
+        return rows.length > 0 && rows.some((r) => !r.hidden)
+          && rows.filter((r) => !r.hidden).every((r) => (r.getAttribute('data-search') || '').includes('acme'));
+      }, { timeout: 6000 }).catch(() => {});
       const counted = await page.$$eval('#tab-leads tbody tr[data-search]', (r) => ({
         shown: r.filter((x) => !x.hidden).length,
         total: r.length,
@@ -1215,8 +1247,21 @@ async function main() {
 
     await check('She sees the lead she is on and can add one, with no "brought in by" to choose', async () => {
       await repPage.waitForSelector('#tab-leads table');
+      // Acme Roofing is her WON lead. It used to sit in this list; it does
+      // not any more, because a won lead is a company. This check now proves
+      // the new behaviour rather than the old one: hidden by default, and
+      // reachable through the toggle.
       const text = await repPage.textContent('#tab-leads');
-      assert(text.includes('Acme Roofing'), 'her own won lead is listed');
+      assert(!text.includes('Acme Roofing'), 'a won lead is still listed by default');
+      assert(/Show won leads/.test(text), `no toggle offered: ${text.slice(0, 160)}`);
+      await revealWonLeads(repPage);
+      assert((await repPage.textContent('#tab-leads')).includes('Acme Roofing'),
+        'the toggle did not bring her won lead back');
+      await repPage.click('#toggleWon');
+      await repPage.waitForFunction(() => {
+        const b = document.getElementById('toggleWon');
+        return b && /Show won/.test(b.textContent);
+      }, { timeout: 8000 });
       assert(!(await repPage.$('#leadForm [name=brought_in_by_rep_id]')) || true, 'form present');
       await openAddLead(repPage);
       assert((await repPage.$$('#leadForm [name=brought_in_by_rep_id]')).length === 0, 'a rep is not asked whose lead it is');
@@ -1495,6 +1540,8 @@ async function main() {
       // settles reads a list that is still being replaced — the same wait its
       // two sibling search checks already needed.
       await repPage.waitForLoadState('networkidle').catch(() => {});
+      // Her Acme Roofing is won, so reveal before searching for it.
+      await revealWonLeads(repPage);
       await repPage.fill('#tab-leads .searchbox', 'acme');
       // Wait for the filter to settle rather than guessing at a sleep. This
       // check failed intermittently with the unfiltered list in hand: the tab
@@ -2096,6 +2143,9 @@ async function main() {
         await signIn(phone, USERS.admin);
         await phone.click('[data-tab=leads]');
         await phone.waitForSelector('#tab-leads tr[data-search]');
+        // Won leads are hidden by default; reveal them so there are several
+        // rows to filter. One row cannot prove a filter did anything.
+        await revealWonLeads(phone);
         const visible = () => phone.$$eval('#tab-leads tbody tr[data-search]', (rows) =>
           rows.filter((r) => r.offsetParent !== null || r.offsetHeight > 0).length);
         const before = await visible();
