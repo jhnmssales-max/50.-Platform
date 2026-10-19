@@ -234,6 +234,24 @@ async function main() {
     await page.route(/fonts\.(googleapis|gstatic)\.com/, (r) => r.abort());
     return page;
   }
+  // Wording, Files, Follow up and Delete moved off the lead row behind a
+  // "More" button, because seven buttons covered the Email, Date and Status
+  // columns even on a full-width screen. Reaching one is now two steps, so
+  // these do both: open More, then act on (or count) the action inside it.
+  async function leadAction(pg, row, action) {
+    await row.locator('[data-leadmore]').click();
+    await pg.waitForSelector('#dlg [data-more]', { timeout: 6000 });
+    await pg.click(`#dlg [data-more=${action}]`);
+  }
+  async function leadActionCount(pg, row, action) {
+    await row.locator('[data-leadmore]').click();
+    await pg.waitForSelector('#dlg [data-more]', { timeout: 6000 });
+    const n = await pg.locator(`#dlg [data-more=${action}]`).count();
+    await pg.click('#cancelDlg');
+    await pg.waitForSelector('#dlg [data-more]', { state: 'detached', timeout: 6000 }).catch(() => {});
+    return n;
+  }
+
   async function signIn(page, u, { expectApp = true } = {}) {
     await page.goto(PAGE);
     await page.fill('#email', u.email);
@@ -798,14 +816,14 @@ async function main() {
 
         const row = page.locator('#tab-leads tr', { hasText: 'Open Test Row' });
         // All three live together: an open lead can be won, lost, or removed.
-        eq(await row.locator('[data-dellead]').count(), 1, 'an open lead has no Delete button');
+        eq(await leadActionCount(page, row, 'delete'), 1, 'an open lead has no Delete button');
         eq(await row.locator('[data-lost]').count(), 1, 'an open lead lost its Lost button');
         eq(await row.locator('[data-win]').count(), 1, 'an open lead lost its Mark won button');
 
         const lostBefore = Number((await sql('select coalesce(sum(lost_count),0)::int as n from rep_lead_outcomes where rep_id = $1', [alice4.id]))[0].n);
 
         // Delete says "this should not have been here" and counts for nothing.
-        await row.locator('[data-dellead]').click();
+        await leadAction(page, row, 'delete');
         await page.waitForSelector('#confirmDelLead', { timeout: 6000 });
         const text = (await page.textContent('#dlg')).replace(/\s+/g, ' ');
         assert(/not the same as/i.test(text) && /Lost/.test(text), `the dialog does not distinguish Delete from Lost: ${text.slice(0, 240)}`);
@@ -907,9 +925,9 @@ async function main() {
       await page.waitForLoadState('networkidle').catch(() => {});
 
       const row = (name) => page.locator('#tab-leads tr', { hasText: name });
-      eq(await row('Gone Company').locator('[data-dellead]').count(), 1, 'no Delete on a won lead whose company is gone');
-      eq(await row('Good Steward Structures').locator('[data-dellead]').count(), 1, 'no Delete on an in-house company\u2019s lead \u2014 it can never be cleared');
-      eq(await row('Earned From Co').locator('[data-dellead]').count(), 0, 'Delete offered on a lead a rep earned from');
+      eq(await leadActionCount(page, row('Gone Company'), 'delete'), 1, 'no Delete on a won lead whose company is gone');
+      eq(await leadActionCount(page, row('Good Steward Structures'), 'delete'), 1, 'no Delete on an in-house company\u2019s lead \u2014 it can never be cleared');
+      eq(await leadActionCount(page, row('Earned From Co'), 'delete'), 0, 'Delete offered on a lead a rep earned from');
 
       // The API refuses the earned one even when asked directly.
       const refused = await apiAs(USERS.admin, `/rep-leads/${earnedLead.id}`, { method: 'DELETE' });
@@ -926,7 +944,7 @@ async function main() {
       // Deleting the in-house one works from the page, and leaves the company
       // completely alone — that is what Joseph was worried about.
       const before = await sql('select lost_count from rep_lead_outcomes where rep_id = $1', [alice2.id]);
-      await row('Good Steward Structures').locator('[data-dellead]').click();
+      await leadAction(page, row('Good Steward Structures'), 'delete');
       await page.waitForSelector('#confirmDelLead', { timeout: 6000 });
       const text = (await page.textContent('#dlg')).replace(/\s+/g, ' ');
       assert(/company is not touched/i.test(text), `the dialog does not reassure about the company: ${text.slice(0, 240)}`);
@@ -1427,7 +1445,7 @@ async function main() {
     await check('The lead row says how much is in their own words, and reopens for editing', async () => {
       const rowText = await repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }).textContent();
       assert(/2 of \d+ in their own words/.test(rowText), `row: ${rowText}`);
-      await repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }).locator('[data-wording]').click();
+      await leadAction(repPage, repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }), 'wording');
       await repPage.waitForSelector('#wordingForm');
       await repPage.click('#wordingForm [data-wstep="1"]');
       eq(await repPage.inputValue('#wordingForm [name=copy_friendAction]'), 'book your gutter job', 'reopens with what she typed');
@@ -1445,7 +1463,7 @@ async function main() {
     });
 
     await check('Clearing every box drops the lead back to the generic wording', async () => {
-      await repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }).locator('[data-wording]').click();
+      await leadAction(repPage, repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }), 'wording');
       await repPage.waitForSelector('#wordingForm');
       for (const k of ['friendAction', 'inquiryNoun', 'offerHow']) {
         await wizFill(repPage, '#wordingForm', k, '');
@@ -1593,7 +1611,7 @@ async function main() {
       adminPage = await newPage('build');
       await signIn(adminPage, USERS.admin);
       await adminPage.click('[data-tab=leads]');
-      await adminPage.waitForSelector('#tab-leads [data-files]');
+      await adminPage.waitForSelector('#tab-leads [data-leadmore]');
       // Make a lead with a website, so the brand guess has somewhere to look.
       await addLead(adminPage, {
         company_name: 'Hill Country Barns',
@@ -1606,7 +1624,7 @@ async function main() {
 
       // A real PNG, dropped through the real file input.
       const png = makeLogoPng([46, 94, 58], [196, 122, 43]);
-      await adminPage.locator('#tab-leads tr', { hasText: 'Hill Country Barns' }).locator('[data-files]').click();
+      await leadAction(adminPage, adminPage.locator('#tab-leads tr', { hasText: 'Hill Country Barns' }), 'files');
       await adminPage.waitForSelector('#filePick', { state: 'attached' });
       await adminPage.setInputFiles('#filePick', { name: 'hill-country.png', mimeType: 'image/png', buffer: png });
       // The list of files, not the drop zone's own instructions — which also
@@ -1909,6 +1927,42 @@ async function main() {
     await check('No script errors or failed API calls were logged in the browser', async () => {
       assert(consoleErrors.length === 0, consoleErrors.join('\n'));
     });
+    await check('A lead row keeps at most four buttons, and the rest live behind More', async () => {
+      const cp = await newPage('admin');
+      try {
+        await signIn(cp, USERS.admin);
+        await cp.click('[data-tab=leads]');
+        await cp.waitForSelector('#tab-leads tr[data-search]');
+        // Seven buttons covered the Email, Date and Status columns even on a
+        // full-width screen, and buried the row entirely on a narrow one.
+        // This is the guard: the next action added to a lead goes behind
+        // More, not onto the row.
+        const counts = await cp.$$eval('#tab-leads tbody tr[data-search]', (rows) =>
+          rows.map((r) => {
+            const cell = r.querySelector('td.num');
+            return cell ? cell.querySelectorAll('button').length : 0;
+          }));
+        assert(counts.length > 0, 'no lead rows to measure');
+        const worst = Math.max(...counts);
+        // Four is the full set on an open lead: Edit, Mark won, Lost, More.
+        // A won lead carries two. Anything beyond four means a new action
+        // went onto the row instead of behind More.
+        assert(worst <= 4, `a lead row carries ${worst} buttons; put the extra one behind More`);
+
+        // And More really does reach the others.
+        const row = cp.locator('#tab-leads tbody tr[data-search]').first();
+        await row.locator('[data-leadmore]').click();
+        await cp.waitForSelector('#dlg [data-more]', { timeout: 6000 });
+        for (const a of ['wording', 'files', 'followup']) {
+          eq(await cp.locator(`#dlg [data-more=${a}]`).count(), 1, `More is missing ${a}`);
+        }
+        await cp.click('#cancelDlg');
+        return `worst row has ${worst} of 4 allowed; More carries wording, files and follow up`;
+      } finally {
+        await cp.close();
+      }
+    });
+
     await check('Joseph can edit any lead, and the edit saves', async () => {
       const ep = await newPage('admin');
       try {

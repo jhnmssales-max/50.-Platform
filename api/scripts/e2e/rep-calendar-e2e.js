@@ -268,8 +268,11 @@ async function main() {
     section('Set from a lead, without retyping the company');
     await check('the Follow up button on a lead pre-fills its name', async () => {
       await alice.click('#tabs button:has-text("My leads")');
-      await alice.waitForSelector('#tab-leads [data-leadfu]', { timeout: 8000 });
-      await alice.click('#tab-leads [data-leadfu]');
+      // Follow up moved behind the row's "More" button.
+      await alice.waitForSelector('#tab-leads [data-leadmore]', { timeout: 8000 });
+      await alice.click('#tab-leads [data-leadmore]');
+      await alice.waitForSelector('#dlg [data-more=followup]', { timeout: 6000 });
+      await alice.click('#dlg [data-more=followup]');
       await followupForm(alice, 'Add a follow-up');
       const v = await alice.inputValue('#fuTitle');
       assert(/Follow up with /.test(v), `title box reads "${v}"`);
