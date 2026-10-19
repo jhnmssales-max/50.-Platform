@@ -75,6 +75,13 @@
      the table's minimum back under its container's width, so there is nothing
      for the sticky column to cover. */
   .tablewrap tbody tr > td:last-child{white-space:normal;}
+  /* Wrapping alone squeezed the buttons into a 160px column -- Edit, Mark
+     won, Lost and More stacked nearly one per line, which made every lead row
+     118px tall and fitted four rows on a screen. Edit + Mark won is 147px of
+     buttons, so 176 asks for a tidy two-by-two block. This is a width, not a
+     min-width: when the window is too narrow to spare it the column gives it
+     back rather than pushing the table past its card again. */
+  .tablewrap thead th:last-child{width:176px;}
   /* Between the card breakpoint and about 980px the table's own minimum is
      still a little wider than its card, and the only thing holding it there
      is an email address or a domain -- one unbreakable word. Let those break
@@ -2102,9 +2109,9 @@ async function renderDealers(){
             // in, so it keeps the empty one.
             '<td class="num">' + (state.isAdmin && !x.closed_at
               ? '<button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button>' : '') + '</td>'
-          : '<td data-label="Closed by"><select data-field="closer">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
-            '<td data-label="Onboarded by"><select data-field="onboarder">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
-            (state.isAdmin ? '<td data-label="Start date"><input type="date" data-field="from" class="startdate" title="Leave blank to start now"></td>' : '') +
+          : '<td data-label="Closed by"><select data-field="closer" aria-label="Closed by">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
+            '<td data-label="Onboarded by"><select data-field="onboarder" aria-label="Onboarded by">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
+            (state.isAdmin ? '<td data-label="Start date"><input type="date" data-field="from" class="startdate" aria-label="Start date" title="Leave blank to start now"></td>' : '') +
             '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button>' +
               // In-house companies are never charged, so there is nothing to
               // price and a dialog would imply they had started being billed.

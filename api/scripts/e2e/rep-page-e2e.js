@@ -2231,6 +2231,76 @@ async function main() {
       }
     });
 
+    await check('A lead row keeps its buttons in a block, not a single column', async () => {
+      // Making the table fit squeezed the action column to 160px, which put
+      // Edit, Mark won, Lost and More nearly one per line and made every row
+      // 118px tall -- four leads on a screen. The column now asks for 176px,
+      // which is Edit + Mark won on one line and Lost + More on the next.
+      // The seeded leads are short -- "Dealer A", no notes -- which leaves the
+      // table slack to hand the action column, and it came out 264px wide
+      // whether the fix was there or not. This check passed without the fix
+      // until I reinstated the bug and watched it stay green. What squeezed
+      // the column on Joseph's page was real content: a long company name, a
+      // real email, a line of notes. So this makes a row like that first.
+      const marker = 'Mill Craft Barns and Outdoor Structures ' + Date.now();
+      await sql(`insert into rep_leads (company_name, contact_name, phone, email, website, notes, status, found_on)
+                 values ($1, 'Jonathan Hostetler', '(717) 555-0188',
+                         'jonathan@millcraftbarnsandstructures.com',
+                         'millcraftbarnsandstructures.com',
+                         'Called twice, asked for pricing on the 12x24 with a dormer', 'open', current_date)`,
+                [marker]);
+      const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+      const p = await ctx.newPage();
+      await p.route(/fonts\.(googleapis|gstatic)\.com/, (r) => r.abort());
+      try {
+        await signIn(p, USERS.admin);
+        await p.click('[data-tab=leads]');
+        await p.waitForFunction((m) => document.getElementById('tab-leads').textContent.includes(m),
+          marker, { timeout: 10000 });
+        const shape = await p.evaluate(() => {
+          const rows = [...document.querySelectorAll('#tab-leads tbody tr[data-search]')].filter((r) => !r.hidden);
+          let worst = { lines: 0, count: 0, width: 0, labels: '' };
+          for (const r of rows) {
+            const td = r.lastElementChild;
+            const btns = [...td.querySelectorAll('button')];
+            if (btns.length < 2) continue;
+            // Count lines by vertical overlap, not by bucketing the tops. The
+            // secondary buttons carry a border and stand two pixels taller
+            // than the primary one, so bucketing reported one line too many
+            // and failed a layout that was fine.
+            const rects = btns.map((b) => b.getBoundingClientRect()).sort((a, b) => a.top - b.top);
+            let lines = 1;
+            let cur = rects[0];
+            for (const r of rects.slice(1)) {
+              if (r.top >= cur.bottom - 2) { lines++; cur = r; }
+            }
+            if (lines > worst.lines) {
+              worst = { lines, count: btns.length, width: Math.round(td.getBoundingClientRect().width),
+                        labels: btns.map((b) => b.textContent).join('/'),
+                        // What the buttons actually measure here, so a failure
+                        // says how much room they need instead of leaving the
+                        // next person to guess at the number again.
+                        sizes: btns.map((b) => b.textContent + ' ' + Math.round(b.getBoundingClientRect().width) + 'px').join(', '),
+                        pad: getComputedStyle(td).paddingLeft + '+' + getComputedStyle(td).paddingRight };
+            }
+          }
+          return worst;
+        });
+        assert(shape.count >= 3, `need a row with several buttons to test this, worst had ${shape.count}`);
+        assert(shape.lines <= 2,
+          `${shape.count} buttons fell onto ${shape.lines} lines in a ${shape.width}px column (padding ${shape.pad}). Buttons: ${shape.sizes}`);
+        // State the precondition rather than trusting it: if the column is
+        // roomy the two-line result proves nothing, which is exactly how this
+        // check first passed against the bug it was written for.
+        assert(shape.width <= 200,
+          `the action column came out ${shape.width}px wide, so nothing was competing for the space — this proves nothing`);
+        return `worst row: ${shape.count} buttons (${shape.labels}) on ${shape.lines} line(s) in a ${shape.width}px column`;
+      } finally {
+        await ctx.close();
+        await sql('delete from rep_leads where company_name = $1', [marker]).catch(() => {});
+      }
+    });
+
     await check('As cards, every field carries its own column heading', async () => {
       // At 700px the rows become cards and the headings are gone, so a cell
       // without a data-label is a value with nothing saying what it is:
@@ -2268,6 +2338,13 @@ async function main() {
             return [...new Set(out)];
           });
           eq(unlabelled.length, 0, `${tab}: unlabelled card fields — ${unlabelled.join(' | ')}`);
+          // The heading is ::before content, which is on the screen but is not
+          // the accessible name of the control sitting next to it. A screen
+          // reader reads two unnamed rep dropdowns without these.
+          const unnamed = await p.$$eval(`#tab-${tab} tbody tr[data-search] select, #tab-${tab} tbody tr[data-search] input`,
+            (els) => els.filter((e) => !e.getAttribute('aria-label') && !e.labels?.length)
+                        .map((e) => e.tagName.toLowerCase() + '[' + (e.getAttribute('data-field') || e.type) + ']'));
+          eq([...new Set(unnamed)].length, 0, `${tab}: controls with no accessible name — ${[...new Set(unnamed)].join(', ')}`);
           seen.push(`${tab}: ${labels.join(', ')}`);
         }
         return seen.join(' — ');
