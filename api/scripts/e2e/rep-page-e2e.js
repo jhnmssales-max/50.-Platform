@@ -242,10 +242,14 @@ async function main() {
   // live on the Companies tab. Checks that need one open the same toggle a
   // person would.
   async function revealWonLeads(pg) {
-    const t = await pg.$('#toggleWon');
-    if (!t) return false;
-    if (!/Show won/.test(await t.textContent())) return true;
-    await t.click();
+    // Deliberately no element handle. Holding one across a re-render leaves
+    // it pointing at a node the page has already replaced, and the click
+    // then fails with "not attached to the DOM" -- which is exactly what
+    // happened. Clicking by selector re-resolves at click time.
+    const text = await pg.textContent('#toggleWon').catch(() => null);
+    if (text === null) return false;
+    if (/Hide won/.test(text)) return true;
+    await pg.click('#toggleWon');
     await pg.waitForFunction(() => {
       const b = document.getElementById('toggleWon');
       return b && /Hide won/.test(b.textContent);
