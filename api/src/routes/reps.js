@@ -862,6 +862,76 @@ router.post('/rep-dealers/:tenantId/admins', requireAuth, wrap(async (req, res) 
   res.status(201).json({ ...added, emailed });
 }));
 
+// Send someone who already has a login a fresh set-password link. The reason
+// this exists: a dealer admin never received the first email, or the link in
+// it expired, and they are locked out with no way back in -- adding them again
+// is refused, because they already have a login.
+//
+// A fresh link also invalidates the earlier one, which is why the email says
+// so. No password is ever sent; they choose their own, same as at build.
+router.post('/rep-dealers/:tenantId/admins/:userId/resend', requireAuth, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  const userId = parseOr400(uuid, req.params.userId);
+
+  if (!supabaseAdmin.isConfigured()) {
+    throw httpError(503, 'This platform cannot send login links yet: SUPABASE_SERVICE_ROLE_KEY is not set on the API service.', 'logins_not_configured');
+  }
+
+  const { tenant, person } = await requireAdminThen(req.userId, async (client) => {
+    const { rows: [t] } = await client.query('select id, name from tenants where id = $1', [tenantId]);
+    if (!t) throw httpError(404, 'No such company');
+    // Scoped to this company on purpose: a user id alone must not be enough
+    // to aim a sign-in link at somebody on a different account.
+    const { rows: [u] } = await client.query(
+      `select id, email, name from users where id = $1 and tenant_id = $2 and role = 'admin'`,
+      [userId, tenantId]
+    );
+    if (!u) throw httpError(404, 'That person does not have a login here');
+    return { tenant: t, person: u };
+  });
+
+  const from = process.env.EMAIL_FROM_ADDRESS;
+  if (!from) throw httpError(500, 'EMAIL_FROM_ADDRESS is not set, so no link could be sent.');
+  const frontend = String(process.env.FRONTEND_BASE_URL || '').replace(/\/+$/, '');
+
+  let link;
+  try {
+    // Same two steps as the rep invite: an auth account that already exists
+    // is the normal case here, not a failure, and both paths end with
+    // exactly one fresh link.
+    await supabaseAdmin.createPasswordlessUser(person.email);
+    link = await supabaseAdmin.setPasswordLink(person.email, `${frontend}/login`);
+  } catch (err) {
+    throw httpError(502, `Supabase would not mint a sign-in link for ${person.email}: ${err.message}`);
+  }
+
+  const mail = dealerBuildEmails.forExtraAdmin({
+    contactName: person.name,
+    companyName: tenant.name,
+    link,
+    signInUrl: `${frontend}/login`,
+    logoUrl: `${frontend}/assets/50-platform-logo.png`,
+    resend: true,
+  });
+  try {
+    await sendEmail({
+      from: `Joseph at 50. <${from}>`,
+      to: person.email,
+      replyTo: process.env.BILLING_SUPPORT_EMAIL || 'joseph@referwith50.com',
+      subject: mail.subject,
+      htmlBody: mail.htmlBody,
+      textBody: mail.textBody,
+    });
+  } catch (err) {
+    // The link was minted, so the OLD one is already dead. Saying "failed"
+    // would be worse than useless: it would invite another try that kills
+    // this link too, while the person still has nothing that works.
+    throw httpError(502, `A fresh link was created but the email would not send: ${err.message}. Any earlier link has already stopped working, so try again or send them the link another way.`);
+  }
+
+  res.json({ ok: true, emailed_to: person.email, name: person.name });
+}));
+
 router.delete('/rep-dealers/:tenantId/admins/:userId', requireAuth, wrap(async (req, res) => {
   const tenantId = parseOr400(uuid, req.params.tenantId);
   const userId = parseOr400(uuid, req.params.userId);

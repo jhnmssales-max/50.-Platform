@@ -2459,6 +2459,9 @@ async function loginsDialog(tenantId){
     '<tr><td><b>' + esc(a.name || a.email) + '</b>' +
       (a.name ? '<div class="muted">' + esc(a.email) + '</div>' : '') + '</td>' +
     '<td class="num">' +
+      // Resend is on every login, including the only one -- the person who
+      // cannot get in is often the only person on the account.
+      '<button type="button" class="btn small secondary" data-resend="' + esc(a.id) + '">Resend login</button> ' +
       // The last one is never removable: a dealer with no login cannot sign
       // in and nobody is told to send their cards. The button is hidden
       // rather than shown-and-refused, and the API refuses it regardless.
@@ -2477,12 +2480,29 @@ async function loginsDialog(tenantId){
         '<div><label>Their name</label><input name="name" maxlength="120"></div>' +
       '</div>' +
       '<p class="hint">They get an email with a link to choose their own password. No password is ever sent.</p>' +
+      '<p class="hint"><b>Resend login</b> sends that person a brand-new link. It also stops any earlier link working, so use it when someone never got the email or theirs has expired.</p>' +
       '<div class="actions">' +
         '<button type="button" class="btn secondary" id="cancelDlg">Done</button>' +
         '<button class="btn" type="submit" id="addAdmin">Add login</button>' +
       '</div></form>'
   );
   $('cancelDlg').addEventListener('click', async () => { closeDialog(); await renderDealers(); });
+
+  $('dlg').querySelectorAll('[data-resend]').forEach((b) => b.addEventListener('click', async () => {
+    if(b.disabled) return;
+    const was = b.textContent;
+    b.disabled = true; b.textContent = 'Sending\u2026';
+    try{
+      const r = await post('/rep-dealers/' + tenantId + '/admins/' + b.dataset.resend + '/resend', {});
+      b.textContent = 'Sent';
+      flash('A fresh sign-in link is on its way to ' + (r.emailed_to || 'them') + '.', true);
+    }catch(err){
+      // Stays in the dialog: the person is standing by to be let in, and the
+      // reason belongs where they are looking.
+      dialogError(err.message);
+      b.disabled = false; b.textContent = was;
+    }
+  }));
 
   $('dlg').querySelectorAll('[data-rmadmin]').forEach((b) => b.addEventListener('click', async () => {
     b.disabled = true;
