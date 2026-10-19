@@ -2177,6 +2177,105 @@ async function main() {
       }
     });
 
+    await check('Every table fits inside its card at every width above the card breakpoint', async () => {
+      // The leads table was 1061px of content inside a 1046px card. Nothing
+      // errored: the sticky action column simply sat on top of the Status
+      // column, so the heading and the open/won pills were cut off at the
+      // right edge. A measurement, not an eyeball -- and it reports the
+      // column widths when it fails, so the next person sees the cause.
+      const ctx = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+      const p = await ctx.newPage();
+      await p.route(/fonts\.(googleapis|gstatic)\.com/, (r) => r.abort());
+      try {
+        await signIn(p, USERS.admin);
+        const worst = [];
+        // Leads and Companies are the two Joseph reads across; both are meant
+        // to fit. Reps is not: nine columns, two of them long headings, and it
+        // genuinely cannot fit 861px. That one is meant to scroll sideways
+        // under its sticky button column, and the check above -- "At a narrow
+        // window the Resend login button is still reachable" -- is what proves
+        // the sticky column holds up when it does.
+        for (const tab of ['leads', 'dealers']) {
+          await p.click(`[data-tab=${tab}]`);
+          await p.waitForSelector(`#tab-${tab} table`);
+          // Won leads carry the extra "Won by" column, which is the widest
+          // the leads table ever gets. Measuring it hidden tests the easy case.
+          if (tab === 'leads') await revealWonLeads(p);
+          // 861 is one pixel above the card breakpoint: below it the rows are
+          // cards and there is no table to overflow.
+          for (const width of [861, 900, 980, 1024, 1200]) {
+            await p.setViewportSize({ width, height: 900 });
+            await p.waitForFunction(() => true);
+            await p.waitForTimeout(80);
+            const m = await p.evaluate((sel) => {
+              const wrap = document.querySelector(sel);
+              if (!wrap) return null;
+              const table = wrap.querySelector('table');
+              const ths = [...wrap.querySelectorAll('thead th')];
+              return {
+                wrap: wrap.clientWidth,
+                table: Math.round(table.getBoundingClientRect().width),
+                cols: ths.map((th) => `${(th.textContent || '(actions)').trim() || '(actions)'} ${Math.round(th.getBoundingClientRect().width)}px`),
+              };
+            }, `#tab-${tab} .tablewrap`);
+            if (!m) continue;
+            const over = m.table - m.wrap;
+            worst.push(`${tab}@${width}: ${over}`);
+            assert(over <= 1,
+              `${tab} at ${width}px: table is ${m.table}px inside a ${m.wrap}px card (${over}px over). Columns: ${m.cols.join(', ')}`);
+          }
+        }
+        return `no overflow on leads or dealers at 861/900/980/1024/1200px (${worst.length} measurements)`;
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    await check('As cards, every field carries its own column heading', async () => {
+      // At 700px the rows become cards and the headings are gone, so a cell
+      // without a data-label is a value with nothing saying what it is:
+      // "not yet" on its own, or two identical rep dropdowns with nothing
+      // telling Closed by from Onboarded by.
+      const ctx = await browser.newContext({ viewport: { width: 700, height: 1000 } });
+      const p = await ctx.newPage();
+      await p.route(/fonts\.(googleapis|gstatic)\.com/, (r) => r.abort());
+      try {
+        await signIn(p, USERS.admin);
+        const seen = [];
+        for (const [tab, want] of [['leads', ['Contact', 'Brought in by', 'Found', 'Status']],
+                                   ['dealers', ['Activated', 'Closed by', 'Onboarded by']]]) {
+          await p.click(`[data-tab=${tab}]`);
+          await p.waitForSelector(`#tab-${tab} tbody tr`);
+          if (tab === 'leads') await revealWonLeads(p);
+          await p.waitForTimeout(120);
+          const labels = await p.$$eval(`#tab-${tab} tbody tr[data-search] td[data-label]`,
+            (tds) => [...new Set(tds.map((t) => t.getAttribute('data-label')))]);
+          for (const w of want) {
+            assert(labels.includes(w), `${tab}: no cell labelled "${w}" — saw ${labels.join(', ') || '(none)'}`);
+          }
+          // Every cell between the name and the buttons needs one. The first
+          // cell is the heading of the card and the last holds the buttons.
+          const unlabelled = await p.$$eval(`#tab-${tab} tbody tr[data-search]`, (rows) => {
+            const out = [];
+            for (const r of rows) {
+              if (r.hidden || r.offsetHeight === 0) continue;
+              const tds = [...r.children];
+              tds.slice(1, -1).forEach((td, i) => {
+                if (td.offsetHeight === 0) return;           // .nomob, or an empty cell
+                if (!td.hasAttribute('data-label')) out.push(`cell ${i + 2}: ${td.textContent.trim().slice(0, 30)}`);
+              });
+            }
+            return [...new Set(out)];
+          });
+          eq(unlabelled.length, 0, `${tab}: unlabelled card fields — ${unlabelled.join(' | ')}`);
+          seen.push(`${tab}: ${labels.join(', ')}`);
+        }
+        return seen.join(' — ');
+      } finally {
+        await ctx.close();
+      }
+    });
+
     await check('Phone width: the Reps page does not scroll sideways', async () => {
       const ctx = await browser.newContext({ viewport: { width: 400, height: 800 } });
       const p = await ctx.newPage();

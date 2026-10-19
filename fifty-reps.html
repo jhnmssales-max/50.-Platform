@@ -66,10 +66,32 @@
   .tablewrap tr > *:last-child{position:sticky;right:0;background:var(--card);}
   .tablewrap tr > *:last-child::after{content:'';position:absolute;left:0;top:0;bottom:0;
     width:1px;background:var(--line);}
+  /* The action cell carries .num for its right alignment, and .num also
+     carries white-space:nowrap -- so Edit/Won/Lost/More formed one 254px block
+     that could not break at any width. That made the table's own minimum
+     wider than the card holding it (1056 against 1046 at full width), and the
+     sticky column above then sat on top of the Status heading and its pills.
+     Letting the buttons wrap, and letting a long domain or email break, puts
+     the table's minimum back under its container's width, so there is nothing
+     for the sticky column to cover. */
+  .tablewrap tbody tr > td:last-child{white-space:normal;}
+  /* Between the card breakpoint and about 980px the table's own minimum is
+     still a little wider than its card, and the only thing holding it there
+     is an email address or a domain -- one unbreakable word. Let those break
+     in that band only, so a wide window keeps addresses whole. */
+  @media (max-width:980px){
+    .tablewrap td .muted{overflow-wrap:anywhere;}
+    /* Closed by, Onboarded by and Start date each insisted on 140px, which
+       is what held the Companies table 7px wider than its card at the
+       narrowest desktop width. A rep's name still fits in 118. */
+    .tablewrap td select,
+    .tablewrap td input.startdate{min-width:118px;}
+  }
   th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;}
   td{padding:10px 12px;border-bottom:1px solid #F0EBE1;vertical-align:middle;}
   tr:last-child td{border-bottom:0;}
   td select{padding:6px 8px;min-width:140px;}
+  td input.startdate{min-width:140px;}
   .pill{display:inline-block;font-size:12px;font-weight:600;border-radius:99px;padding:2px 9px;background:#EDE8DD;}
   .pill.open{background:#E6F0FA;color:#1F4E7A;} .pill.won{background:#E3F3EA;color:var(--ok);} .pill.lost{background:#F1E6E6;color:var(--danger);}
   .pill.off{background:#EEE;color:#777;}
@@ -180,7 +202,16 @@
     tbody tr > td[data-label]{display:flex;justify-content:space-between;
       align-items:baseline;gap:12px;}
     tbody tr > td[data-label]::before{content:attr(data-label);
-      color:var(--muted);font-size:13px;font-weight:400;}
+      color:var(--muted);font-size:13px;font-weight:400;flex:0 0 auto;}
+    /* Anything after the value -- a phone, an email, "onboarded by Willy",
+       the age of a lead -- goes on its own line under it, rather than strung
+       out across the card where it reads as four unlabelled columns. */
+    tbody tr > td[data-label]{flex-wrap:wrap;row-gap:2px;}
+    tbody tr > td[data-label] > div{flex:1 1 100%;text-align:right;}
+    /* A dropdown takes the rest of the line, and leaves the label whole:
+       "Closed by" was breaking across two lines to make room for it. */
+    tbody tr > td[data-label] select,
+    tbody tr > td[data-label] input{flex:1 1 auto;min-width:0;max-width:100%;}
     /* Buttons on their own line, so one row never reads as two. */
     .due{flex-wrap:wrap;}
     .due .when{flex:1 1 100%;}
@@ -1443,20 +1474,26 @@ async function renderLeads(){
         (x.website ? '<div class="muted">' + esc(x.website) + '</div>' : '') +
         (x.notes ? '<div class="muted">' + esc(x.notes) + '</div>' : '') +
         '<div class="muted">Wording: ' + esc(wordingSummary(x.copy)) + '</div></td>' +
-      '<td>' + esc(x.contact_name || '') + '<div class="muted">' + esc([x.phone, x.email].filter(Boolean).join(' · ')) + '</div></td>' +
-      (state.isRep ? '' : '<td' + (repName(x.brought_in_by_rep_id) ? '' : ' class="nomob"') + '>' + esc(repName(x.brought_in_by_rep_id) || '—') + '</td>') +
+      // Phone and email on one line made this the widest column in the table
+      // -- wide enough that the whole table could not fit its card, and the
+      // sticky action column then covered Status. One line each costs no
+      // height worth having and reads better on a card.
+      '<td data-label="Contact">' + esc(x.contact_name || '') +
+        (x.phone ? '<div class="muted">' + esc(x.phone) + '</div>' : '') +
+        (x.email ? '<div class="muted">' + esc(x.email) + '</div>' : '') + '</td>' +
+      (state.isRep ? '' : '<td data-label="Brought in by"' + (repName(x.brought_in_by_rep_id) ? '' : ' class="nomob"') + '>' + esc(repName(x.brought_in_by_rep_id) || '—') + '</td>') +
       // A bare date makes you do the arithmetic. The age is the thing you
       // actually want: an open lead sitting 47 days is the one to chase, and
       // past 30 it says so in its own right. Only open leads -- a won or
       // lost lead's age is history, not a prompt.
-      '<td>' + esc(plainDate(x.found_on)) +
+      '<td data-label="Found">' + esc(plainDate(x.found_on)) +
         (x.status === 'open' && daysSince(x.found_on) !== null
           ? '<div class="muted" style="font-size:12px"><span' +
             (daysSince(x.found_on) >= 30 ? ' class="warn"' : '') + '>open ' +
             daysSince(x.found_on) + ' day' + (daysSince(x.found_on) === 1 ? '' : 's') + '</span></div>'
           : '') + '</td>' +
-      '<td><span class="pill ' + x.status + '">' + x.status + '</span></td>' +
-      (showWonBy ? '<td' + (x.status === 'won' ? '' : ' class="nomob"') + '>' + (x.status === 'won' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>' : '') +
+      '<td data-label="Status"><span class="pill ' + x.status + '">' + x.status + '</span></td>' +
+      (showWonBy ? '<td data-label="Won by"' + (x.status === 'won' ? '' : ' class="nomob"') + '>' + (x.status === 'won' ? esc(repName(x.closed_by_rep_id)) + (x.onboarded_by_rep_id ? '<div class="muted">onboarded by ' + esc(repName(x.onboarded_by_rep_id)) + '</div>' : '') : '') + '</td>' : '') +
       // Edit sits on every row the viewer can see. The database already
       // decides who may change what -- rep_leads_own_update lets a rep touch
       // only leads they brought in or closed, rep_leads_platform_staff_update
@@ -2047,16 +2084,16 @@ async function renderDealers(){
         (x.closed_at ? '' : dealerActivityHtml(x)) + '</td>' +
       // An in-house company never pays the $500, so "not yet" would read as a
       // dealer who is overdue rather than one who was never billed.
-      '<td>' + (x.billing_exempt ? '<span class="muted">\u2014</span>'
+      '<td data-label="Activated">' + (x.billing_exempt ? '<span class="muted">\u2014</span>'
         : (x.activated ? esc(plainDate(x.activated_on)) : '<span class="muted">not yet</span>')) + '</td>' +
       (state.isRep
-        ? '<td>' + [x.closer_rep_id === state.myRepId ? 'closed' : null, x.onboarder_rep_id === state.myRepId ? 'onboarded' : null].filter(Boolean).join(' and ') + '</td>'
+        ? '<td data-label="Your part">' + [x.closer_rep_id === state.myRepId ? 'closed' : null, x.onboarder_rep_id === state.myRepId ? 'onboarded' : null].filter(Boolean).join(' and ') + '</td>'
         // An in-house company pays nothing, so there is no payment for a rep
         // to be credited with and nothing to assign. Showing the dropdowns
         // would invite a change that could never pay anyone.
         : ((x.billing_exempt || x.closed_at)
-          ? '<td class="muted nomob">—</td><td class="muted nomob">—</td>' +
-            (state.isAdmin ? '<td class="muted nomob">—</td>' : '') +
+          ? '<td class="muted nomob" data-label="Closed by">—</td><td class="muted nomob" data-label="Onboarded by">—</td>' +
+            (state.isAdmin ? '<td class="muted nomob" data-label="Start date">—</td>' : '') +
             // There is nothing to save on this row, but an in-house company
             // still has real people signing in and getting the gift-card
             // reminders, so Logins belongs here too. It first shipped inside
@@ -2065,9 +2102,9 @@ async function renderDealers(){
             // in, so it keeps the empty one.
             '<td class="num">' + (state.isAdmin && !x.closed_at
               ? '<button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button>' : '') + '</td>'
-          : '<td><select data-field="closer">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
-            '<td><select data-field="onboarder">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
-            (state.isAdmin ? '<td><input type="date" data-field="from" style="min-width:140px" title="Leave blank to start now"></td>' : '') +
+          : '<td data-label="Closed by"><select data-field="closer">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
+            '<td data-label="Onboarded by"><select data-field="onboarder">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
+            (state.isAdmin ? '<td data-label="Start date"><input type="date" data-field="from" class="startdate" title="Leave blank to start now"></td>' : '') +
             '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button>' +
               // In-house companies are never charged, so there is nothing to
               // price and a dialog would imply they had started being billed.
