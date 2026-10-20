@@ -1,37 +1,11 @@
 const express = require('express');
 const cors = require('cors');
 const { z } = require('zod');
-const { nanoid } = require('nanoid');
 const { requireAuth } = require('../middleware/auth');
 const { withUserTransaction, getCallerContext } = require('../db');
-const { slugify } = require('../lib/codes');
-const { sendEmail } = require('../lib/postmark');
-const { buildInviteEmail } = require('../lib/inviteEmail');
+const { buildInviteUrl, createInviteLink, sendInviteEmail } = require('../lib/customerInvite');
 
 const router = express.Router();
-
-// Prefers the page that's actually reachable and functional today
-// (fifty-template-customer.html?code=..., wherever the static frontend is
-// deployed) over the tenant's own domain + the aspirational /50/... path
-// scheme, which has no routing layer behind it yet. Falls back to the
-// latter only if FRONTEND_BASE_URL isn't configured.
-function buildInviteUrl(code, tenantDomain) {
-  const base = process.env.FRONTEND_BASE_URL;
-  if (base) return `${base.replace(/\/$/, '')}/fifty-template-customer.html?code=${encodeURIComponent(code)}`;
-  return tenantDomain ? `https://${tenantDomain}/50/${code}` : null;
-}
-
-// Email clients need an absolute https image URL. A root-relative logoUrl
-// (the branding shape allows one) is resolved against FRONTEND_BASE_URL.
-function resolveLogoUrl(url) {
-  if (!url) return null;
-  try {
-    const base = process.env.FRONTEND_BASE_URL;
-    return new URL(url, base ? base.replace(/\/$/, '') + '/' : undefined).toString();
-  } catch (_) {
-    return null;
-  }
-}
 
 // Auth here is a bearer token the calling page must already possess and
 // attach itself — never a cookie the browser sends automatically — so an
@@ -39,8 +13,6 @@ function resolveLogoUrl(url) {
 // same-origin-less static admin page (opened as a file, or served from a
 // different host/port than the API) actually call these routes.
 router.use(cors());
-
-const UNIQUE_VIOLATION = '23505';
 
 function forbidden(message) {
   const err = new Error(message);
@@ -86,23 +58,11 @@ router.post('/customers', requireAuth, async (req, res, next) => {
         [ctx.tenant_id, name, email, phone || null, req.userId]
       );
 
-      let link;
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const code = `${slugify(name) || 'friend'}-${nanoid(6)}`;
-        try {
-          const { rows } = await client.query(
-            `insert into referral_links (tenant_id, code, kind, customer_id)
-             values ($1, $2, 'invite', $3)
-             returning code, status, created_at`,
-            [ctx.tenant_id, code, customer.id]
-          );
-          link = rows[0];
-          break;
-        } catch (err) {
-          if (err.code === UNIQUE_VIOLATION && attempt < 4) continue;
-          throw err;
-        }
-      }
+      const link = await createInviteLink(client, {
+        tenantId: ctx.tenant_id,
+        customerId: customer.id,
+        name,
+      });
 
       return { customer, link, ctx };
     });
@@ -124,38 +84,14 @@ router.post('/customers', requireAuth, async (req, res, next) => {
     // never roll back data that already exists, and shouldn't hold the DB
     // transaction open while waiting on a third-party HTTP call either.
     try {
-      const fromAddress =
-        (result.ctx.send_domain_verified && result.ctx.send_from_address) || process.env.EMAIL_FROM_ADDRESS;
-      if (!fromAddress) {
-        throw new Error('No verified sending address configured for this tenant, and no platform default is set');
-      }
-      const fromName = (result.ctx.send_domain_verified && result.ctx.send_from_name) || result.ctx.tenant_name;
-
-      const { subject, htmlBody, textBody } = buildInviteEmail({
-        tenantName: result.ctx.tenant_name,
-        rewardAmountCents: result.ctx.reward_amount_cents,
-        rewardCurrency: result.ctx.reward_currency,
+      await sendInviteEmail({
+        tenant: result.ctx,
         customerName: result.customer.name,
+        customerEmail: result.customer.email,
         inviteUrl,
-        buttonColor: (result.ctx.tenant_branding || {}).primaryColor,
-        logoUrl: resolveLogoUrl((result.ctx.tenant_branding || {}).logoUrl),
-        offerHow: ((result.ctx.tenant_branding || {}).copy || {}).offerHow,
-        // What this dealer calls their gift card, for the {card} token in
-        // their offer line. Without it the email would print the raw token.
-        cardNoun: ((result.ctx.tenant_branding || {}).copy || {}).cardNoun,
-      });
-
-      // Replies go to the staff member who sent the invite (their own
-      // business inbox), not the platform's shared sending address.
-      const replyTo = result.ctx.user_email ? `${fromName} <${result.ctx.user_email}>` : undefined;
-
-      await sendEmail({
-        from: `${fromName} <${fromAddress}>`,
-        to: result.customer.email,
-        replyTo,
-        subject,
-        htmlBody,
-        textBody,
+        // Replies go to the staff member who sent the invite (their own
+        // business inbox), not the platform's shared sending address.
+        replyToEmail: result.ctx.user_email,
       });
 
       responseBody.email = { sent: true };
