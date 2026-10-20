@@ -84,6 +84,7 @@
 const { pool, withServiceRole, assertRowsAffected, assertServiceRoleConnection } = require('../db');
 const { chargeOffSession } = require('../lib/stripe');
 const { issueGiftCard, assertRealGiftCardProviderConfigured } = require('../lib/giftCardProvider');
+const { findOrCreateReferralCustomer, ensureInviteLink } = require('../lib/customerInvite');
 
 const PG_UNIQUE_VIOLATION = '23505';
 
@@ -410,12 +411,19 @@ async function processReferral(referralId, now) {
       currency,
     });
 
-    const friendCustomerId = await findOrCreateFriendCustomer({
-      tenantId,
-      referralId,
-      name: friend.name,
-      email: friend.email,
-      phone: friend.phone,
+    // The friend becomes a customer in their own right, with a link of
+    // their own, so the chain continues. This worker used to create the
+    // row and stop, which left them holding nothing to share.
+    const friendCustomerId = await withServiceRole(async (client) => {
+      const { id } = await findOrCreateReferralCustomer(client, {
+        tenantId,
+        referralId,
+        name: friend.name,
+        email: friend.email,
+        phone: friend.phone,
+      });
+      await ensureInviteLink(client, { tenantId, customerId: id, name: friend.name });
+      return id;
     });
     friendResult = await issueLeg({
       referralId,
@@ -669,34 +677,6 @@ async function markChargeSucceeded(billingEventId, referralId, paymentIntentId) 
     ).catch((cleanupErr) => console.error(`Could not mark stray billing_events row ${billingEventId} failed:`, cleanupErr.message));
     return false;
   }
-}
-
-// Finds or creates the referred friend's own customers row, claimed via
-// source_referral_id (see the reward_issuance_worker migration) rather
-// than an email match — a true one-time claim, not a heuristic merge
-// into whatever customer row happens to share this email address.
-async function findOrCreateFriendCustomer({ tenantId, referralId, name, email, phone }) {
-  return withServiceRole(async (client) => {
-    const { rows: [inserted] } = await client.query(
-      `insert into customers (tenant_id, name, email, phone, source_referral_id)
-       values ($1, $2, $3, $4, $5)
-       on conflict (source_referral_id) do nothing
-       returning id`,
-      [tenantId, name, email, phone, referralId]
-    );
-    if (inserted) return inserted.id;
-
-    const { rows: [existing] } = await client.query('select id from customers where source_referral_id = $1', [referralId]);
-    if (!existing) {
-      // The insert above can only hit its conflict target if a row
-      // already claims this exact source_referral_id — so this means
-      // that row existed a moment ago and now doesn't, which is a
-      // genuine data-integrity problem (nothing in this codebase deletes
-      // customers), not a benign race.
-      throw new Error(`Referral ${referralId}: customers insert conflicted on source_referral_id but no row can be found for it`);
-    }
-    return existing.id;
-  });
 }
 
 // One leg of the two-sided reward: claims a gift_card_transactions row

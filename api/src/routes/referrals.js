@@ -7,6 +7,12 @@ const { createOrder } = require('../lib/tremendous');
 const { encryptionKey } = require('../lib/tenantCredentials');
 const { sendEmail } = require('../lib/postmark');
 const { buildPaidNotificationEmail } = require('../lib/paidNotificationEmail');
+const {
+  buildInviteUrl,
+  ensureInviteLink,
+  findOrCreateReferralCustomer,
+  sendInviteEmail,
+} = require('../lib/customerInvite');
 const { collectReferralFee } = require('../lib/referralFee');
 
 const router = express.Router();
@@ -236,7 +242,7 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
       }
     }
 
-    const { transition, rewardClaim, paidNotification } = await withUserTransaction(req.userId, async (client) => {
+    const { transition, rewardClaim, paidNotification, friendInvite, ctx } = await withUserTransaction(req.userId, async (client) => {
       const { ctx, current } = await loadStatusChangeTarget(client, req.userId, referralId);
 
       let transition;
@@ -311,6 +317,44 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
         paidNotification = n;
       }
 
+      // The friend who was referred has now bought something, which makes
+      // them a customer of this business in their own right -- so they get
+      // their own link and their own invite, exactly like a customer the
+      // dealer typed in by hand. Nobody has to enter them a second time,
+      // and the chain carries on from here.
+      //
+      // Gated on transition.changed for the same reason the notification
+      // above is: marking an already-rewarded referral rewarded again is a
+      // double-click, not a second conversion, and must not mint a second
+      // link or send a second invite. The customers row is claimed on
+      // source_referral_id and the link is only minted if that customer has
+      // none, so even a lost race lands on one of each.
+      let friendInvite = null;
+      if (transition.changed && transition.status === 'rewarded' && paidNotification) {
+        const friend = await findOrCreateReferralCustomer(client, {
+          tenantId: ctx.tenant_id,
+          referralId,
+          name: paidNotification.friend_name,
+          email: paidNotification.friend_email,
+          phone: paidNotification.friend_phone,
+        });
+        const { link, created } = await ensureInviteLink(client, {
+          tenantId: ctx.tenant_id,
+          customerId: friend.id,
+          name: paidNotification.friend_name,
+        });
+        // Only a link minted by this call earns an invite. A link that was
+        // already there means this friend has been invited before.
+        if (created) {
+          friendInvite = {
+            customerId: friend.id,
+            name: paidNotification.friend_name,
+            email: paidNotification.friend_email,
+            code: link.code,
+          };
+        }
+      }
+
       // Whether or not *this* request is what flipped the status (an admin
       // could double-click, or two admins could click at once), a reward is
       // attempted at most once per referral, ever: claim the idempotency
@@ -364,7 +408,7 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
         }
       }
 
-      return { transition, rewardClaim, paidNotification };
+      return { transition, rewardClaim, paidNotification, friendInvite, ctx };
     }).catch((err) => {
       if (fee && fee.newlyCharged) {
         // The state moved between the pre-check and this transaction (or
@@ -489,6 +533,35 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
         } catch (emailErr) {
           console.error('Failed to send paid-notification email:', emailErr.message);
         }
+      }
+    }
+
+    // The converted friend's invite. Same best-effort posture as the
+    // notification above: the customers row and the link are already
+    // committed, so a slow or failed send never rolls them back. If this
+    // send fails the friend still holds a working link -- it's in the
+    // dealer's dashboard with everyone else's -- they simply weren't told
+    // about it, and the dealer can resend from there.
+    if (friendInvite) {
+      try {
+        await sendInviteEmail({
+          tenant: ctx,
+          customerName: friendInvite.name,
+          customerEmail: friendInvite.email,
+          inviteUrl: buildInviteUrl(friendInvite.code, ctx.tenant_domain),
+          // Replies go to whoever marked the referral paid, at their own
+          // business inbox, not the platform's shared sending address.
+          replyToEmail: ctx.user_email,
+        });
+        console.log(
+          `Sent referral invite to converted friend ${friendInvite.email} for referral ${referralId}`
+        );
+      } catch (emailErr) {
+        // Names the address: the link exists and works either way, so what
+        // a human needs from this line is who to resend to.
+        console.error(
+          `Failed to send the converted friend their referral invite — referral ${referralId}, ${friendInvite.email}: ${emailErr.message}`
+        );
       }
     }
   } catch (err) {

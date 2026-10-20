@@ -1095,6 +1095,67 @@ async function main() {
       return `billing_events referral_fee: succeeded 3000 (flat fee, snapshotted) livemode=false ${row.stripe_payment_intent_id}; referral rewarded. ${stripeSide}`;
     });
 
+    // ----- The chain continues ----------------------------------------------
+    // The friend who bought is a customer of this business now, so they get
+    // their own link and their own invite without anyone re-typing them.
+    // Before this, the chain died here: the reward-issuance worker made the
+    // customers row and stopped, and the manual mark-paid path -- the one
+    // every dealer actually uses today -- made nothing at all.
+    await check('The friend who bought becomes a customer with a link of their own', async () => {
+      const [friend] = await sql(
+        `select id, name, email, phone, created_by_user_id, source_referral_id
+         from customers where source_referral_id = $1`,
+        [feeReferral]
+      );
+      assert(friend, 'the converted friend got no customers row');
+      const [ref] = await sql('select name, email, phone from referrals where id = $1', [feeReferral]);
+      eq(friend.name, ref.name, "the customer row's name");
+      eq(friend.email, ref.email, "the customer row's email");
+      eq(friend.phone, ref.phone, "the customer row's phone");
+      eq(friend.created_by_user_id, null, 'created_by_user_id (null means auto-created, not typed in)');
+
+      const links = await sql(
+        `select code, kind, status from referral_links where customer_id = $1`,
+        [friend.id]
+      );
+      eq(links.length, 1, 'invite links for the converted friend');
+      eq(links[0].kind, 'invite', 'link kind');
+      return `${friend.email} is a customer now, holding invite link ${links[0].code}`;
+    });
+
+    await check('They are told about it, by name and address', async () => {
+      // Postmark points at a dead port in this suite on purpose, so the send
+      // fails -- but the attempt, and who it was for, is in the server log.
+      // That is what proves the route reached for the right person; the
+      // email's own contents are the same buildInviteEmail a dealer-entered
+      // customer gets, because both paths now call one helper.
+      const [ref] = await sql('select email from referrals where id = $1', [feeReferral]);
+      const line = apiProc.lines.find(
+        (l) => l.includes('referral invite') && l.includes(ref.email) && l.includes(feeReferral)
+      );
+      assert(line, `no invite attempt for ${ref.email} in the server log`);
+      return line.replace(/^\[[^\]]+\] /, '').slice(0, 150);
+    });
+
+    await check('Marking it paid again mints no second link and sends no second invite', async () => {
+      const before = apiProc.lines.filter((l) => l.includes('referral invite') && l.includes(feeReferral)).length;
+      assert(before >= 1, 'the first invite was never attempted, so a second one proves nothing');
+      const again = await api('PATCH', `/api/referrals/${feeReferral}/status`, {
+        token: tokenFor(USERS.newAdmin),
+        body: { status: 'rewarded' },
+      });
+      eq(again.status, 200, 'PATCH an already-rewarded referral');
+      await new Promise((r) => setTimeout(r, 300));
+
+      const customers = await sql('select id from customers where source_referral_id = $1', [feeReferral]);
+      eq(customers.length, 1, 'customers rows for this referral after re-marking');
+      const links = await sql('select code from referral_links where customer_id = $1', [customers[0].id]);
+      eq(links.length, 1, 'invite links after re-marking');
+      const after = apiProc.lines.filter((l) => l.includes('referral invite') && l.includes(feeReferral)).length;
+      eq(after, before, 'invite attempts after re-marking');
+      return `re-marked: still 1 customer, still link ${links[0].code}, still ${after} invite attempt(s)`;
+    });
+
     if (STAND_IN) {
       await check('Declined fee: referral NOT marked paid, dealer told why; retry after the card is fixed charges once', async () => {
         const referralId = await createReferral(USERS.newAdmin, 2);
