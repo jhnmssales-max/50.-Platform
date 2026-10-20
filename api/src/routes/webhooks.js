@@ -8,6 +8,8 @@ const {
 } = require('../lib/stripe');
 const { withServiceRole, assertRowsAffected } = require('../db');
 const { sendActivationReceipt } = require('../workers/billingEmails');
+const { activationState } = require('../lib/activation');
+const { enrolActivatedDealerAdmins, sendPlatformInvites } = require('../lib/platformReferrer');
 
 const router = express.Router();
 
@@ -132,7 +134,7 @@ async function activateTenant({ tenantId, eventId, paymentIntentId, paymentMetho
   // future caller to have checked.
   assertRealStripeConfigured({ requireWebhookSecret: true });
 
-  await withServiceRole(async (client) => {
+  const activated = await withServiceRole(async (client) => {
     const inserted = await recordBillingEvent(client, {
       tenantId,
       eventType: 'activation_charge',
@@ -144,7 +146,7 @@ async function activateTenant({ tenantId, eventId, paymentIntentId, paymentMetho
     });
     if (!inserted) {
       console.log(`Stripe event ${eventId} already processed — activation no-op for tenant ${tenantId}`);
-      return;
+      return false;
     }
 
     const { rows: [tenant] } = await client.query('select billing_required from tenants where id = $1', [tenantId]);
@@ -209,13 +211,45 @@ async function activateTenant({ tenantId, eventId, paymentIntentId, paymentMetho
         } else {
           console.log(`Tenant ${tenantId} already activated (lost a benign race to another event) — event ${eventId}`);
         }
-        return;
+        return false;
       }
       await assertRowsAffected(client, result, { table: 'tenants', id: tenantId });
     }
 
     console.log(`ACTIVATION tenant ${tenantId} activated by ${paymentIntentId} (livemode=${livemode === true}, event ${eventId})`);
+    return true;
   });
+
+  // 50. runs its own referral program on its own platform, and a dealer who
+  // has paid is a customer of 50. the same way a shed buyer is a customer of
+  // their dealer. So their admins get enrolled and invited now -- the
+  // ordinary invite, with their own link to pass 50. on.
+  //
+  // Deliberately out here, after the activation transaction has committed
+  // and behind its own try/catch: nothing in this block may cost a dealer
+  // the activation they have already paid for. Only an activation that
+  // actually unlocks the tenant counts, decided by activationState rather
+  // than a second reading of the same rules -- a test-mode payment that
+  // leaves the tenant gated must not send real dealers real email.
+  if (activated) {
+    try {
+      const tenant = await withServiceRole(async (client) => {
+        const { rows: [row] } = await client.query(
+          'select billing_required, activation_paid_at, activation_livemode from tenants where id = $1',
+          [tenantId]
+        );
+        return row;
+      });
+      if (tenant && activationState(tenant).required === false) {
+        const enrolled = await enrolActivatedDealerAdmins({ dealerTenantId: tenantId });
+        await sendPlatformInvites(enrolled);
+      }
+    } catch (err) {
+      console.error(
+        `Tenant ${tenantId} activated, but enrolling its admins in 50.'s own referral program failed: ${err.message}`
+      );
+    }
+  }
 }
 
 // Suspends a tenant's billing: records the failure/dispute billing_events
