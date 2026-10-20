@@ -2177,6 +2177,54 @@ async function main() {
       }
     });
 
+    await check('The Logins dialog fits the dialog holding it, checkboxes and all', async () => {
+      // Third time this shape of bug has turned up: a table whose global
+      // 640px minimum is wider than the box it sits in, so the sticky button
+      // column lands on top of the column beside it. Here that column is the
+      // checkbox saying who gets the gift-card email, which would be covered
+      // by Resend and Remove with nothing to show anything was wrong.
+      // Its own context: by this point in the suite the shared page has been
+      // closed, and reusing it fails with "target page has been closed"
+      // rather than anything to do with the layout.
+      const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+      const p = await ctx.newPage();
+      await p.route(/fonts\.(googleapis|gstatic)\.com/, (r) => r.abort());
+      try {
+      await signIn(p, USERS.admin);
+      await p.click('[data-tab=dealers]');
+      await p.waitForSelector('#tab-dealers [data-logins]');
+      await p.click('#tab-dealers [data-logins]');
+      await p.waitForSelector('#dlg [data-alert]', { timeout: 10000 });
+      const m = await p.evaluate(() => {
+        const wrap = document.querySelector('#dlg .tablewrap');
+        const table = wrap.querySelector('table');
+        const box = wrap.getBoundingClientRect();
+        const ticks = [...document.querySelectorAll('#dlg [data-alert]')].map((el) => {
+          const r = el.getBoundingClientRect();
+          // What is actually painted at the checkbox's own centre. If the
+          // sticky column is over it, this is not the checkbox.
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return { width: Math.round(r.width), covered: hit !== el && !el.contains(hit) };
+        });
+        return {
+          over: Math.round(table.getBoundingClientRect().width - wrap.clientWidth),
+          dialog: Math.round(document.getElementById('dlg').getBoundingClientRect().width),
+          wrap: Math.round(box.width),
+          ticks,
+        };
+      });
+      assert(m.ticks.length > 0, 'no checkboxes in the dialog to test');
+      assert(m.over <= 1, `table is ${m.over}px wider than the ${m.wrap}px dialog body`);
+      for (const t of m.ticks) {
+        assert(t.width > 0, 'a checkbox has no width');
+        assert(!t.covered, 'a checkbox is painted over by the buttons beside it');
+      }
+      return `${m.ticks.length} checkboxes, all clickable; table fits the ${m.dialog}px dialog with ${m.over}px to spare`;
+      } finally {
+        await ctx.close();
+      }
+    });
+
     await check('Every table fits inside its card at every width above the card breakpoint', async () => {
       // The leads table was 1061px of content inside a 1046px card. Nothing
       // errored: the sticky action column simply sat on top of the Status

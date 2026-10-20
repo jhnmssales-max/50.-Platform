@@ -22,17 +22,36 @@ function buildPaidNotificationEmail({
   friendPhone,
   rewardAmountCents,
   currency,
+  // True when 50. sends this dealer's cards rather than the dealer
+  // (tenants.reward_fulfillment = 'platform'). Same two people, same two
+  // amounts, same addresses — what changes is who is being told to act,
+  // so the wording names the dealer instead of saying "your programme" to
+  // someone who does not run it.
+  forPlatform = false,
 }) {
   const staffFirstName = (staffName || '').trim().split(' ')[0] || 'there';
   const amount = formatAmount(rewardAmountCents, currency);
   const referrerContact = referrerPhone ? `${referrerEmail} / ${referrerPhone}` : referrerEmail;
   const friendContact = friendPhone ? `${friendEmail} / ${friendPhone}` : friendEmail;
 
-  const subject = `Referral marked paid — send gift cards: ${referrerName} & ${friendName}`;
+  const subject = forPlatform
+    ? `${tenantName} — send gift cards: ${referrerName} & ${friendName}`
+    : `Referral marked paid — send gift cards: ${referrerName} & ${friendName}`;
+
+  // One sentence does the whole job of saying whose cards these are and
+  // whose job it is to send them.
+  const leadTextLine = forPlatform
+    ? `A referral at ${tenantName} was just marked paid. You send the cards for this dealer — two ${amount} gift cards need to go out.`
+    : `A referral in your ${tenantName} referral program was just marked paid — two ${amount} gift cards need to go out.`;
+  const leadHtmlLine = forPlatform
+    ? `A referral at <strong>${escapeHtml(tenantName)}</strong> was just marked paid. You send the cards for this
+    dealer — two <strong>${escapeHtml(amount)}</strong> gift cards need to go out.`
+    : `A referral in your <strong>${escapeHtml(tenantName)}</strong> referral program was just marked paid —
+    two <strong>${escapeHtml(amount)}</strong> gift cards need to go out.`;
 
   const textBody = `Hi ${staffFirstName},
 
-A referral in your ${tenantName} referral program was just marked paid — two ${amount} gift cards need to go out.
+${leadTextLine}
 
 Referrer (shared their link):
   ${referrerName}
@@ -47,10 +66,7 @@ Referred friend (submitted the lead):
   const htmlBody = `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;color:#1B1B1B;">
   <p style="font-size:15px;line-height:1.6;">Hi ${escapeHtml(staffFirstName)},</p>
-  <p style="font-size:15px;line-height:1.6;">
-    A referral in your <strong>${escapeHtml(tenantName)}</strong> referral program was just marked paid —
-    two <strong>${escapeHtml(amount)}</strong> gift cards need to go out.
-  </p>
+  <p style="font-size:15px;line-height:1.6;">${leadHtmlLine}</p>
   <div style="font-size:14px;line-height:1.6;color:#3a3a3a;background:#F8F5F0;border-radius:8px;padding:12px 14px;margin:12px 0;">
     <p style="margin:0 0 4px;"><strong>Referrer</strong> (shared their link)</p>
     <p style="margin:0 0 2px;">${escapeHtml(referrerName)}</p>

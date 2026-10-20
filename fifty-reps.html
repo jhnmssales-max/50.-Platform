@@ -235,6 +235,10 @@
      renewal coming up, a missing card. Weight as well as colour, so it does
      not rely on colour alone to carry the point. */
   .warn{color:#8A5A00;font-weight:bold;}
+  .tickcell{display:flex;align-items:center;gap:7px;cursor:pointer;}
+  .tickcell input{margin:0;flex:0 0 auto;}
+  .tickcell input:disabled + span{opacity:.55;}
+  .tickcell:has(input:disabled){cursor:default;}
   dialog{border:0;border-radius:14px;padding:22px;max-width:560px;width:calc(100% - 32px);box-shadow:0 20px 60px rgba(0,0,0,.35);}
   dialog.wide{max-width:900px;}
   dialog::backdrop{background:rgba(0,0,0,.45);}
@@ -2530,9 +2534,22 @@ async function loginsDialog(tenantId){
     cur = await api('/rep-dealers/' + tenantId + '/admins');
   }catch(err){ return flash(err.message); }
 
+  // 50. sending this dealer's cards is the one case where a tick would mean
+  // nothing: the alert goes to Joseph and no login is consulted. Show that
+  // plainly rather than offering a choice that quietly does nothing.
+  const weSend = cur.reward_fulfillment === 'platform';
+  const anyTicked = cur.admins.some((a) => a.gets_reward_alerts);
+
   const rows = cur.admins.map((a) =>
     '<tr><td><b>' + esc(a.name || a.email) + '</b>' +
       (a.name ? '<div class="muted">' + esc(a.email) + '</div>' : '') + '</td>' +
+    '<td data-label="Gift-card email">' +
+      '<label class="tickcell">' +
+        '<input type="checkbox" data-alert="' + esc(a.id) + '"' +
+          (a.gets_reward_alerts ? ' checked' : '') + (weSend ? ' disabled' : '') +
+          ' title="' + (weSend ? 'You send this company\'s gift cards' : 'Send this person the gift-card email') + '">' +
+      '</label>' +
+    '</td>' +
     '<td class="num">' +
       // Resend is on every login, including the only one -- the person who
       // cannot get in is often the only person on the account.
@@ -2547,8 +2564,19 @@ async function loginsDialog(tenantId){
 
   openDialog(
     '<h3>Who can sign in to ' + esc(cur.name) + '</h3>' +
-    '<p class="muted">These are the people emailed when a referral is marked paid, so the gift cards can go out. They can also sign in and mark referrals paid themselves.</p>' +
-    '<div class="tablewrap"><table><tbody>' + rows + '</tbody></table></div>' +
+    '<p class="muted">Everyone here can sign in and mark referrals paid.</p>' +
+    '<p class="muted">' + (weSend
+      ? 'You send this company\'s gift cards, so the &ldquo;send the gift cards&rdquo; email comes to you and nobody here is emailed about it. Change that on their Pricing screen.'
+      : (anyTicked
+        ? 'Only the people ticked below get the &ldquo;send the gift cards&rdquo; email when a referral is marked paid.'
+        : 'Nobody is ticked, so that email goes to whoever added the customer and copies everyone else here. Tick someone to send it to them alone instead.')) +
+    '</p>' +
+    // min-width:0, because this one lives in a 560px dialog rather than the
+    // full page. At the global 640px minimum the table would be wider than
+    // the dialog holding it, and the sticky button column would sit on top
+    // of the very checkboxes this screen exists for.
+    '<div class="tablewrap"><table style="min-width:0"><thead><tr><th>Login</th><th>Gift-card email</th><th></th></tr></thead><tbody>' +
+      rows + '</tbody></table></div>' +
     '<form id="addAdminForm" style="margin-top:14px">' +
       '<div class="row">' +
         '<div><label>Add someone \u2014 their email</label><input name="email" type="email" required maxlength="200" placeholder="name@theircompany.com"></div>' +
@@ -2562,6 +2590,25 @@ async function loginsDialog(tenantId){
       '</div></form>'
   );
   $('cancelDlg').addEventListener('click', async () => { closeDialog(); await renderDealers(); });
+
+  // Saves on the tick itself: there is no Save button on this dialog, and
+  // adding one for a single checkbox would be a worse trade than writing
+  // immediately and putting the box back if the write fails.
+  $('dlg').querySelectorAll('[data-alert]').forEach((cb) => cb.addEventListener('change', async () => {
+    const wanted = cb.checked;
+    cb.disabled = true;
+    try{
+      await patch('/rep-dealers/' + tenantId + '/admins/' + cb.dataset.alert, { gets_reward_alerts: wanted });
+      cb.disabled = false;
+      // Reopen so the paragraph above the list matches what is now ticked:
+      // it says something different when nobody is.
+      await loginsDialog(tenantId);
+    }catch(err){
+      cb.checked = !wanted;
+      cb.disabled = false;
+      dialogError(err.message);
+    }
+  }));
 
   $('dlg').querySelectorAll('[data-resend]').forEach((b) => b.addEventListener('click', async () => {
     if(b.disabled) return;

@@ -305,7 +305,14 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
              t.send_from_address as tenant_send_from_address,
              t.send_from_name as tenant_send_from_name,
              t.reward_amount_cents, t.reward_currency,
-             (select array_agg(u2.email) from users u2 where u2.tenant_id = t.id and u2.role = 'admin') as admin_emails
+             t.reward_fulfillment,
+             (select array_agg(u2.email) from users u2 where u2.tenant_id = t.id and u2.role = 'admin') as admin_emails,
+             -- Whoever this dealer has been told to send the alert to. Empty
+             -- for every dealer where nobody has been ticked, which is the
+             -- ordinary state and means the fallback below applies.
+             (select array_agg(u3.email order by u3.created_at)
+                from users u3
+               where u3.tenant_id = t.id and u3.role = 'admin' and u3.gets_reward_alerts) as alert_emails
            from referrals r
            join referral_links rl on rl.id = r.referral_link_id
            join customers c on c.id = rl.customer_id
@@ -483,11 +490,51 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
     // same "who on this tenant needs to know" question either way.
     if (paidNotification) {
       const adminEmails = paidNotification.admin_emails || [];
-      if (!paidNotification.staff_email && !adminEmails.length) {
+      const tickedEmails = paidNotification.alert_emails || [];
+      // Who sends this dealer's cards decides who is told they need sending.
+      // 'platform' means 50. does, so 50. hears about it and the dealer does
+      // not -- which is what their own welcome email already promises them.
+      // It is also the only branch that ignores the ticks: there is nothing
+      // for a dealer's login to be ticked for when the job is not theirs.
+      const platformSends = paidNotification.reward_fulfillment === 'platform';
+      // Falls back to Joseph's own address rather than an env var that may
+      // not be set, same as every other 50.-facing email in this codebase.
+      const supportEmail = process.env.BILLING_SUPPORT_EMAIL || 'joseph@referwith50.com';
+      if (!platformSends && !tickedEmails.length && !paidNotification.staff_email && !adminEmails.length) {
         console.log(
           `No staff member or admin to notify for referral ${referralId}'s paid status — skipping paid-notification email.`
         );
       } else {
+        // Three routes, in order of who has the job.
+        //
+        //   50. sends the cards   -> 50., and nobody at the dealer.
+        //   somebody is ticked    -> exactly those people.
+        //   nobody is ticked      -> the original rule, unchanged: the
+        //                            person who entered that customer,
+        //                            copying every other login.
+        //
+        // Worked out before the try, not inside it: a failed send is exactly
+        // when knowing who should have been told matters, and the first
+        // thing that can throw in there is a missing sending address, which
+        // used to leave the failure log saying "to=null".
+        const route = platformSends ? '50. sends the cards' : tickedEmails.length ? 'ticked logins' : 'default';
+        let to;
+        let cc;
+        {
+          let ccEmails = [];
+          if (platformSends) {
+            to = supportEmail;
+          } else if (tickedEmails.length) {
+            to = tickedEmails[0];
+            ccEmails = tickedEmails.slice(1);
+          } else {
+            to = paidNotification.staff_email || adminEmails.join(', ');
+            ccEmails = paidNotification.staff_email
+              ? adminEmails.filter((e) => e.toLowerCase() !== paidNotification.staff_email.toLowerCase())
+              : [];
+          }
+          cc = ccEmails.length ? ccEmails.join(', ') : undefined;
+        }
         try {
           const fromAddress =
             (paidNotification.tenant_send_domain_verified && paidNotification.tenant_send_from_address) ||
@@ -501,7 +548,9 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
 
           const { subject, htmlBody, textBody } = buildPaidNotificationEmail({
             tenantName: paidNotification.tenant_name,
-            staffName: paidNotification.staff_name,
+            // Nobody at the dealer is being addressed when 50. sends the
+            // cards, so the greeting must not use their salesperson's name.
+            staffName: platformSends ? null : paidNotification.staff_name,
             referrerName: paidNotification.referrer_name,
             referrerEmail: paidNotification.referrer_email,
             referrerPhone: paidNotification.referrer_phone,
@@ -510,13 +559,9 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
             friendPhone: paidNotification.friend_phone,
             rewardAmountCents: paidNotification.reward_amount_cents,
             currency: paidNotification.reward_currency,
+            forPlatform: platformSends,
           });
 
-          const to = paidNotification.staff_email || adminEmails.join(', ');
-          const ccEmails = paidNotification.staff_email
-            ? adminEmails.filter((e) => e.toLowerCase() !== paidNotification.staff_email.toLowerCase())
-            : [];
-          const cc = ccEmails.length ? ccEmails.join(', ') : undefined;
 
           await sendEmail({
             from: `${fromName} <${fromAddress}>`,
@@ -528,10 +573,15 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
           });
 
           console.log(
-            `Sent paid-notification email for referral ${referralId} — to=${to}${cc ? ` cc=${cc}` : ''}`
+            `Sent paid-notification email for referral ${referralId} (${route}) — to=${to}${cc ? ` cc=${cc}` : ''}`
           );
         } catch (emailErr) {
-          console.error('Failed to send paid-notification email:', emailErr.message);
+          // Carries who it was for. These are the cards that now will not go
+          // out unless somebody is told, so the line has to name the people
+          // who should have heard about it.
+          console.error(
+            `Failed to send paid-notification email for referral ${referralId} (${route}) — to=${to}${cc ? ` cc=${cc}` : ''}: ${emailErr.message}`
+          );
         }
       }
     }
