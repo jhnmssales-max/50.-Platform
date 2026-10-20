@@ -119,6 +119,11 @@ async function main() {
   process.env.POSTMARK_API_BASE = `http://127.0.0.1:${PORTS.postmark}`;
   process.env.POSTMARK_SERVER_TOKEN = 'postmark-test-token';
   process.env.EMAIL_FROM_ADDRESS = 'notifications@referwith50.example';
+  // Activation also sends 50.'s own referral invite, and an invite is a
+  // link. Without this the link cannot be built at all -- which is how this
+  // suite found that the sender used to go ahead and send a link-less
+  // email; it now refuses instead (lib/customerInvite.js).
+  process.env.FRONTEND_BASE_URL = 'https://go.referwith50.example';
   delete process.env.BILLING_SUPPORT_EMAIL;
   require('./stripe-stand-in-preload');
   const worker = require('../../src/workers/billingEmails');
@@ -133,6 +138,14 @@ async function main() {
 
   const cycle = (opts) => worker.runBillingEmailCycle(opts);
   const sentTo = (slug) => emails.filter((e) => e.To.includes(`@${slug}.example`));
+  // Activation now sends a dealer two things: the receipt, and 50.'s own
+  // referral invite (lib/platformReferrer.js -- a dealer who has paid is a
+  // customer of 50., so they get a link to pass 50. on). Counting "mail to
+  // this dealer" stopped meaning "receipts" the day that shipped, so the
+  // receipt checks below count receipts, and the invite is asserted on its
+  // own rather than quietly swept into the total.
+  const receiptsTo = (slug) => sentTo(slug).filter((e) => /Receipt/.test(e.Subject));
+  const platformInvitesTo = (slug) => sentTo(slug).filter((e) => /wants to say thank you/.test(e.Subject));
   const ledger = (tenantId, kind) => sql('select period, claimed_at, sent_at, recipients from billing_emails where tenant_id = $1 and kind = $2 order by period', [tenantId, kind]);
 
   let seq = 0;
@@ -270,8 +283,8 @@ async function main() {
     await check('The dealer gets exactly one receipt, from 50., with the amount, card, Stripe receipt link, first-year coverage and the flat per-referral fee — support on cc', async () => {
       await waitFor(() => sentTo('payer').length >= 1, 'activation receipt email');
       await sleep(300);
-      const mine = sentTo('payer');
-      eq(mine.length, 1, 'emails to the dealer');
+      const mine = receiptsTo('payer');
+      eq(mine.length, 1, 'receipts to the dealer');
       const e = mine[0];
       eq(e.To, 'admin1@payer.example', 'To');
       eq(e.Cc, 'joseph@referwith50.com', 'Cc');
@@ -295,6 +308,45 @@ async function main() {
       assert(rows[0].sent_at, 'ledger row not stamped sent');
       return `"${e.Subject}" -> ${e.To}, cc ${e.Cc}; ledger: activation/${rows[0].recipients}`;
     });
+    await check("A newly activated dealer also gets 50.'s own referral invite, with a link of their own", async () => {
+      // The other half of paying the activation fee: the dealer is now a
+      // customer of 50., so they receive the ordinary invite -- the same
+      // email a shed buyer gets from their dealer -- and hold a link they
+      // can pass on. They learn what they bought by being on the receiving
+      // end of it.
+      await waitFor(() => platformInvitesTo('payer').length >= 1, "50.'s referral invite");
+      await sleep(200);
+      const invites = platformInvitesTo('payer');
+      eq(invites.length, 1, '50. invites to the dealer');
+      const e = invites[0];
+      eq(e.To, 'admin1@payer.example', 'To');
+      // Addressed from 50., replying to Joseph -- a dealer answering this is
+      // answering 50., and someone should be reading it.
+      assert(
+        e.ReplyTo.includes('joseph@referwith50.com'),
+        `ReplyTo should reach Joseph: ${e.ReplyTo}`
+      );
+      // It is 50. writing to them, not their own business writing to them.
+      assert(e.Subject.startsWith('50.'), `Subject should come from 50.: ${e.Subject}`);
+      assert(!/\bjust\b/i.test(e.TextBody), 'the word "just" appears');
+
+      // The row and the link belong to the 50. tenant, which is what makes
+      // the link land on 50.'s page rather than the dealer's own.
+      const [fifty] = await sql(`select id from tenants where slug = '50-platform'`);
+      const rows = await sql(
+        `select c.tenant_id, rl.code from customers c
+         join referral_links rl on rl.customer_id = c.id
+         where c.source_activated_tenant_id = $1`,
+        [pay.id]
+      );
+      eq(rows.length, 1, 'enrolment rows for the dealer');
+      eq(rows[0].tenant_id, fifty.id, "the enrolment belongs to 50.'s tenant");
+      assert(
+        e.TextBody.includes(rows[0].code) || e.HtmlBody.includes(rows[0].code),
+        `the invite does not carry their link (${rows[0].code})`
+      );
+      return `"${e.Subject}" -> ${e.To}, carrying 50. link ${rows[0].code}`;
+    });
     await check('Stripe redelivering the same webhook event, and the hourly sweep, do not send a second receipt', async () => {
       const log = await standIn('GET', '/__control/log');
       const completed = log.deliveries.find((d) => d.type === 'checkout.session.completed');
@@ -304,8 +356,11 @@ async function main() {
       await cycle({ now: new Date(OCT_1_8AM) });
       await cycle({ now: new Date(OCT_1_8AM) });
       await sleep(300);
-      eq(sentTo('payer').length, 1, 'emails to the dealer after redelivery + 2 sweeps');
-      return 'replay -> 200; two sweeps; still exactly 1 email';
+      eq(receiptsTo('payer').length, 1, 'receipts to the dealer after redelivery + 2 sweeps');
+      // The 50. invite is claimed per dealer admin, so a redelivery must not
+      // produce a second one of those either.
+      eq(platformInvitesTo('payer').length, 1, '50. invites after redelivery + 2 sweeps');
+      return 'replay -> 200; two sweeps; still exactly 1 receipt and 1 invite';
     });
     await check('Two receipts requested at the same instant -> one email (the claim is a database row, not a variable)', async () => {
       const t = await makeTenant({ slug: 'racer', receiptSent: false });

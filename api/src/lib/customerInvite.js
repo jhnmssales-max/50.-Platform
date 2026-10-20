@@ -138,6 +138,17 @@ async function ensureInviteLink(client, { tenantId, customerId, name }) {
 // or failed send must never roll back data that already exists, and must
 // not hold a transaction open across a third-party HTTP call.
 async function sendInviteEmail({ tenant, customerName, customerEmail, inviteUrl, replyToEmail }) {
+  // An invite whose whole purpose is a link, sent without one, is worse
+  // than no invite: the customer reads it, finds nothing to share, and the
+  // sender has spent their one introduction. buildInviteUrl returns null
+  // when neither FRONTEND_BASE_URL nor the tenant's own domain is set, so
+  // refuse rather than send. The customer and their link still exist and
+  // the invite can be resent once that is configured.
+  if (!inviteUrl) {
+    throw new Error(
+      'No invite URL could be built — set FRONTEND_BASE_URL, or give this tenant a domain. Nothing was sent.'
+    );
+  }
   const fromAddress =
     (tenant.send_domain_verified && tenant.send_from_address) || process.env.EMAIL_FROM_ADDRESS;
   if (!fromAddress) {

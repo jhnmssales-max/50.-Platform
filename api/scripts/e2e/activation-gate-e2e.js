@@ -842,6 +842,98 @@ async function main() {
       }
       return `activation_paid_at=${activated.activation_paid_at.toISOString()} customer=${activated.stripe_customer_id} payment_method=${activated.stripe_payment_method_id}; billing_events: activation_charge 50000 succeeded livemode=false (${events[0].stripe_payment_intent_id}, ${events[0].stripe_event_id})`;
     });
+    await check('Paying the activation fee makes the dealer a referrer for 50. itself', async () => {
+      // 50. runs its own program on its own platform: the dealer's admins
+      // become customers of the 50. tenant, with their own links, and are
+      // invited the ordinary way. Staff are not -- this is the owner being
+      // given something to pass on, not a mailing list of everyone who can
+      // sign in.
+      const [fifty] = await sql(`select id from tenants where slug = '50-platform'`);
+      const enrolled = await sql(
+        `select c.name, c.email, c.tenant_id, c.source_activated_tenant_id, c.created_by_user_id
+         from customers c where c.source_activated_tenant_id = $1 order by c.email`,
+        [newTenantId]
+      );
+      eq(enrolled.length, 1, 'dealer admins enrolled in 50.\'s program');
+      eq(enrolled[0].email, USERS.newAdmin.email, 'who was enrolled');
+      eq(enrolled[0].name, USERS.newAdmin.name, 'their name');
+      eq(enrolled[0].tenant_id, fifty.id, 'the row belongs to the 50. tenant, not the dealer');
+      eq(enrolled[0].created_by_user_id, null, 'created_by_user_id (null means nobody typed them in)');
+
+      const staff = await sql(
+        `select 1 from customers where tenant_id = $1 and email = $2`,
+        [fifty.id, USERS.newStaff.email]
+      );
+      eq(staff.length, 0, 'staff were enrolled too');
+
+      const links = await sql(
+        `select rl.code, rl.kind, rl.tenant_id from referral_links rl
+         join customers c on c.id = rl.customer_id
+         where c.source_activated_tenant_id = $1`,
+        [newTenantId]
+      );
+      eq(links.length, 1, 'invite links minted for the dealer admin');
+      eq(links[0].kind, 'invite', 'link kind');
+      eq(links[0].tenant_id, fifty.id, "the link is 50.'s, so it lands on 50.'s page");
+
+      const line = apiProc.lines.find(
+        (l) => l.includes('50. referral invite') && l.includes(USERS.newAdmin.email)
+      );
+      assert(line, `no 50. invite attempt for ${USERS.newAdmin.email} in the server log`);
+      return `${USERS.newAdmin.email} holds 50. invite link ${links[0].code}; ${USERS.newStaff.email} (staff) was not enrolled`;
+    });
+
+    // Injecting a redelivery is something Stripe can't be asked to do on
+    // demand, so this one runs against the stand-in, same as the rest of
+    // the webhook-hardening checks.
+    if (STAND_IN) await check('A redelivered activation enrols nobody twice', async () => {
+      const before = await sql(
+        `select count(*)::int as n from customers where source_activated_tenant_id = $1`,
+        [newTenantId]
+      );
+      eq(before[0].n, 1, 'precondition: exactly one enrolment to begin with');
+      const attemptsBefore = apiProc.lines.filter((l) => l.includes('50. referral invite')).length;
+      assert(attemptsBefore >= 1, 'no invite was ever attempted, so a redelivery proves nothing');
+
+      // Stripe redelivers. The event id is the same one that activated this
+      // tenant, which is exactly the case the claim has to survive.
+      const [ev] = await sql(
+        `select stripe_event_id, stripe_payment_intent_id from billing_events
+         where tenant_id = $1 and event_type = 'activation_charge'`,
+        [newTenantId]
+      );
+      const event = JSON.stringify({
+        id: ev.stripe_event_id, object: 'event', type: 'checkout.session.completed', livemode: false,
+        data: { object: { id: 'cs_test_redeliver', mode: 'payment', payment_status: 'paid',
+          client_reference_id: newTenantId, metadata: { kind: 'activation', tenant_id: newTenantId },
+          payment_intent: ev.stripe_payment_intent_id, customer: activated.stripe_customer_id,
+          amount_total: 50000, livemode: false } } });
+      const signed = require('./stripe-stand-in').signPayload;
+      const res = await fetch(`http://127.0.0.1:${PORTS.api}/api/webhooks/stripe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Stripe-Signature': signed(event, WEBHOOK_SECRET) },
+        body: event,
+      });
+      eq(res.status, 200, 'redelivered webhook status');
+      await new Promise((r) => setTimeout(r, 300));
+
+      const after = await sql(
+        `select count(*)::int as n from customers where source_activated_tenant_id = $1`,
+        [newTenantId]
+      );
+      eq(after[0].n, 1, 'enrolments after the redelivery');
+      const linksAfter = await sql(
+        `select count(*)::int as n from referral_links rl
+         join customers c on c.id = rl.customer_id
+         where c.source_activated_tenant_id = $1`,
+        [newTenantId]
+      );
+      eq(linksAfter[0].n, 1, 'invite links after the redelivery');
+      eq(apiProc.lines.filter((l) => l.includes('50. referral invite')).length, attemptsBefore,
+        'invite attempts after the redelivery');
+      return 'redelivered the same activation event: still 1 enrolment, 1 link, no second invite';
+    });
+
     await check('Annual renewal: a test-mode activation does not start the 12-month clock (renewal_due_at stays null); annual fee defaults to $100', async () => {
       eq(activated.renewal_due_at, null, 'renewal_due_at after a test-mode activation');
       eq(activated.annual_fee_cents, 10000, 'annual_fee_cents default');
