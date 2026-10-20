@@ -1187,6 +1187,117 @@ async function main() {
       return `billing_events referral_fee: succeeded 3000 (flat fee, snapshotted) livemode=false ${row.stripe_payment_intent_id}; referral rewarded. ${stripeSide}`;
     });
 
+    // ----- Who is told the gift cards need sending --------------------------
+    // Three routes, and the one that ships silently is the dangerous one, so
+    // each is asserted on the recipients actually used. Postmark points at a
+    // dead port in this suite, so the send fails -- but the line it logs on
+    // the way out names the route and the addresses, which is the thing
+    // under test. Who sends the email is not: that is the same sendEmail
+    // every other alert here uses.
+    const alertLine = (referralId) =>
+      apiProc.lines.find((l) => l.includes('paid-notification email') && l.includes(referralId));
+
+    await check('By default the gift-card email goes to whoever added the customer', async () => {
+      const ref = await createReferral(USERS.newAdmin, 'alert-default');
+      const r = await api('PATCH', `/api/referrals/${ref}/status`, {
+        token: tokenFor(USERS.newAdmin), body: { status: 'rewarded' },
+      });
+      eq(r.status, 200, 'mark paid');
+      await new Promise((res) => setTimeout(res, 400));
+      const line = alertLine(ref);
+      assert(line, `no paid-notification line for ${ref}`);
+      assert(line.includes('(default)'), `expected the default route: ${line}`);
+      assert(line.includes(`to=${USERS.newAdmin.email}`), `expected it addressed to the adder: ${line}`);
+      return line.replace(/^\[[^\]]+\] /, '').slice(0, 150);
+    });
+
+    await check('Ticking a login sends it to them alone, and takes it off everyone else', async () => {
+      // A second login, so "only the ticked one" is a real narrowing rather
+      // than a list of one that was always going to be the answer.
+      // users.id is a foreign key onto auth.users, so a login has to exist on
+      // both sides -- the same two inserts the suite's own seed does.
+      const second = 'manager@e2e-new-dealer.test';
+      const mgrId = 'a0000000-0000-4000-8000-00000000009a';
+      await sql('insert into auth.users (id, email) values ($1, $2) on conflict (id) do nothing', [mgrId, second]);
+      await sql(
+        `insert into users (id, tenant_id, email, name, role)
+         values ($1, $2, $3, 'Morgan Manager', 'admin') on conflict (id) do nothing`,
+        [mgrId, newTenantId, second]
+      );
+      const mgr = { id: mgrId };
+      const before = await api('PATCH', `/api/referrals/${await createReferral(USERS.newAdmin, 'alert-pre')}/status`,
+        { token: tokenFor(USERS.newAdmin), body: { status: 'rewarded' } });
+      eq(before.status, 200, 'mark paid before ticking');
+
+      const tick = await api('PATCH', `/api/rep-dealers/${newTenantId}/admins/${mgr.id}`, {
+        token: tokenFor(USERS.fiftyAdmin), body: { gets_reward_alerts: true },
+      });
+      eq(tick.status, 200, 'PATCH the tick');
+      eq(tick.body.gets_reward_alerts, true, 'flag after ticking');
+
+      const ref = await createReferral(USERS.newAdmin, 'alert-ticked');
+      const r = await api('PATCH', `/api/referrals/${ref}/status`, {
+        token: tokenFor(USERS.newAdmin), body: { status: 'rewarded' },
+      });
+      eq(r.status, 200, 'mark paid after ticking');
+      await new Promise((res) => setTimeout(res, 400));
+      const line = alertLine(ref);
+      assert(line, `no paid-notification line for ${ref}`);
+      assert(line.includes('(ticked logins)'), `expected the ticked route: ${line}`);
+      assert(line.includes(`to=${second}`), `expected it addressed to the ticked manager: ${line}`);
+      // The person who added the customer is an admin too, and would have
+      // been on it a moment ago. Ticking somebody has to take them off.
+      assert(!line.includes(USERS.newAdmin.email), `the adder is still on it: ${line}`);
+
+      await sql('update users set gets_reward_alerts = false where id = $1', [mgr.id]);
+      return line.replace(/^\[[^\]]+\] /, '').slice(0, 160);
+    });
+
+    await check("When 50. sends a dealer's cards, the alert comes to 50. and the dealer hears nothing", async () => {
+      await sql(`update tenants set reward_fulfillment = 'platform' where id = $1`, [newTenantId]);
+      try {
+        const ref = await createReferral(USERS.newAdmin, 'alert-platform');
+        const r = await api('PATCH', `/api/referrals/${ref}/status`, {
+          token: tokenFor(USERS.newAdmin), body: { status: 'rewarded' },
+        });
+        eq(r.status, 200, 'mark paid');
+        await new Promise((res) => setTimeout(res, 400));
+        const line = alertLine(ref);
+        assert(line, `no paid-notification line for ${ref}`);
+        assert(line.includes('(50. sends the cards)'), `expected the platform route: ${line}`);
+        assert(line.includes('to=joseph@referwith50.com'), `expected it addressed to 50.: ${line}`);
+        assert(!line.includes('@e2e-new-dealer.test'), `a dealer login was told anyway: ${line}`);
+
+        // And the dialog says so, rather than offering ticks that would do
+        // nothing: the listing carries the setting the page reads.
+        const listed = await api('GET', `/api/rep-dealers/${newTenantId}/admins`, { token: tokenFor(USERS.fiftyAdmin) });
+        eq(listed.status, 200, 'GET admins');
+        eq(listed.body.reward_fulfillment, 'platform', 'reward_fulfillment on the listing');
+        return line.replace(/^\[[^\]]+\] /, '').slice(0, 160);
+      } finally {
+        await sql(`update tenants set reward_fulfillment = 'dealer' where id = $1`, [newTenantId]);
+      }
+    });
+
+    await check('Only 50. can change who gets the gift-card email', async () => {
+      const [mgr] = await sql('select id from users where email = $1', ['manager@e2e-new-dealer.test']);
+      for (const user of [USERS.newAdmin, USERS.newStaff]) {
+        const r = await api('PATCH', `/api/rep-dealers/${newTenantId}/admins/${mgr.id}`, {
+          token: tokenFor(user), body: { gets_reward_alerts: true },
+        });
+        assert(r.status === 403 || r.status === 404, `${user.email} got ${r.status} changing the flag`);
+      }
+      // And a login id from another company misses rather than matches.
+      const [other] = await sql(`select id from users where tenant_id = (select id from tenants where slug = 'acme-sheds') limit 1`);
+      const cross = await api('PATCH', `/api/rep-dealers/${newTenantId}/admins/${other.id}`, {
+        token: tokenFor(USERS.fiftyAdmin), body: { gets_reward_alerts: true },
+      });
+      eq(cross.status, 404, "another company's login");
+      const [still] = await sql('select gets_reward_alerts from users where id = $1', [other.id]);
+      eq(still.gets_reward_alerts, false, "the other company's login was changed");
+      return 'dealer admin and staff refused; a login from another company is 404 and untouched';
+    });
+
     // ----- The chain continues ----------------------------------------------
     // The friend who bought is a customer of this business now, so they get
     // their own link and their own invite without anyone re-typing them.

@@ -772,14 +772,21 @@ async function requireAdminThen(userId, fn) {
 router.get('/rep-dealers/:tenantId/admins', requireAuth, wrap(async (req, res) => {
   const tenantId = parseOr400(uuid, req.params.tenantId);
   const out = await requireAdminThen(req.userId, async (client) => {
-    const { rows: [t] } = await client.query('select id, name from tenants where id = $1', [tenantId]);
+    const { rows: [t] } = await client.query(
+      'select id, name, reward_fulfillment from tenants where id = $1',
+      [tenantId]
+    );
     if (!t) throw httpError(404, 'No such company');
     const { rows } = await client.query(
-      `select id, email, name, created_at::text as created_at
+      `select id, email, name, gets_reward_alerts, created_at::text as created_at
          from users where tenant_id = $1 and role = 'admin' order by created_at asc, email asc`,
       [tenantId]
     );
-    return { tenant_id: t.id, name: t.name, admins: rows };
+    // reward_fulfillment goes with the list because it decides whether any
+    // of these ticks mean anything: when 50. sends this dealer's cards, the
+    // alert goes to 50. and the page says so rather than offering a choice
+    // that would do nothing.
+    return { tenant_id: t.id, name: t.name, reward_fulfillment: t.reward_fulfillment, admins: rows };
   });
   res.json(out);
 }));
@@ -869,6 +876,32 @@ router.post('/rep-dealers/:tenantId/admins', requireAuth, wrap(async (req, res) 
 //
 // A fresh link also invalidates the earlier one, which is why the email says
 // so. No password is ever sent; they choose their own, same as at build.
+// Who, at this dealer, is told that gift cards need to go out. Ticking
+// nobody is the ordinary state and means the original rule applies:
+// addressed to whoever entered the customer, copying every other login.
+// Only a 50. platform admin can set this -- requireAdminThen, same as every
+// other route on this dialog.
+const rewardAlertBody = z.object({ gets_reward_alerts: z.boolean() });
+
+router.patch('/rep-dealers/:tenantId/admins/:userId', requireAuth, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  const userId = parseOr400(uuid, req.params.userId);
+  const body = parseOr400(rewardAlertBody, req.body || {});
+  const out = await requireAdminThen(req.userId, async (client) => {
+    // Scoped to the tenant in the WHERE clause, not checked beforehand: a
+    // login id from another company must miss rather than match.
+    const { rows: [row] } = await client.query(
+      `update users set gets_reward_alerts = $3
+         where id = $1 and tenant_id = $2 and role = 'admin'
+       returning id, email, name, gets_reward_alerts`,
+      [userId, tenantId, body.gets_reward_alerts]
+    );
+    if (!row) throw httpError(404, 'No such login on this company');
+    return row;
+  });
+  res.json(out);
+}));
+
 router.post('/rep-dealers/:tenantId/admins/:userId/resend', requireAuth, wrap(async (req, res) => {
   const tenantId = parseOr400(uuid, req.params.tenantId);
   const userId = parseOr400(uuid, req.params.userId);
