@@ -26,6 +26,32 @@ Postgres schema for the referral platform, following the [backend spec](../) (sc
 - `migrations/20261017000000_dealer_build.sql` — building a dealer from a won lead (see [`../api/README.md`](../api/README.md)'s "Building a dealer from a won lead"). **Apply it before deploying the API code that reads it.** Adds `rep_leads.build_status` ('none' → 'awaiting_approval' on a win → 'built' or 'declined'), `brand` (the draft branding, same keys as `tenants.branding`), `brand_source`, `reward_amount_cents` (this dealer's gift card, the one price that varies), `approved_by`, `built_at` and `declined_reason`; the table `rep_lead_files` (the index of what a rep dragged onto a lead — the bytes are in Supabase Storage), scoped by RLS to the lead's own rep; a **trigger** that puts a won lead in the build queue, so a deal won by any means — the API, or a hand-written UPDATE in the SQL editor — still reaches Joseph; and `approve_lead_build()` / `decline_lead_build()`, both admin-only. `approve_lead_build()` makes the dealer's address unique itself, because a caller running under RLS cannot see the tenants it would collide with. One transaction.
 - `migrations/20261018000000_reports.sql` — the reports (see [`../api/README.md`](../api/README.md)'s "Reports"). **Apply it before deploying the API code that reads it.** Adds `rep_lead_outcomes` (a bare per-rep, per-month count of lost leads, so a conversion rate has a denominator after a lost lead is deleted — a rep, a month, a number, and deliberately nothing else), `platform_expenses` (what running 50. costs; **seeded with the real services at zero**, because a migration can honestly name them and cannot honestly price them) and `platform_finance_settings` (the card-processing rate, 2.9% + 30c, which is a rate rather than a bill and so cannot sit in the expense table). Expenses and the rate are admin-only; the lost tally is readable by staff for everyone and by a rep for themselves. One transaction.
 
+## Every new table needs its own GRANT
+
+From 30 October 2026 Supabase no longer grants the Data API access to new
+tables in `public` automatically. That applies here even though the API
+connects straight to Postgres rather than through PostgREST: `src/db.js`
+runs every signed-in request as `authenticated` (`SET LOCAL ROLE`), so a
+table with no grant returns `permission denied` for every logged-in user
+who touches it.
+
+So a migration that creates a table the API reads or writes as a signed-in
+user grants it in the same migration:
+
+```sql
+grant select, insert, update, delete on public.your_table to authenticated;
+```
+
+Narrowly — only the verbs the API actually uses, and `anon` only where a
+public page genuinely needs it (today `anon` has no table access at all;
+the public pages go through three `security definer` functions instead).
+A table only ever written by a worker needs no grant, because the workers
+run as the connection's own user rather than impersonating anyone.
+
+`api/scripts/e2e/supabase-stand-in.sql` matches this: it no longer grants
+new tables by default, so a missing grant fails the suite instead of
+waiting to fail in production.
+
 ## New tenants
 
 Creating a `tenants` row isn't wrapped in a migration or a script — like staff accounts below, it's a one-time, per-tenant operation run by whoever administers the Supabase project, as the `postgres` (superuser) role. `slug` and `domain` must both be unique; every billing column defaults to the platform's standard pricing (`reward_amount_cents` 5000, `platform_fee_cents` 9900, `activation_fee_cents` 50000, `annual_fee_cents` 10000, `referral_fee_bps` 3000, `billing_status` `'pending'`) unless overridden.
