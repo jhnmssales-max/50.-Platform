@@ -4,6 +4,7 @@ const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
 const { withUserTransaction, getCallerContext } = require('../db');
 const { buildInviteUrl, createInviteLink, sendInviteEmail } = require('../lib/customerInvite');
+const { tokenForSending } = require('../lib/unsubscribe');
 
 const router = express.Router();
 
@@ -64,7 +65,13 @@ router.post('/customers', requireAuth, async (req, res, next) => {
         name,
       });
 
-      return { customer, link, ctx };
+      // Minted inside the same transaction as the customer, so the invite
+      // below always has one. A brand-new customer cannot be unsubscribed,
+      // but this goes through the same helper as every other send rather
+      // than assuming that stays true.
+      const unsubscribeToken = await tokenForSending(client, customer.id);
+
+      return { customer, link, ctx, unsubscribeToken };
     });
 
     const inviteUrl = buildInviteUrl(result.link.code, result.ctx.tenant_domain);
@@ -89,6 +96,7 @@ router.post('/customers', requireAuth, async (req, res, next) => {
         customerName: result.customer.name,
         customerEmail: result.customer.email,
         inviteUrl,
+        unsubscribeToken: result.unsubscribeToken,
         // Replies go to the staff member who sent the invite (their own
         // business inbox), not the platform's shared sending address.
         replyToEmail: result.ctx.user_email,

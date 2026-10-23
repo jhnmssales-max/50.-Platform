@@ -742,6 +742,10 @@ const pricingBody = z.object({
   reward_amount_cents: z.number().int().min(500).max(50000).optional(),
   reward_fulfillment: z.enum(['dealer', 'platform']).optional(),
   charge_card_cost: z.boolean().optional(),
+  // Not a price: how often an invited customer is sent their link again.
+  // Nullable because null is "never", and turning it back off has to be
+  // expressible rather than merely omitted.
+  invite_followup_months: z.union([z.literal(3), z.literal(6), z.literal(9), z.literal(12), z.null()]).optional(),
 }).refine((b) => Object.keys(b).length > 0, { message: 'Nothing to change' });
 
 // ---------------------------------------------------------------------------
@@ -997,7 +1001,8 @@ router.get('/rep-dealers/:tenantId/pricing', requireAuth, wrap(async (req, res) 
   const out = await withServiceRole(async (client) => {
     const { rows: [row] } = await client.query(
       `select id, name, billing_required, activation_fee_cents, annual_fee_cents,
-              referral_fee_cents, reward_amount_cents, reward_fulfillment, charge_card_cost
+              referral_fee_cents, reward_amount_cents, reward_fulfillment, charge_card_cost,
+              invite_followup_months
          from tenants where id = $1`, [tenantId]);
     if (!row) throw httpError(404, 'No such company');
     return row;
@@ -1019,14 +1024,15 @@ router.patch('/rep-dealers/:tenantId/pricing', requireAuth, wrap(async (req, res
     const { rows: [t] } = await client.query(
       'select id, name, billing_required from tenants where id = $1', [tenantId]);
     if (!t) throw httpError(404, 'No such company');
-    if (t.billing_required === false) {
+    const PRICES = ['activation_fee_cents', 'annual_fee_cents', 'referral_fee_cents',
+                    'reward_amount_cents', 'reward_fulfillment', 'charge_card_cost'];
+    if (t.billing_required === false && PRICES.some((k) => body[k] !== undefined)) {
       throw httpError(409, `${t.name} is an in-house company and is never charged, so its prices cannot be set.`);
     }
 
     const sets = [];
     const vals = [tenantId];
-    for (const key of ['activation_fee_cents', 'annual_fee_cents', 'referral_fee_cents',
-                       'reward_amount_cents', 'reward_fulfillment', 'charge_card_cost']) {
+    for (const key of [...PRICES, 'invite_followup_months']) {
       if (body[key] !== undefined) {
         vals.push(body[key]);
         sets.push(`${key} = $${vals.length}`);

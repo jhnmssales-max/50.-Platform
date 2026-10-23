@@ -13,6 +13,7 @@ const {
   findOrCreateReferralCustomer,
   sendInviteEmail,
 } = require('../lib/customerInvite');
+const { tokenForSending } = require('../lib/unsubscribe');
 const { collectReferralFee } = require('../lib/referralFee');
 
 const router = express.Router();
@@ -358,6 +359,7 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
             name: paidNotification.friend_name,
             email: paidNotification.friend_email,
             code: link.code,
+            unsubscribeToken: await tokenForSending(client, friend.id),
           };
         }
       }
@@ -599,6 +601,7 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
           customerName: friendInvite.name,
           customerEmail: friendInvite.email,
           inviteUrl: buildInviteUrl(friendInvite.code, ctx.tenant_domain),
+          unsubscribeToken: friendInvite.unsubscribeToken,
           // Replies go to whoever marked the referral paid, at their own
           // business inbox, not the platform's shared sending address.
           replyToEmail: ctx.user_email,

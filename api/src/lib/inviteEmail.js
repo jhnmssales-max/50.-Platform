@@ -14,7 +14,7 @@
 const DEFAULT_OFFER_HOW =
   "Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building through that link, you each receive a **{reward} Amazon E-Gift Card**.";
 
-function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency, logoUrl, offerHow, cardNoun }) {
+function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency, logoUrl, offerHow, cardNoun, unsubscribeUrl }) {
   const btnColor = /^#[0-9a-fA-F]{3,8}$/.test(buttonColor || '') ? buttonColor : '#1C2B33';
   const firstName = (customerName || '').trim().split(' ')[0] || 'there';
 
@@ -46,7 +46,11 @@ ${offerText}
 Thank you for supporting our business and giving us the opportunity to serve the people you care about.
 
 Your personal referral link (it never expires, share it as often as you like):
-${inviteUrl}`;
+${inviteUrl}
+
+---
+Don't want emails about ${tenantName}'s referral program? Unsubscribe here:
+${unsubscribeUrl}`;
 
   const htmlBody = `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;color:#1B1B1B;">
@@ -70,6 +74,10 @@ ${inviteUrl}`;
   </p>
   <p style="font-size:12px;color:#6B6A63;word-break:break-all;">
     Or copy this link: ${inviteUrl}
+  </p>
+  <p style="font-size:12px;color:#8A887F;border-top:1px solid #E6E0D5;padding-top:14px;margin-top:24px;">
+    Don't want emails about ${escapeHtml(tenantName)}'s referral program?
+    <a href="${unsubscribeUrl}" style="color:#8A887F;">Unsubscribe</a>.
   </p>
 </div>`;
 

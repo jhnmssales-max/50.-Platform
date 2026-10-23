@@ -909,6 +909,7 @@ function pricingFieldsHtml(v){
       '<p class="hint">' + esc(f.hint) + '</p></div>').join('');
   const platform = v ? v.reward_fulfillment === 'platform' : false;
   const charge = v ? !!v.charge_card_cost : false;
+  const followup = (v && v.invite_followup_months != null) ? v.invite_followup_months : '';
   return '<div class="row">' + boxes + '</div>' +
     '<label>Who sends the gift cards</label>' +
     '<select name="reward_fulfillment">' +
@@ -916,6 +917,16 @@ function pricingFieldsHtml(v){
       '<option value="platform"' + (platform ? ' selected' : '') + '>We do \u2014 we email the cards to their customer</option>' +
     '</select>' +
     '<p class="hint">Either way nothing goes out until they mark the referral paid.</p>' +
+    // Off by default and off for every dealer already on the platform, so
+    // nothing starts sending because this screen gained a box.
+    '<label style="margin-top:12px">Send invited customers their link again</label>' +
+    '<select name="invite_followup_months">' +
+      [['', 'Never \u2014 one invite only'], ['3', 'Every 3 months'], ['6', 'Every 6 months'],
+       ['9', 'Every 9 months'], ['12', 'Every 12 months']].map((o) =>
+        '<option value="' + o[0] + '"' + (String(followup) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'
+      ).join('') +
+    '</select>' +
+    '<p class="hint">A short reminder with the same link, three times at most. Every referral email carries an unsubscribe link, and anyone who uses it is never emailed again by this company.</p>' +
     '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px">' +
       '<input type="checkbox" name="charge_card_cost" style="width:auto;margin-top:3px"' + (charge ? ' checked' : '') + '>' +
       '<span>Also charge them for the gift cards themselves' +
@@ -940,6 +951,12 @@ function readPricingFields(form, { onlyChanges = false } = {}){
   if(sel && !(onlyChanges && sel.value === 'dealer')) out.reward_fulfillment = sel.value;
   const chk = form.querySelector('[name="charge_card_cost"]');
   if(chk && !(onlyChanges && !chk.checked)) out.charge_card_cost = chk.checked;
+  // Empty means never. Sent as null rather than omitted, so turning it back
+  // off actually turns it off instead of leaving the old value in place.
+  const fu = form.querySelector('[name="invite_followup_months"]');
+  if(fu && !(onlyChanges && fu.value === '')) {
+    out.invite_followup_months = fu.value === '' ? null : Number(fu.value);
+  }
   return out;
 }
 

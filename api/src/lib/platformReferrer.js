@@ -24,6 +24,7 @@
 
 const { withServiceRole, assertServiceRoleConnection } = require('../db');
 const { buildInviteUrl, ensureInviteLink, sendInviteEmail } = require('./customerInvite');
+const { tokenForSending } = require('./unsubscribe');
 
 // The 50. tenant's own slug. is_platform_staff() in the rep-pipeline
 // migration is defined against this same value -- 50. is a tenant like any
@@ -103,7 +104,12 @@ async function enrolActivatedDealerAdmins({ dealerTenantId }) {
         customerId: created.id,
         name: admin.name,
       });
-      enrolled.push({ name: admin.name, email: admin.email, code: link.code });
+      enrolled.push({
+        name: admin.name,
+        email: admin.email,
+        code: link.code,
+        unsubscribeToken: await tokenForSending(client, created.id),
+      });
     }
 
     return enrolled.map((e) => ({ ...e, platform }));
@@ -121,6 +127,7 @@ async function sendPlatformInvites(enrolled) {
         customerName: person.name,
         customerEmail: person.email,
         inviteUrl: buildInviteUrl(person.code, person.platform.tenant_domain),
+        unsubscribeToken: person.unsubscribeToken,
         // Replies reach Joseph, not the platform's shared sending address:
         // a dealer answering this email is answering 50., and someone
         // should be reading it.

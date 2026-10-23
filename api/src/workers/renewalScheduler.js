@@ -16,6 +16,7 @@ const { runAnnualRenewalCycle } = require('./annualRenewal');
 const { runBillingEmailCycle } = require('./billingEmails');
 const { runRepEarningsCycle } = require('./repEarnings');
 const { runFollowupReminderCycle } = require('./followupReminders');
+const { runInviteFollowupCycle } = require('./inviteFollowups');
 
 const INTERVAL_MS = 60 * 60 * 1000;
 const FIRST_RUN_DELAY_MS = 2 * 60 * 1000;
@@ -54,6 +55,15 @@ async function tick() {
     await runFollowupReminderCycle();
   } catch (err) {
     console.error('FOLLOWUP_REMINDERS scheduled cycle failed:', err.message);
+  }
+  // Sending invited customers their link again (workers/inviteFollowups.js).
+  // Does nothing at all for a dealer with no interval set, which is every
+  // dealer until somebody chooses one. The per-cycle limit is what keeps a
+  // dealer switching it on for a long list from sending it as one burst.
+  try {
+    await runInviteFollowupCycle();
+  } catch (err) {
+    console.error('INVITE_FOLLOWUPS scheduled cycle failed:', err.message);
   }
 }
 
