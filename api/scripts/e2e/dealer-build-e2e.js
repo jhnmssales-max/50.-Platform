@@ -653,17 +653,26 @@ async function main() {
       return 'helper refused on both, nothing created';
     });
 
-    await check('An in-house company has no prices to set, and the route says so', async () => {
-      // GSS, NMS and 50. itself are never charged. Letting a price be set on
-      // one would read as them having started being billed.
+    await check("An in-house company's prices save, and still cannot charge it", async () => {
+      // This used to be refused outright. The refusal protected nothing:
+      // billing_required = false is what stops a charge, enforced in
+      // rewardIssuance and referralFee, and a database CHECK keeps GSS, NMS
+      // and 50. exempt permanently. All it did was make the one screen a
+      // company is managed from unreachable for three of them. The amounts
+      // save now, the screen says they are display-only, and the exemption
+      // is untouched -- which is the part that has to stay true.
       const [gss] = await sql(`select id from tenants where slug = 'good-steward-structures'`);
       const r = await api('PATCH', `/rep-dealers/${gss.id}/pricing`, {
         as: USERS.admin, body: { referral_fee_cents: 5000 },
       });
-      eq(r.status, 409, `expected a refusal: ${JSON.stringify(r.body)}`);
-      const [t] = await sql('select referral_fee_cents from tenants where id = $1', [gss.id]);
-      assert(t.referral_fee_cents !== 5000, 'an in-house company was priced anyway');
-      return `refused: ${r.body.error || r.body.message}`;
+      eq(r.status, 200, `expected it to save: ${JSON.stringify(r.body)}`);
+      const [t] = await sql(
+        'select referral_fee_cents, billing_required from tenants where id = $1', [gss.id]);
+      eq(t.referral_fee_cents, 5000, 'the amount did not save');
+      // The thing that actually matters: it is still exempt.
+      eq(t.billing_required, false, 'an in-house company stopped being exempt');
+      await sql('update tenants set referral_fee_cents = null where id = $1', [gss.id]).catch(() => {});
+      return 'the amount saved; billing_required is still false, so nothing can charge it';
     });
 
     await check('Their wording lands on the dealer, with every other line filled in generically', async () => {

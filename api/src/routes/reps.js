@@ -1026,9 +1026,6 @@ router.patch('/rep-dealers/:tenantId/pricing', requireAuth, wrap(async (req, res
     if (!t) throw httpError(404, 'No such company');
     const PRICES = ['activation_fee_cents', 'annual_fee_cents', 'referral_fee_cents',
                     'reward_amount_cents', 'reward_fulfillment', 'charge_card_cost'];
-    if (t.billing_required === false && PRICES.some((k) => body[k] !== undefined)) {
-      throw httpError(409, `${t.name} is an in-house company and is never charged, so its prices cannot be set.`);
-    }
 
     const sets = [];
     const vals = [tenantId];

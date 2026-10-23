@@ -466,8 +466,12 @@ async function main() {
       // the row only, so every in-house row rendered an empty cell -- the
       // route tests all passed, because the routes themselves were fine.
       eq(await gssRow.locator('[data-logins]').count(), 1, 'in-house row offers no Logins button');
-      // Nothing to price, though: an in-house company is never charged.
-      eq(await gssRow.locator('[data-price]').count(), 0, 'in-house row offers a Pricing dialog');
+      // Pricing too, now. An in-house company's amounts are display-only --
+      // billing_required = false is what stops a charge, and a database
+      // CHECK keeps this one exempt for good -- but the same screen carries
+      // the follow-up interval, which is a real setting and which this
+      // company, with the longest invited list on the platform, most wants.
+      eq(await gssRow.locator('[data-price]').count(), 1, 'in-house row offers no Pricing button');
 
       const header = await page.textContent('#tab-dealers .head');
       assert(/3 in-house/.test(header), `header: ${header}`);
@@ -2174,6 +2178,55 @@ async function main() {
         return `${before} rows at 390px, all hidden by a non-matching search and all back after clearing`;
       } finally {
         await phone.close();
+      }
+    });
+
+    await check('An in-house company gets the same Pricing screen as everyone else', async () => {
+      // It used to get none, because it is never charged. That left the one
+      // screen a company is managed from unreachable for the three in-house
+      // ones -- including the longest invited list on the platform -- to
+      // protect a number that could not be charged anyway. Same screen for
+      // everyone now, saying plainly that the amounts are display-only here.
+      const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+      const p = await ctx.newPage();
+      await p.route(/fonts\.(googleapis|gstatic)\.com/, (r) => r.abort());
+      try {
+        await signIn(p, USERS.admin);
+        await p.click('[data-tab=dealers]');
+        const row = p.locator(`tr[data-tenant="${tenants['good-steward-structures'].id}"]`);
+        await row.locator('[data-price]').waitFor({ timeout: 10000 });
+        await row.locator('[data-price]').click();
+        await p.waitForSelector('#dlg [name=invite_followup_months]', { timeout: 10000 });
+
+        const shape = await p.evaluate(() => ({
+          heading: document.querySelector('#dlg h3').textContent,
+          prices: document.querySelectorAll('#dlg [name^="price_"]').length,
+          fulfilment: document.querySelectorAll('#dlg [name="reward_fulfillment"]').length,
+          cardCost: document.querySelectorAll('#dlg [name="charge_card_cost"]').length,
+          followup: document.querySelectorAll('#dlg [name="invite_followup_months"]').length,
+          note: (document.querySelector('#dlg p.muted') || {}).textContent || '',
+        }));
+        assert(/^What .* pays$/.test(shape.heading), `heading: ${shape.heading}`);
+        assert(shape.prices > 0, 'no price boxes on an in-house company');
+        eq(shape.fulfilment, 1, 'no gift-card fulfilment control');
+        eq(shape.cardCost, 1, 'no card-cost checkbox');
+        eq(shape.followup, 1, 'the follow-up control is missing');
+        // The screen has to say the amounts cannot be charged here, or a
+        // zero on it reads as a price rather than as the truth.
+        assert(/nothing is ever charged to this company/.test(shape.note), `note: ${shape.note}`);
+
+        await p.selectOption('#dlg [name="invite_followup_months"]', '6');
+        await p.click('#savePricing');
+        await p.waitForSelector('#dlg', { state: 'hidden', timeout: 10000 }).catch(() => {});
+        await p.waitForTimeout(300);
+        const [t] = await sql('select invite_followup_months from tenants where id = $1',
+          [tenants['good-steward-structures'].id]);
+        eq(t.invite_followup_months, 6, 'the interval saved');
+        return `in-house row opens the ordinary Pricing screen, marked display-only; interval saved as ${t.invite_followup_months} months`;
+      } finally {
+        await sql('update tenants set invite_followup_months = null where id = $1',
+          [tenants['good-steward-structures'].id]).catch(() => {});
+        await ctx.close();
       }
     });
 

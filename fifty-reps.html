@@ -910,15 +910,24 @@ function pricingFieldsHtml(v){
   const platform = v ? v.reward_fulfillment === 'platform' : false;
   const charge = v ? !!v.charge_card_cost : false;
   const followup = (v && v.invite_followup_months != null) ? v.invite_followup_months : '';
-  return '<div class="row">' + boxes + '</div>' +
+  const money =
+    '<div class="row">' + boxes + '</div>' +
     '<label>Who sends the gift cards</label>' +
     '<select name="reward_fulfillment">' +
       '<option value="dealer"' + (platform ? '' : ' selected') + '>They do \u2014 we email them, they send the cards</option>' +
       '<option value="platform"' + (platform ? ' selected' : '') + '>We do \u2014 we email the cards to their customer</option>' +
     '</select>' +
     '<p class="hint">Either way nothing goes out until they mark the referral paid.</p>' +
-    // Off by default and off for every dealer already on the platform, so
-    // nothing starts sending because this screen gained a box.
+    '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px">' +
+      '<input type="checkbox" name="charge_card_cost" style="width:auto;margin-top:3px"' + (charge ? ' checked' : '') + '>' +
+      '<span>Also charge them for the gift cards themselves' +
+      '<p class="hint" style="margin:2px 0 0">Tick this when you are buying the cards, so you are paid back for them on top of your fee. Leave it off when the cards are theirs to buy.</p></span>' +
+    '</label>';
+
+  // How often a customer is sent their link again is not a price, so it
+  // shows for every company -- in-house included. North Mountain has 184
+  // people invited and is the one list this matters most for.
+  const followups =
     '<label style="margin-top:12px">Send invited customers their link again</label>' +
     '<select name="invite_followup_months">' +
       [['', 'Never \u2014 one invite only'], ['3', 'Every 3 months'], ['6', 'Every 6 months'],
@@ -926,12 +935,9 @@ function pricingFieldsHtml(v){
         '<option value="' + o[0] + '"' + (String(followup) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'
       ).join('') +
     '</select>' +
-    '<p class="hint">A short reminder with the same link, three times at most. Every referral email carries an unsubscribe link, and anyone who uses it is never emailed again by this company.</p>' +
-    '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px">' +
-      '<input type="checkbox" name="charge_card_cost" style="width:auto;margin-top:3px"' + (charge ? ' checked' : '') + '>' +
-      '<span>Also charge them for the gift cards themselves' +
-      '<p class="hint" style="margin:2px 0 0">Tick this when you are buying the cards, so you are paid back for them on top of your fee. Leave it off when the cards are theirs to buy.</p></span>' +
-    '</label>';
+    '<p class="hint">A short reminder with the same link, three times at most. Every referral email carries an unsubscribe link, and anyone who uses it is never emailed again by this company.</p>';
+
+  return money + followups;
 }
 
 // Reads the boxes back as cents. On a build only what DIFFERS from the
@@ -2128,8 +2134,15 @@ async function renderDealers(){
             // the editable branch below only, which left every in-house row
             // with an empty cell. A closed company has nobody left to sign
             // in, so it keeps the empty one.
+            // Every company gets the same screen now, in-house included.
+            // The amounts on an in-house one are display-only -- nothing can
+            // charge it while billing_required is false, and the dialog says
+            // so -- but how often its customers are sent their link again is
+            // a real setting, and North Mountain has the longest list on the
+            // platform.
             '<td class="num">' + (state.isAdmin && !x.closed_at
-              ? '<button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button>' : '') + '</td>'
+              ? '<button class="btn small secondary" data-price="' + x.tenant_id + '">Pricing</button> ' +
+                '<button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button>' : '') + '</td>'
           : '<td data-label="Closed by"><select data-field="closer" aria-label="Closed by">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
             '<td data-label="Onboarded by"><select data-field="onboarder" aria-label="Onboarded by">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
             (state.isAdmin ? '<td data-label="Start date"><input type="date" data-field="from" class="startdate" aria-label="Start date" title="Leave blank to start now"></td>' : '') +
@@ -2680,9 +2693,12 @@ async function pricingDialog(tenantId){
   try{
     cur = await api('/rep-dealers/' + tenantId + '/pricing');
   }catch(err){ return flash(err.message); }
+  const exempt = cur.billing_required === false;
   openDialog(
     '<h3>What ' + esc(cur.name) + ' pays</h3>' +
-    '<p class="muted">Changes apply from the next charge. Anything already charged keeps the price it was charged at.</p>' +
+    '<p class="muted">' + (exempt
+      ? 'In-house — nothing is ever charged to this company, whatever these say. Set them to zero so the figures read true. Everything below the amounts works normally.'
+      : 'Changes apply from the next charge. Anything already charged keeps the price it was charged at.') + '</p>' +
     '<form id="pricingForm">' + pricingFieldsHtml(cur) +
       '<div class="actions">' +
         '<button type="button" class="btn secondary" id="cancelDlg">Cancel</button>' +
