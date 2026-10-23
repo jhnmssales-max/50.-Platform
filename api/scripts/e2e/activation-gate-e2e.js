@@ -1537,6 +1537,57 @@ async function main() {
     });
 
     // ----- Stripe configuration safety -------------------------------------
+    section('The API refuses to start against a database that is behind it');
+    await check('A missing column stops the whole service at boot, naming the column and its migration', async () => {
+      // Render deploys on merge; migrations are applied by hand. Code that
+      // reads a new column has gone live against a database without it --
+      // the Logins dialog 500'd and looked like a dead button, and marking a
+      // referral paid rolled back AFTER 50.'s fee had been charged. One
+      // missing column has to stop everything, where it is obvious.
+      const behindDb = `${DB_MAIN}_behind`;
+      // The same seed the slug-check database uses: the activation-gate
+      // migration refuses to apply unless the three exempt tenants exist.
+      await bootstrapDatabase(behindDb, `insert into tenants (slug, name) values
+        ('good-steward-structures','Good Steward Structures'),
+        ('north-mountain-structures','North Mountain Structures'),
+        ('50-platform','50.')`);
+      await applyNewMigration(behindDb);
+      try {
+        await withClient(dbUrl(behindDb), (c) =>
+          c.query('alter table users drop column gets_reward_alerts'));
+        // Precondition: the column really is gone, so a refusal below is
+        // about the check and not about some unrelated startup failure.
+        const [{ n }] = (await withClient(dbUrl(behindDb), (c) => c.query(
+          `select count(*)::int as n from information_schema.columns
+            where table_name = 'users' and column_name = 'gets_reward_alerts'`
+        ))).rows;
+        eq(n, 0, 'the column was dropped');
+
+        const proc = await startApi({
+          port: PORTS.alt, env: { DATABASE_URL: dbUrl(behindDb) }, preload: false,
+          label: 'alt(schema-behind)', expectExit: true,
+        });
+        assert(proc.exitCode !== 0 && proc.exitCode !== null, `exit code ${proc.exitCode}`);
+        const said = proc.lines.join('\n');
+        assert(/DATABASE IS BEHIND THE CODE/.test(said), `no refusal in the log: ${said.slice(0, 300)}`);
+        assert(said.includes('users.gets_reward_alerts'), 'the refusal does not name the column');
+        assert(said.includes('20261027000000_who_gets_the_gift_card_alert'),
+          'the refusal does not name the migration that adds it');
+        return said.split('\n').find((l) => l.includes('DATABASE IS BEHIND')).slice(0, 120);
+      } finally {
+        await dropDatabase(behindDb).catch(() => {});
+      }
+    });
+
+    await check('With every column present it starts, and says so', async () => {
+      // The other half: a healthy boot must not be silent, or nobody can
+      // tell the check ran at all.
+      const line = apiProc.lines.find((l) => l.includes('Schema check:'));
+      assert(line, 'the running API never logged a schema check');
+      assert(/all \d+ required columns present/.test(line), `unexpected: ${line}`);
+      return line.replace(/^\[[^\]]+\] /, '');
+    });
+
     section('assertRealStripeConfigured(): no stub/fake Stripe config can activate or charge');
     if (STAND_IN) {
       // expectedFeeStatus: with a usable test key but a stand-in base, the

@@ -12,6 +12,8 @@ const reportsRouter = require('./routes/reports');
 const webhooksRouter = require('./routes/webhooks');
 const sharePreviewRouter = require('./routes/sharePreview');
 const { describeStripeConfig } = require('./lib/stripe');
+const { pool } = require('./db');
+const { assertSchemaUpToDate } = require('./lib/schemaCheck');
 const { startRenewalScheduler } = require('./workers/renewalScheduler');
 
 const app = express();
@@ -87,6 +89,10 @@ app.use((err, req, res, next) => {
 });
 
 const port = process.env.PORT || 3000;
+// Before anything is served: does this database have the columns this build
+// reads? Render deploys code on every merge; migrations are applied by hand.
+// See lib/schemaCheck.js for what went wrong the day that gap was found.
+assertSchemaUpToDate(pool).then(() => {
 app.listen(port, () => {
   console.log(`referral-platform-api listening on :${port}`);
   // Which Stripe mode this process is in, stated outright at boot rather
@@ -96,4 +102,5 @@ app.listen(port, () => {
   console.log(describeStripeConfig());
   // The yearly 50. fee — see workers/renewalScheduler.js.
   startRenewalScheduler();
+});
 });
