@@ -29,11 +29,21 @@ const STALE_CLAIM = "15 minutes";
 
 // Everyone currently due one, with the data needed to write the email.
 //
-// Due means: their dealer has an interval set, their invite link was minted
-// at least (sequence x interval) months ago, they have not unsubscribed, and
-// no row claims that sequence for them yet. The lowest unsent sequence is
-// the one that goes -- so a dealer who switches the setting on two years
-// after inviting somebody sends them one reminder now, not three at once.
+// Due means: their dealer has an interval set and is still open, their
+// invite link was minted at least (sequence x interval) months ago, they
+// have not unsubscribed, and no row claims that sequence for them yet. The
+// lowest unsent sequence is the one that goes -- so a dealer who switches
+// the setting on two years after inviting somebody sends them one reminder
+// now, not three at once.
+//
+// Two guards against mailing people who cannot be mailed. remove_company
+// closes a company that traded by scrubbing its customers' addresses to
+// removed+<id>@removed.invalid and stamping closed_at -- it does not clear
+// the interval, so without the first guard every reminder for a closed
+// company would go to an undeliverable address and bounce. The second guard
+// catches a scrubbed address whatever closed it, so this does not depend on
+// closed_at being the only route to one. Bounces are not free: this account
+// already carries a bounce rate worth protecting.
 async function findDue(client, limit) {
   const { rows } = await client.query(
     `with invited as (
@@ -42,6 +52,7 @@ async function findDue(client, limit) {
          from customers c
          join referral_links rl on rl.customer_id = c.id and rl.kind = 'invite'
         where c.unsubscribed_at is null
+          and c.email not like '%@removed.invalid'
         group by c.id, c.tenant_id, c.name, c.email
      ),
      sent as (
@@ -57,6 +68,7 @@ async function findDue(client, limit) {
        join tenants t on t.id = i.tenant_id
        left join sent s on s.customer_id = i.customer_id
       where t.invite_followup_months is not null
+        and t.closed_at is null
         and coalesce(s.n, 0) < $1
         and i.invited_at <= now() - ((coalesce(s.n, 0) + 1) * t.invite_followup_months || ' months')::interval
       order by i.invited_at
@@ -170,10 +182,7 @@ async function runInviteFollowupCycle({ limit = 200, dryRun = false } = {}) {
         continue;
       }
       await withServiceRole((client) =>
-        client.query(
-          `update invite_followups set sent_at = now(), detail = $2::jsonb where id = $1`,
-          [claimId, JSON.stringify({ email: person.email, sequence: person.sequence })]
-        )
+        client.query('update invite_followups set sent_at = now() where id = $1', [claimId])
       );
       summary.sent += 1;
       console.log(

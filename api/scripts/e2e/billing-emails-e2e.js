@@ -481,6 +481,66 @@ async function main() {
       return 'GET only asks; POST stops them; the next reminder was not sent';
     });
 
+    await check('A closed company stops sending, and never mails a scrubbed address', async () => {
+      // remove_company closes a company that traded by pointing every
+      // customer's email at removed+<id>@removed.invalid and stamping
+      // closed_at. It does not clear the interval -- so without the guards
+      // in findDue every reminder would go somewhere undeliverable and
+      // bounce, on an account whose bounce rate is already worth protecting.
+      const t = await makeTenant({ slug: 'shut' });
+      await sql('update tenants set invite_followup_months = 3 where id = $1', [t.id]);
+      const customerId = await makeInvitedCustomer(t.id, 'shut', { monthsAgo: 4 });
+
+      // Due right now, before anything closes: the precondition, so a quiet
+      // result below is the guard working rather than nothing being due.
+      const beforeClose = await followups.runInviteFollowupCycle({ dryRun: true });
+      assert(beforeClose.due >= 1, 'nothing was due even before closing, so this proves nothing');
+
+      await sql(`update tenants set closed_at = now() where id = $1`, [t.id]);
+      await sql(`update customers set email = 'removed+' || replace(id::text,'-','') || '@removed.invalid'
+                  where id = $1`, [customerId]);
+
+      const sentBefore = emails.length;
+      const out = await followups.runInviteFollowupCycle();
+      eq(out.due, 0, 'a closed company still had customers due');
+      eq(emails.length, sentBefore, 'emails sent for a closed company');
+      const toInvalid = emails.filter((e) => /removed\.invalid/.test(e.To));
+      eq(toInvalid.length, 0, 'something was mailed to a scrubbed address');
+      return 'due before closing, nothing due after; no mail to removed.invalid';
+    });
+
+    await check('A company with follow-ups behind it can still be deleted', async () => {
+      // The bug the fix_removal_constraints migration was written for, which
+      // this table could have brought straight back: remove_company deletes a
+      // company that never traded by deleting its customers and then the
+      // tenant, and a plain reference from invite_followups would make the
+      // database refuse both -- with the Reps page showing only its generic
+      // failure. Both references cascade instead.
+      const t = await makeTenant({ slug: 'deleteme' });
+      await sql('update tenants set invite_followup_months = 3 where id = $1', [t.id]);
+      const customerId = await makeInvitedCustomer(t.id, 'deleteme', { monthsAgo: 4 });
+      await followups.runInviteFollowupCycle();
+
+      const [{ n: before }] = await sql(
+        'select count(*)::int as n from invite_followups where customer_id = $1', [customerId]);
+      eq(before, 1, 'no follow-up row to block the delete, so this proves nothing');
+
+      // What remove_company does on a company that never traded, in the same
+      // order: customers first, then the tenant.
+      await sql('delete from referral_links where tenant_id = $1', [t.id]);
+      await sql('delete from customers where tenant_id = $1', [t.id]);
+      await sql('delete from billing_emails where tenant_id = $1', [t.id]);
+      await sql('delete from users where tenant_id = $1', [t.id]);
+      await sql('delete from tenants where id = $1', [t.id]);
+
+      const [{ n: left }] = await sql(
+        'select count(*)::int as n from invite_followups where customer_id = $1', [customerId]);
+      eq(left, 0, 'the follow-up rows outlived the company');
+      const [{ n: tenantsLeft }] = await sql('select count(*)::int as n from tenants where id = $1', [t.id]);
+      eq(tenantsLeft, 0, 'the company survived its own deletion');
+      return 'customer and tenant both deleted; the follow-up row went with them';
+    });
+
     await check('Two receipts requested at the same instant -> one email (the claim is a database row, not a variable)', async () => {
       const t = await makeTenant({ slug: 'racer', receiptSent: false });
       const outs = await Promise.all([1, 2, 3, 4, 5].map(() => worker.sendActivationReceipt(t.id, { stripeMode: 'test' })));

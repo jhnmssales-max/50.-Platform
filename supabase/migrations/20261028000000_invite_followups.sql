@@ -43,6 +43,12 @@ comment on column tenants.invite_followup_months is
 -- address. Honouring it needs no login, because asking someone to sign in
 -- before they can stop being emailed is not an unsubscribe.
 -- ---------------------------------------------------------------------------
+-- Lets invite_followups point at (customer, tenant) as a pair, so a row can
+-- never claim a customer belongs to a company they do not. id is already the
+-- primary key, so this costs one small index and rules the mismatch out by
+-- construction rather than by the worker being careful.
+alter table customers add constraint customers_id_tenant_key unique (id, tenant_id);
+
 alter table customers add column unsubscribed_at timestamptz;
 alter table customers add column unsubscribe_token text unique;
 
@@ -51,9 +57,9 @@ comment on column customers.unsubscribed_at is
 comment on column customers.unsubscribe_token is
   'The random, unguessable credential in the unsubscribe link. Minted when a referral email is first sent to this customer and reused for every later one, so an old email still works. Never derived from the customer id or address.';
 
--- Honouring an unsubscribe link is a lookup by token on a public route.
-create index customers_unsubscribe_token_idx on customers (unsubscribe_token)
-  where unsubscribe_token is not null;
+-- No index needed for the lookup: `unique` on unsubscribe_token already
+-- built one, and a partial copy of it would be a second index to maintain
+-- for a query the first one already answers.
 
 -- ---------------------------------------------------------------------------
 -- One row per follow-up actually sent, which is the whole "has this gone
@@ -65,22 +71,33 @@ create index customers_unsubscribe_token_idx on customers (unsubscribe_token)
 -- third is the last however long the dealer keeps the setting on, and
 -- changing the interval later never re-sends one that has already gone.
 -- ---------------------------------------------------------------------------
+-- Both references cascade, and that is not a detail. remove_company deletes
+-- a company that never traded by deleting its customers and then the tenant
+-- itself. A plain reference here would make the database refuse both the
+-- moment one follow-up had ever been sent, and the Reps page would show its
+-- generic failure with nothing saying why -- the same shape of bug the
+-- fix_removal_constraints migration was written for. A reminder is worth
+-- nothing once the company it belonged to is gone, so it goes with it.
+--
+-- The customer reference is a pair, (customer_id, tenant_id), so a row can
+-- never say a customer belongs to a company they do not.
 create table invite_followups (
   id           uuid primary key default gen_random_uuid(),
-  tenant_id    uuid not null references tenants(id),
-  customer_id  uuid not null references customers(id),
+  tenant_id    uuid not null references tenants(id) on delete cascade,
+  customer_id  uuid not null,
   sequence     smallint not null check (sequence between 1 and 3),
   claimed_at   timestamptz not null default now(),
   sent_at      timestamptz,
-  detail       jsonb,
   created_at   timestamptz not null default now(),
-  constraint invite_followups_one_per_sequence unique (customer_id, sequence)
+  constraint invite_followups_one_per_sequence unique (customer_id, sequence),
+  constraint invite_followups_customer foreign key (customer_id, tenant_id)
+    references customers (id, tenant_id) on delete cascade
 );
 
 create index invite_followups_tenant_idx on invite_followups (tenant_id);
 
 comment on table invite_followups is
-  'One row per follow-up invite claimed for a customer. A sender inserts the claim, sends, then stamps sent_at; a failed send deletes the claim so the next hourly cycle retries, and a claim left unsent for 15 minutes may be re-claimed by anyone. At most three rows per customer, enforced by the sequence CHECK and the unique constraint together.';
+  'One row per follow-up invite claimed for a customer. A sender inserts the claim, sends, then stamps sent_at; a failed send deletes the claim so the next hourly cycle retries, and a claim left unsent for 15 minutes may be re-claimed by anyone. At most three rows per customer, enforced by the sequence CHECK and the unique constraint together. Deliberately holds no copy of the address it went to: remove_company scrubs a closed company''s customer emails, and a second copy here would survive that cleanup for no benefit -- which customer and which of their three sends is the whole record worth keeping.';
 
 -- RLS on, service role only: nothing a signed-in dealer does touches this
 -- table -- the worker writes it and nobody reads it from a page.
