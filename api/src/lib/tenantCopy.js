@@ -34,6 +34,22 @@ const COPY_FIELDS = [
     multiline: true,
   },
   {
+    key: 'rewardNoteReferrer',
+    stage: 'The "send the gift cards" alert',
+    label: 'What to say to the customer who referred someone',
+    where: 'Printed in the alert email, ready to copy into the gift card or an email. {name} is their first name, {reward} the amount, {card} what you call the card, {business} the company.',
+    max: 600,
+    multiline: true,
+  },
+  {
+    key: 'rewardNoteFriend',
+    stage: 'The "send the gift cards" alert',
+    label: 'What to say to the friend who bought',
+    where: 'The same, for the person who was referred in and placed the order. Same tokens.',
+    max: 600,
+    multiline: true,
+  },
+  {
     key: 'shareButton',
     stage: 'The invite email, and their share page',
     label: 'The button a customer presses to share their link',
@@ -116,6 +132,13 @@ const GENERIC_COPY = {
   offerHow:
     "Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} {card}**.",
   shareButton: 'Share My Referral Link',
+  // Written to be pasted into a gift card's own message box, so: no
+  // greeting line of its own beyond the name, no signature, nothing that
+  // assumes it is an email rather than a card.
+  rewardNoteReferrer:
+    "Hi {name} — thank you for recommending {business}. Your friend's order came through, so here is the {reward} {card} we promised you. It means a lot that you trusted us with someone you know.",
+  rewardNoteFriend:
+    'Hi {name} — thank you for your order, and for coming to us through a friend. Here is your {reward} {card}. You have a referral link of your own now too, so if you know someone else who could use us, it works the same way.',
   cardNoun: 'electronic gift card',
   shareTitle: 'Get {reward} when you make a purchase from {name}',
   shareText: 'I referred you — make your purchase through my link and we both get {reward}.',
