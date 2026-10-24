@@ -1189,7 +1189,13 @@ router.get('/rep-dealers', requireAuth, wrap(async (req, res) => {
               (select count(*)::int from referral_links l
                 where l.tenant_id = t.id and l.kind = 'invite') as invites_total,
               t.renewal_due_at,
-              (t.stripe_payment_method_id is not null) as has_card
+              (t.stripe_payment_method_id is not null) as has_card,
+              -- A company with no logo shows no logo at all on the page its
+              -- customers are emailed a link to. The build screen warns about
+              -- it, but a warning at the end of a long build is easy to pass,
+              -- and after that nothing ever mentioned it again -- which is how
+              -- a live dealer's owner came to be the one who noticed.
+              coalesce(nullif(t.branding ->> 'logoUrl', ''), null) is not null as has_logo
          from tenants t
         where t.id = any($1::uuid[])`,
       [ids]
@@ -1219,6 +1225,7 @@ router.get('/rep-dealers', requireAuth, wrap(async (req, res) => {
       // automatic yearly charge will succeed or fail silently, so they are
       // the admin's alone -- the helper sees no billing state.
       ...(isAdmin ? {
+        has_logo: (activity.get(d.tenant_id) || {}).has_logo !== false,
         renewal_due_at: (activity.get(d.tenant_id) || {}).renewal_due_at || null,
         has_card: (activity.get(d.tenant_id) || {}).has_card === true,
       } : {}),
