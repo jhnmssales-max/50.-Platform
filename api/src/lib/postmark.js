@@ -13,7 +13,11 @@ const POSTMARK_API_BASE = process.env.POSTMARK_API_BASE || 'https://api.postmark
 // from the platform's one shared address (EMAIL_FROM_ADDRESS), so without a
 // Reply-To a customer hitting "Reply" would land in that shared inbox
 // instead of the business's own — pass the business's address here.
-async function sendEmail({ from, to, cc, replyTo, subject, htmlBody, textBody }) {
+// headers is optional: a list of { Name, Value }. Used for List-Unsubscribe,
+// which is what lets a mail client show its own "unsubscribe" control and
+// what the big providers look for before deciding a recurring sender is
+// legitimate. Worth having on referral mail now that some of it repeats.
+async function sendEmail({ from, to, cc, replyTo, subject, htmlBody, textBody, headers }) {
   const token = process.env.POSTMARK_SERVER_TOKEN;
   if (!token) {
     throw new Error('POSTMARK_SERVER_TOKEN is not set — see .env.example');
@@ -31,6 +35,7 @@ async function sendEmail({ from, to, cc, replyTo, subject, htmlBody, textBody })
       To: to,
       ...(cc ? { Cc: cc } : {}),
       ...(replyTo ? { ReplyTo: replyTo } : {}),
+      ...(headers && headers.length ? { Headers: headers } : {}),
       Subject: subject,
       HtmlBody: htmlBody,
       TextBody: textBody,

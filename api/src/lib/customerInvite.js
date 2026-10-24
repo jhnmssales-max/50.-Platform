@@ -24,6 +24,7 @@ const { nanoid } = require('nanoid');
 const { slugify } = require('./codes');
 const { sendEmail } = require('./postmark');
 const { buildInviteEmail } = require('./inviteEmail');
+const { unsubscribeUrl } = require('./unsubscribe');
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -137,7 +138,11 @@ async function ensureInviteLink(client, { tenantId, customerId, name }) {
 // side effect, attempted only after the rows are safely committed. A slow
 // or failed send must never roll back data that already exists, and must
 // not hold a transaction open across a third-party HTTP call.
-async function sendInviteEmail({ tenant, customerName, customerEmail, inviteUrl, replyToEmail }) {
+// unsubscribeToken comes from lib/unsubscribe.js's tokenForSending, which
+// returns null for a customer who has already unsubscribed -- so a caller
+// that forgets to check gets a send with no token, which this refuses,
+// rather than an email to somebody who asked not to get one.
+async function sendInviteEmail({ tenant, customerName, customerEmail, inviteUrl, replyToEmail, unsubscribeToken }) {
   // An invite whose whole purpose is a link, sent without one, is worse
   // than no invite: the customer reads it, finds nothing to share, and the
   // sender has spent their one introduction. buildInviteUrl returns null
@@ -154,6 +159,16 @@ async function sendInviteEmail({ tenant, customerName, customerEmail, inviteUrl,
   if (!fromAddress) {
     throw new Error('No verified sending address configured for this tenant, and no platform default is set');
   }
+  // Every referral email carries a way out of them -- the first invite as
+  // much as the reminders, because a customer cannot tell from the first one
+  // whether more are coming. No token means either nobody minted one or this
+  // customer has unsubscribed; both are reasons not to send.
+  const unsubUrl = unsubscribeUrl(unsubscribeToken);
+  if (!unsubUrl) {
+    throw new Error(
+      'No unsubscribe link could be built — the customer may have unsubscribed, or FRONTEND_BASE_URL is unset. Nothing was sent.'
+    );
+  }
   const fromName = (tenant.send_domain_verified && tenant.send_from_name) || tenant.tenant_name;
   const branding = tenant.tenant_branding || {};
 
@@ -169,6 +184,7 @@ async function sendInviteEmail({ tenant, customerName, customerEmail, inviteUrl,
     // What this dealer calls their gift card, for the {card} token in their
     // offer line. Without it the email would print the raw token.
     cardNoun: (branding.copy || {}).cardNoun,
+    unsubscribeUrl: unsubUrl,
   });
 
   // Replies go to a real person at the business, not the platform's shared
@@ -182,6 +198,10 @@ async function sendInviteEmail({ tenant, customerName, customerEmail, inviteUrl,
     subject,
     htmlBody,
     textBody,
+    // What lets a mail client show its own unsubscribe control, and what the
+    // large providers look for before treating a repeating sender as
+    // legitimate. Worth having on all of this now that some of it repeats.
+    headers: [{ Name: 'List-Unsubscribe', Value: `<${unsubUrl}>` }],
   });
 }
 

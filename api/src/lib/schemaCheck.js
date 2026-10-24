@@ -34,6 +34,10 @@ const REQUIRED_COLUMNS = [
   ['customers', 'source_activated_tenant_id', '20261026000000_activated_dealer_becomes_a_referrer'],
   // 20261027000000_who_gets_the_gift_card_alert
   ['users', 'gets_reward_alerts', '20261027000000_who_gets_the_gift_card_alert'],
+  // 20261028000000_invite_followups
+  ['tenants', 'invite_followup_months', '20261028000000_invite_followups'],
+  ['customers', 'unsubscribed_at', '20261028000000_invite_followups'],
+  ['customers', 'unsubscribe_token', '20261028000000_invite_followups'],
 ];
 
 // Returns the entries this database does not have, in the order listed.

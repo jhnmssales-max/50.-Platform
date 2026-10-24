@@ -134,7 +134,27 @@ async function main() {
 
   const webhookApp = express();
   webhookApp.use('/api', require('../../src/routes/webhooks'));
+  // The unsubscribe pages are public and credential-less, so they mount on
+  // the same throwaway app rather than needing a signed-in session.
+  webhookApp.use('/api', require('../../src/routes/unsubscribe'));
   const webhookServer = webhookApp.listen(PORTS.webhook, '127.0.0.1');
+  const followups = require('../../src/workers/inviteFollowups');
+
+  // An invited customer whose invite was minted `monthsAgo` months back.
+  // Backdating the link is the whole trick: the worker decides who is due
+  // from referral_links.created_at, so this is time travel without a clock.
+  async function makeInvitedCustomer(tenantId, slug, { monthsAgo = 0, n = 1 } = {}) {
+    const [c] = await sql(
+      `insert into customers (tenant_id, name, email) values ($1, $2, $3) returning id`,
+      [tenantId, `Customer ${n} ${slug}`, `cust${n}@${slug}.example`]
+    );
+    await sql(
+      `insert into referral_links (tenant_id, code, kind, customer_id, created_at)
+       values ($1, $2, 'invite', $3, now() - ($4 || ' months')::interval)`,
+      [tenantId, `code-${slug}-${n}-${Date.now()}`, c.id, String(monthsAgo)]
+    );
+    return c.id;
+  }
 
   const cycle = (opts) => worker.runBillingEmailCycle(opts);
   const sentTo = (slug) => emails.filter((e) => e.To.includes(`@${slug}.example`));
@@ -362,6 +382,165 @@ async function main() {
       eq(platformInvitesTo('payer').length, 1, '50. invites after redelivery + 2 sweeps');
       return 'replay -> 200; two sweeps; still exactly 1 receipt and 1 invite';
     });
+    section('Sending an invited customer their link again');
+
+    await check('A dealer with no interval set sends nothing, however long ago the invite went', async () => {
+      const t = await makeTenant({ slug: 'nofollow' });
+      await makeInvitedCustomer(t.id, 'nofollow', { monthsAgo: 36 });
+      const before = emails.length;
+      const out = await followups.runInviteFollowupCycle();
+      eq(out.due, 0, 'customers found due');
+      eq(emails.length, before, 'emails sent');
+      return 'invited three years ago, interval unset -> nothing due, nothing sent';
+    });
+
+    await check('With an interval set, the reminder goes out once the interval has passed', async () => {
+      const t = await makeTenant({ slug: 'follows' });
+      await sql('update tenants set invite_followup_months = 3 where id = $1', [t.id]);
+      // One invited four months ago (due) and one invited last month (not).
+      await makeInvitedCustomer(t.id, 'follows', { monthsAgo: 4, n: 1 });
+      await makeInvitedCustomer(t.id, 'follows', { monthsAgo: 1, n: 2 });
+
+      const out = await followups.runInviteFollowupCycle();
+      eq(out.sent, 1, 'reminders sent');
+      const mine = sentTo('follows');
+      eq(mine.length, 1, 'emails to this dealer');
+      const e = mine[0];
+      eq(e.To, 'cust1@follows.example', 'who it went to');
+      assert(/still here/.test(e.Subject), `subject: ${e.Subject}`);
+      // Its own wording, not the first invite's.
+      assert(!/wants to say thank you/.test(e.Subject), 'it reused the first invite');
+      assert(!/\bjust\b/i.test(e.TextBody), 'the word "just" appears');
+      // A reminder whose point is a link has to carry one, and a way out.
+      assert(/\/fifty-template-customer\.html\?code=/.test(e.TextBody), 'no referral link in it');
+      assert(/\/api\/unsubscribe\//.test(e.TextBody), 'no unsubscribe link in it');
+      const unsub = (e.Headers || []).find((h) => h.Name === 'List-Unsubscribe');
+      assert(unsub, 'no List-Unsubscribe header');
+      return `"${e.Subject}" -> ${e.To}; the one invited last month was left alone`;
+    });
+
+    await check('Running again sends nobody a second copy', async () => {
+      const before = sentTo('follows').length;
+      assert(before >= 1, 'nothing was sent the first time, so a repeat proves nothing');
+      const out = await followups.runInviteFollowupCycle();
+      eq(out.sent, 0, 'reminders sent on the second run');
+      eq(sentTo('follows').length, before, 'emails after running again');
+      return `still ${before} email(s) after a second cycle`;
+    });
+
+    await check('It stops after three, however old the invite is', async () => {
+      const t = await makeTenant({ slug: 'capped' });
+      await sql('update tenants set invite_followup_months = 3 where id = $1', [t.id]);
+      // Five years back: every one of the three is overdue, and a fourth
+      // would be too if the cap were not real.
+      await makeInvitedCustomer(t.id, 'capped', { monthsAgo: 60 });
+      // One cycle sends the lowest unsent sequence, so catching up takes a
+      // few passes rather than arriving as a burst.
+      for (let i = 0; i < 5; i += 1) await followups.runInviteFollowupCycle();
+      eq(sentTo('capped').length, 3, 'emails after five cycles');
+      const rows = await sql(
+        `select sequence from invite_followups f
+           join customers c on c.id = f.customer_id
+          where c.tenant_id = $1 order by sequence`, [t.id]);
+      eq(rows.map((r) => r.sequence).join(','), '1,2,3', 'sequences recorded');
+      return 'invited five years ago, five cycles run, exactly three reminders';
+    });
+
+    await check('Unsubscribing stops them, and the link needs no login', async () => {
+      const t = await makeTenant({ slug: 'optout' });
+      await sql('update tenants set invite_followup_months = 3 where id = $1', [t.id]);
+      const customerId = await makeInvitedCustomer(t.id, 'optout', { monthsAgo: 4 });
+
+      await followups.runInviteFollowupCycle();
+      const first = sentTo('optout');
+      eq(first.length, 1, 'the first reminder');
+      const token = (/\/api\/unsubscribe\/([A-Za-z0-9_-]+)/.exec(first[0].TextBody) || [])[1];
+      assert(token, `no unsubscribe token in the email: ${first[0].TextBody.slice(-200)}`);
+
+      // A GET must not unsubscribe anyone: corporate scanners follow every
+      // link in an incoming message, and a GET that acted would cut people
+      // off from mail they never asked to stop.
+      const shown = await fetch(`http://127.0.0.1:${PORTS.webhook}/api/unsubscribe/${token}`);
+      eq(shown.status, 200, 'GET the unsubscribe page');
+      const html = await shown.text();
+      assert(/Stop referral emails\?/.test(html), `unexpected page: ${html.slice(0, 200)}`);
+      const [stillOn] = await sql('select unsubscribed_at from customers where id = $1', [customerId]);
+      eq(stillOn.unsubscribed_at, null, 'merely opening the link unsubscribed them');
+
+      const done = await fetch(`http://127.0.0.1:${PORTS.webhook}/api/unsubscribe/${token}`, { method: 'POST' });
+      eq(done.status, 200, 'POST the unsubscribe');
+      const [off] = await sql('select unsubscribed_at from customers where id = $1', [customerId]);
+      assert(off.unsubscribed_at, 'the POST did not unsubscribe them');
+
+      // Due for a second reminder, and must not get one.
+      await sql(`update referral_links set created_at = now() - interval '12 months'
+                  where customer_id = $1`, [customerId]);
+      const after = sentTo('optout').length;
+      await followups.runInviteFollowupCycle();
+      eq(sentTo('optout').length, after, 'emails after unsubscribing');
+      return 'GET only asks; POST stops them; the next reminder was not sent';
+    });
+
+    await check('A closed company stops sending, and never mails a scrubbed address', async () => {
+      // remove_company closes a company that traded by pointing every
+      // customer's email at removed+<id>@removed.invalid and stamping
+      // closed_at. It does not clear the interval -- so without the guards
+      // in findDue every reminder would go somewhere undeliverable and
+      // bounce, on an account whose bounce rate is already worth protecting.
+      const t = await makeTenant({ slug: 'shut' });
+      await sql('update tenants set invite_followup_months = 3 where id = $1', [t.id]);
+      const customerId = await makeInvitedCustomer(t.id, 'shut', { monthsAgo: 4 });
+
+      // Due right now, before anything closes: the precondition, so a quiet
+      // result below is the guard working rather than nothing being due.
+      const beforeClose = await followups.runInviteFollowupCycle({ dryRun: true });
+      assert(beforeClose.due >= 1, 'nothing was due even before closing, so this proves nothing');
+
+      await sql(`update tenants set closed_at = now() where id = $1`, [t.id]);
+      await sql(`update customers set email = 'removed+' || replace(id::text,'-','') || '@removed.invalid'
+                  where id = $1`, [customerId]);
+
+      const sentBefore = emails.length;
+      const out = await followups.runInviteFollowupCycle();
+      eq(out.due, 0, 'a closed company still had customers due');
+      eq(emails.length, sentBefore, 'emails sent for a closed company');
+      const toInvalid = emails.filter((e) => /removed\.invalid/.test(e.To));
+      eq(toInvalid.length, 0, 'something was mailed to a scrubbed address');
+      return 'due before closing, nothing due after; no mail to removed.invalid';
+    });
+
+    await check('A company with follow-ups behind it can still be deleted', async () => {
+      // The bug the fix_removal_constraints migration was written for, which
+      // this table could have brought straight back: remove_company deletes a
+      // company that never traded by deleting its customers and then the
+      // tenant, and a plain reference from invite_followups would make the
+      // database refuse both -- with the Reps page showing only its generic
+      // failure. Both references cascade instead.
+      const t = await makeTenant({ slug: 'deleteme' });
+      await sql('update tenants set invite_followup_months = 3 where id = $1', [t.id]);
+      const customerId = await makeInvitedCustomer(t.id, 'deleteme', { monthsAgo: 4 });
+      await followups.runInviteFollowupCycle();
+
+      const [{ n: before }] = await sql(
+        'select count(*)::int as n from invite_followups where customer_id = $1', [customerId]);
+      eq(before, 1, 'no follow-up row to block the delete, so this proves nothing');
+
+      // What remove_company does on a company that never traded, in the same
+      // order: customers first, then the tenant.
+      await sql('delete from referral_links where tenant_id = $1', [t.id]);
+      await sql('delete from customers where tenant_id = $1', [t.id]);
+      await sql('delete from billing_emails where tenant_id = $1', [t.id]);
+      await sql('delete from users where tenant_id = $1', [t.id]);
+      await sql('delete from tenants where id = $1', [t.id]);
+
+      const [{ n: left }] = await sql(
+        'select count(*)::int as n from invite_followups where customer_id = $1', [customerId]);
+      eq(left, 0, 'the follow-up rows outlived the company');
+      const [{ n: tenantsLeft }] = await sql('select count(*)::int as n from tenants where id = $1', [t.id]);
+      eq(tenantsLeft, 0, 'the company survived its own deletion');
+      return 'customer and tenant both deleted; the follow-up row went with them';
+    });
+
     await check('Two receipts requested at the same instant -> one email (the claim is a database row, not a variable)', async () => {
       const t = await makeTenant({ slug: 'racer', receiptSent: false });
       const outs = await Promise.all([1, 2, 3, 4, 5].map(() => worker.sendActivationReceipt(t.id, { stripeMode: 'test' })));
