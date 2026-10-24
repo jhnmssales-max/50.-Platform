@@ -1047,6 +1047,117 @@ router.patch('/rep-dealers/:tenantId/pricing', requireAuth, wrap(async (req, res
   res.json(out);
 }));
 
+// ---------------------------------------------------------------------------
+// A company's own look: name, logo, colors, wording.
+//
+// Until now this was set once, when a lead was approved, and could never be
+// changed again. There was no screen for it and no route behind one, so a
+// dealer whose logo came through wrong -- or who rebranded, or who was built
+// before brandGuess could read their site -- stayed wrong, and the only fix
+// was a hand-written UPDATE in the SQL editor.
+//
+// That is what put a broken image on a live customer-facing page: a dealer
+// with no logoUrl falls back to DEFAULT.logoUrl in tenant-branding.js, and
+// nobody could see or correct the empty value.
+//
+// branding is already jsonb with a check that it is an object, so none of
+// this needs a migration. Keys are merged, not replaced: a PATCH that sends
+// only logoUrl must not wipe the colors and copy set at build time.
+const BRAND_COLORS = ['primaryColor', 'primaryDark', 'secondary', 'accentColor', 'accentDark', 'bg'];
+const hexColor = z.string().regex(/^#[0-9a-fA-F]{3,8}$/, 'Use a hex color like #C9974B');
+
+// An https URL or a root-relative path. http is refused: email clients block
+// or flag a mixed-content image, and every page that reads this is https.
+const logoUrlSchema = z.union([
+  z.string().trim().regex(/^https:\/\/[^\s"'<>]+$/i, 'A logo URL must start with https://'),
+  z.string().trim().regex(/^\/[^\s"'<>]*$/, 'A relative logo path must start with /'),
+  z.null(),
+]);
+
+const dealerBrandBody = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  logoUrl: logoUrlSchema.optional(),
+  tagline: z.string().trim().max(80).nullable().optional(),
+  contactEmail: z.string().trim().email().max(200).nullable().optional(),
+  websiteUrl: z.string().trim().url().max(300).nullable().optional(),
+  ...Object.fromEntries(BRAND_COLORS.map((k) => [k, hexColor.nullable().optional()])),
+  copy: z.record(z.string().max(600)).nullable().optional(),
+}).refine((b) => Object.keys(b).length > 0, { message: 'Nothing to change' });
+
+router.get('/rep-dealers/:tenantId/brand', requireAuth, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+  });
+  const out = await withServiceRole(async (client) => {
+    const { rows: [row] } = await client.query(
+      'select id, name, slug, branding from tenants where id = $1', [tenantId]);
+    if (!row) throw httpError(404, 'No such company');
+
+    // Logos already uploaded against the lead this company was built from.
+    // Almost always where the right file already is -- it was uploaded during
+    // onboarding and then never carried onto the tenant -- so offering it
+    // saves finding and re-uploading the same image.
+    const { rows: files } = await client.query(
+      `select f.public_url, f.filename, f.created_at
+         from rep_lead_files f
+         join rep_leads l on l.id = f.lead_id
+        where l.tenant_id = $1 and f.kind = 'logo'
+        order by f.created_at desc
+        limit 8`,
+      [tenantId]
+    );
+    return { ...row, logo_files: files };
+  });
+  res.json(out);
+}));
+
+router.patch('/rep-dealers/:tenantId/brand', requireAuth, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  const body = parseOr400(dealerBrandBody, req.body || {});
+
+  await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+  });
+
+  const out = await withServiceRole(async (client) => {
+    const { rows: [t] } = await client.query(
+      'select id, name, branding from tenants where id = $1', [tenantId]);
+    if (!t) throw httpError(404, 'No such company');
+
+    // Merge rather than replace, and let an explicit null delete a key so a
+    // wrong value can be cleared, not only overwritten. `copy` merges one
+    // level down for the same reason: changing offerHow must not drop
+    // shareTitle.
+    const next = { ...(t.branding || {}) };
+    for (const [key, value] of Object.entries(body)) {
+      if (key === 'name') continue;
+      if (key === 'copy') {
+        if (value === null) delete next.copy;
+        else next.copy = { ...(next.copy || {}), ...value };
+        continue;
+      }
+      if (value === null) delete next[key];
+      else next[key] = value;
+    }
+
+    const sets = ['branding = $2'];
+    const vals = [tenantId, JSON.stringify(next)];
+    if (body.name !== undefined) {
+      vals.push(body.name);
+      sets.push(`name = $${vals.length}`);
+    }
+    const { rows: [row] } = await client.query(
+      `update tenants set ${sets.join(', ')} where id = $1 returning id, name, branding`,
+      vals
+    );
+    return row;
+  });
+
+  console.log(`BRAND: ${out.name} (${tenantId}) updated — ${Object.keys(body).join(', ')}`);
+  res.json(out);
+}));
+
 router.get('/rep-dealers', requireAuth, wrap(async (req, res) => {
   // Closed companies are left out unless asked for, and the function itself
   // refuses to hand one to a rep however this is called.
@@ -1307,6 +1418,52 @@ router.post('/rep-leads/:id/files', requireAuth, uploadBody, wrap(async (req, re
   } catch (err) {
     // The row is the record. A file with no row is litter nobody will ever
     // find, so take it back out rather than leave it.
+    await storage.remove(stored.storagePath);
+    throw err;
+  }
+}));
+
+// The logo file itself. Same raw-body approach as the lead upload above, and
+// the same storage bucket; the difference is that this one writes the public
+// URL straight onto the company, because a logo nobody points the branding at
+// is a file in a bucket and nothing more.
+router.post('/rep-dealers/:tenantId/logo', requireAuth, uploadBody, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  const contentType = String(req.headers['content-type'] || '').split(';')[0].trim();
+
+  if (!storage.isConfigured()) {
+    throw httpError(503, 'This platform cannot store files yet: SUPABASE_SERVICE_ROLE_KEY is not set on the API service.', 'uploads_not_configured');
+  }
+  if (!Buffer.isBuffer(req.body) || !req.body.length) throw httpError(400, 'There was nothing in that file');
+  if (!storage.extensionFor(contentType)) throw httpError(400, 'Upload a PNG, JPG, WEBP, GIF or SVG');
+  if (contentType === 'application/pdf') throw httpError(400, 'A logo has to be an image, not a PDF');
+
+  // Permission and existence first: nothing is stored for a company that is
+  // not there or not mine to touch.
+  await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+  });
+  await withServiceRole(async (client) => {
+    const { rows: [t] } = await client.query('select id from tenants where id = $1', [tenantId]);
+    if (!t) throw httpError(404, 'No such company');
+  });
+
+  const stored = await storage.upload({ tenantId, bytes: req.body, contentType });
+
+  try {
+    const out = await withServiceRole(async (client) => {
+      const { rows: [row] } = await client.query(
+        `update tenants
+            set branding = coalesce(branding, '{}'::jsonb) || jsonb_build_object('logoUrl', $2::text)
+          where id = $1
+          returning id, name, branding`,
+        [tenantId, stored.publicUrl]
+      );
+      return row;
+    });
+    res.status(201).json(out);
+  } catch (err) {
+    // A stored file the branding does not point at is litter nobody will find.
     await storage.remove(stored.storagePath);
     throw err;
   }

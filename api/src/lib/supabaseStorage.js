@@ -91,18 +91,23 @@ async function ensureBucket() {
 // belongs to, then a random name. The original filename is kept in the
 // database, not in the path, so a file called "Final FINAL logo (3).png"
 // cannot produce a URL that needs escaping.
-function pathFor(leadId, contentType) {
+// `owner` is {leadId} or {tenantId}. A tenant's logo goes under tenants/
+// rather than leads/ because it outlives the lead it may have come from: the
+// lead can be deleted, and a company's live logo must not be filed under a
+// folder named for something that is gone.
+function pathFor(owner, contentType) {
   const ext = extensionFor(contentType);
   if (!ext) throw new Error(`That kind of file cannot be uploaded (${contentType})`);
   const random = require('crypto').randomBytes(12).toString('hex');
-  return `leads/${leadId}/${random}.${ext}`;
+  const folder = owner.tenantId ? `tenants/${owner.tenantId}` : `leads/${owner.leadId}`;
+  return `${folder}/${random}.${ext}`;
 }
 
 function publicUrlFor(storagePath) {
   return `${base()}/object/public/${BUCKET}/${storagePath}`;
 }
 
-async function upload({ leadId, bytes, contentType }) {
+async function upload({ leadId, tenantId, bytes, contentType }) {
   // The key before the URL: a missing key is the thing an operator forgets and
   // the thing they can act on, so it must be what the error names.
   serviceRoleKey();
@@ -111,7 +116,8 @@ async function upload({ leadId, bytes, contentType }) {
   if (!extensionFor(contentType)) throw new Error('Upload a PNG, JPG, WEBP, GIF, SVG or PDF');
 
   await ensureBucket();
-  const storagePath = pathFor(leadId, contentType);
+  if (!leadId && !tenantId) throw new Error('An upload must belong to a lead or a company');
+  const storagePath = pathFor({ leadId, tenantId }, contentType);
   const res = await fetch(`${base()}/object/${BUCKET}/${storagePath}`, {
     method: 'POST',
     headers: headers({ 'Content-Type': contentType, 'cache-control': 'max-age=31536000' }),

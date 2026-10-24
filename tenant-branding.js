@@ -109,7 +109,17 @@
     r.setProperty('--accent', b.colors.accent);
     r.setProperty('--accent-dark', b.colors.accentDark);
     r.setProperty('--bg', b.colors.bg);
-    document.querySelectorAll('[data-tenant-logo]').forEach(function(el){ el.src = b.logoUrl; el.alt = b.name; });
+    document.querySelectorAll('[data-tenant-logo]').forEach(function(el){
+      // A broken image icon is never what anyone wants on a page a customer
+      // has been emailed a link to. If the logo will not load -- a URL that
+      // 404s, a dealer with none set and a fallback that does not resolve from
+      // this path -- the image is removed and the wordmark below it carries the
+      // branding on its own, which is how the page looks for a dealer who never
+      // had a logo at all.
+      el.onerror = function(){ el.style.display = 'none'; };
+      el.alt = b.name;
+      el.src = b.logoUrl;
+    });
     document.querySelectorAll('[data-tenant-name],[data-tenant-name-inline]').forEach(function(el){ el.textContent = b.name; });
     document.querySelectorAll('[data-copy]').forEach(function(el){
       var key = el.getAttribute('data-copy');
