@@ -94,6 +94,7 @@
   .colorfield{display:flex;flex-direction:column;gap:3px;font-size:12px;}
   .colorfield input[type=color]{width:52px;height:30px;padding:0;border:1px solid var(--line);
     border-radius:6px;background:none;cursor:pointer;}
+  .nologo{font-size:12px;color:#A33;margin-top:2px;}
   .linkbtn{border:0;background:none;padding:0;font:inherit;font-size:11px;
     color:var(--muted);text-decoration:underline;cursor:pointer;}
   /* Wrapping alone squeezed the buttons into a 160px column -- Edit, Mark
@@ -2131,6 +2132,11 @@ async function renderDealers(){
         (state.isRep ? '<b>' + esc(x.name) + '</b>'
           : '<button type="button" class="linkish" data-company="' + x.tenant_id + '">' + esc(x.name) + '</button>') +
         (x.billing_exempt ? '<div class="muted">In-house \u00b7 no fees</div>' : '') +
+        // A live company with no logo shows none at all on the page its
+        // customers open. Said here, next to the name, because the build
+        // screen's warning is easy to pass and nothing repeated it afterwards.
+        (x.has_logo === false && !x.closed_at
+          ? '<div class="nologo">No logo \u2014 customers see none. Fix it under Brand.</div>' : '') +
         (x.closed_at ? '<div class="muted">Closed ' + esc(plainDate(String(x.closed_at).slice(0,10))) + '</div>' : '') +
         // The question this tab could not answer: is this dealer still
         // working the program? Every figure here was already collected and
@@ -2371,7 +2377,7 @@ async function buildDialog(leadId){
       (b.logoUrl
         ? '<div class="inline"><img src="' + esc(b.logoUrl) + '" alt="" style="height:52px;width:auto;max-width:180px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px"><span class="muted">' + (guess.found && guess.found.logo ? esc(guess.found.logo) : 'uploaded by the rep') + '</span></div>' +
           '<label>Logo address</label><input name="logoUrl" maxlength="600" value="' + esc(b.logoUrl) + '">'
-        : '<p class="muted">None. Their pages will show 50.\u2019s mark until you add one \u2014 paste an address here, or close this and drop a file on the lead.</p><label>Logo address</label><input name="logoUrl" maxlength="600" value="">') +
+        : '<p class="muted" style="color:#A33">None. Their pages will show no logo at all until you add one \u2014 paste an address here, or close this and drop a file on the lead. You can also fix it later under Brand on the Companies tab.</p><label>Logo address</label><input name="logoUrl" maxlength="600" value="">') +
 
       '<h3 style="font-size:15px;margin:16px 0 2px">Their colours</h3>' +
       '<div class="row">' + swatch('primaryColor','Main', b.primaryColor) + swatch('primaryDark','Main, darker', b.primaryDark) + swatch('secondary','Lighter', b.secondary) + '</div>' +
