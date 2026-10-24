@@ -121,7 +121,13 @@
       // this path -- the image is removed and the wordmark below it carries the
       // branding on its own, which is how the page looks for a dealer who never
       // had a logo at all.
+      // Both handlers, not just the failure one. apply() can run more than
+      // once -- the neutral default first, then the tenant's own logo once the
+      // link resolves -- and hiding on the first failure without un-hiding on a
+      // later success leaves a perfectly good logo invisible. That is worse
+      // than the broken icon this was written to prevent.
       el.onerror = function(){ el.style.display = 'none'; };
+      el.onload  = function(){ el.style.display = ''; };
       el.alt = b.name;
       el.src = b.logoUrl;
     });
