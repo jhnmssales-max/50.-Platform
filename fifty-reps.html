@@ -75,6 +75,27 @@
      the table's minimum back under its container's width, so there is nothing
      for the sticky column to cover. */
   .tablewrap tbody tr > td:last-child{white-space:normal;}
+
+  /* Branding dialog. The preview is a diagnostic, not decoration: it loads the
+     stored URL the way a customer's browser would, so an empty logo and a
+     logo URL that 404s look different on screen. */
+  .fieldlabel{display:block;margin:14px 0 5px;font-weight:600;font-size:13px;}
+  .muted.small{font-size:12px;margin:4px 0 0;}
+  .logoprev{display:flex;align-items:center;gap:12px;padding:10px 12px;
+    border:1px solid var(--line);border-radius:10px;background:var(--bg);}
+  .logoprev img{max-width:150px;max-height:60px;height:auto;display:block;}
+  .logoprev.empty{display:block;color:#A33;font-size:13px;}
+  .logoprev-note{font-size:12px;color:var(--muted);min-width:0;}
+  .logoprev-note.ok{color:#2E7D4F;}
+  .logoprev-note.bad{color:#A33;}
+  .logoactions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px;}
+  .filebtn{display:inline-block;}
+  .colorrow{display:flex;flex-wrap:wrap;gap:14px;}
+  .colorfield{display:flex;flex-direction:column;gap:3px;font-size:12px;}
+  .colorfield input[type=color]{width:52px;height:30px;padding:0;border:1px solid var(--line);
+    border-radius:6px;background:none;cursor:pointer;}
+  .linkbtn{border:0;background:none;padding:0;font:inherit;font-size:11px;
+    color:var(--muted);text-decoration:underline;cursor:pointer;}
   /* Wrapping alone squeezed the buttons into a 160px column -- Edit, Mark
      won, Lost and More stacked nearly one per line, which made every lead row
      118px tall and fitted four rows on a screen. Edit + Mark won is 147px of
@@ -2142,6 +2163,7 @@ async function renderDealers(){
             // platform.
             '<td class="num">' + (state.isAdmin && !x.closed_at
               ? '<button class="btn small secondary" data-price="' + x.tenant_id + '">Pricing</button> ' +
+                '<button class="btn small secondary" data-brand="' + x.tenant_id + '">Brand</button> ' +
                 '<button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button>' : '') + '</td>'
           : '<td data-label="Closed by"><select data-field="closer" aria-label="Closed by">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
             '<td data-label="Onboarded by"><select data-field="onboarder" aria-label="Onboarded by">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
@@ -2152,6 +2174,7 @@ async function renderDealers(){
               (state.isAdmin && !x.billing_exempt ? ' <button class="btn small secondary" data-price="' + x.tenant_id + '">Pricing</button>' : '') +
               // Live in-house rows get this button from the branch above,
               // where they have no Save to sit beside.
+              (state.isAdmin ? ' <button class="btn small secondary" data-brand="' + x.tenant_id + '">Brand</button>' : '') +
               (state.isAdmin ? ' <button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button>' : '') +
               (state.isAdmin ? ' <button class="btn small danger" data-delco="' + x.tenant_id + '">Remove</button>' : '') + '</td>'))  +
       '</tr>'
@@ -2163,6 +2186,8 @@ async function renderDealers(){
     b.addEventListener('click', () => deleteCompanyDialog(b.dataset.delco)));
   $('tab-dealers').querySelectorAll('[data-price]').forEach((b) =>
     b.addEventListener('click', () => pricingDialog(b.dataset.price)));
+  $('tab-dealers').querySelectorAll('[data-brand]').forEach((b) =>
+    b.addEventListener('click', () => brandDialog(b.dataset.brand)));
   $('tab-dealers').querySelectorAll('[data-logins]').forEach((b) =>
     b.addEventListener('click', () => loginsDialog(b.dataset.logins)));
   if($('toggleClosed')) $('toggleClosed').addEventListener('click', async () => {
@@ -2720,6 +2745,180 @@ async function pricingDialog(tenantId){
     }catch(err){
       flash(err.message);
       btn.disabled = false; btn.textContent = 'Save pricing';
+    }
+  });
+}
+
+// A company's own look. Until this screen existed, branding was set once when
+// the lead was approved and could never be changed -- so a dealer whose logo
+// came through empty showed a broken image on the page their customers land
+// on, and nothing here could see it, let alone fix it.
+//
+// The preview at the top is the point: it loads the stored URL exactly as a
+// customer's browser would, so "no logo" and "a logo URL that 404s" look
+// different on screen instead of both looking like nothing.
+function logoPreviewHtml(url){
+  if(!url) return '<div class="logoprev empty">No logo set — customers see a broken image on their referral page.</div>';
+  return '<div class="logoprev"><img id="logoPrevImg" src="' + esc(url) + '" alt="Current logo">' +
+         '<div class="logoprev-note" id="logoPrevNote">Loading…</div></div>';
+}
+
+function wireLogoPreview(){
+  const img = $('logoPrevImg'); const note = $('logoPrevNote');
+  if(!img || !note) return;
+  img.addEventListener('load', () => {
+    note.textContent = 'Loads fine (' + img.naturalWidth + '×' + img.naturalHeight + ').';
+    note.className = 'logoprev-note ok';
+  });
+  img.addEventListener('error', () => {
+    note.textContent = 'This URL does not load — this is what the customer sees as a broken image.';
+    note.className = 'logoprev-note bad';
+    img.style.display = 'none';
+  });
+}
+
+const BRAND_COLOR_FIELDS = [
+  ['primaryColor', 'Primary'],
+  ['accentColor', 'Accent'],
+  ['bg', 'Background'],
+];
+
+async function brandDialog(tenantId){
+  let cur;
+  try{
+    cur = await api('/rep-dealers/' + tenantId + '/brand');
+  }catch(err){ return flash(err.message); }
+  const b = cur.branding || {};
+  const files = cur.logo_files || [];
+  // An embedded (data:) logo is real and worth keeping, but it is thousands of
+  // characters long and the save schema refuses it, so it is shown rather than
+  // typed. shownLogo is what goes in the box; the submit below compares against
+  // it so an untouched box never resends -- or deletes -- what is stored.
+  const isEmbedded = /^data:/i.test(b.logoUrl || '');
+  const shownLogo = isEmbedded ? '' : (b.logoUrl || '');
+
+  openDialog(
+    '<h3>' + esc(cur.name) + '&rsquo;s branding</h3>' +
+    '<p class="muted">What their customers see on the referral page and in every email. Changes show up immediately — nothing needs redeploying.</p>' +
+    '<form id="brandForm" autocomplete="off">' +
+      '<label class="fieldlabel">Logo</label>' +
+      logoPreviewHtml(b.logoUrl) +
+      '<div class="logoactions">' +
+        '<label class="btn small secondary filebtn">Upload an image' +
+          '<input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" hidden>' +
+        '</label>' +
+        (files.length
+          ? '<select id="logoPick" aria-label="Logos uploaded during onboarding">' +
+              '<option value="">— or use a logo from onboarding —</option>' +
+              files.map((f) => '<option value="' + esc(f.public_url) + '">' + esc(f.filename) + '</option>').join('') +
+            '</select>'
+          : '') +
+      '</div>' +
+      '<label class="fieldlabel" for="brandLogoUrl">Logo URL</label>' +
+      '<input id="brandLogoUrl" name="logoUrl" type="text" placeholder="' +
+        (isEmbedded ? 'embedded image — upload a file to replace it' : 'https://…') +
+        '" value="' + esc(shownLogo) + '">' +
+      '<p class="muted small">' + (isEmbedded
+        ? 'This logo is embedded in the page rather than hosted, so most email clients will not show it. Upload a file to fix that. Leaving this box alone keeps what is there.'
+        : 'Must start with https:// — email clients block anything else. Uploading a file fills this in for you.') + '</p>' +
+
+      '<label class="fieldlabel" for="brandName">Company name</label>' +
+      '<input id="brandName" name="name" type="text" maxlength="120" value="' + esc(cur.name || '') + '">' +
+
+      '<label class="fieldlabel" for="brandTagline">Tagline</label>' +
+      '<input id="brandTagline" name="tagline" type="text" maxlength="80" placeholder="Referral Program" value="' + esc(b.tagline || '') + '">' +
+
+      '<label class="fieldlabel" for="brandContact">Contact email shown to customers</label>' +
+      '<input id="brandContact" name="contactEmail" type="email" maxlength="200" placeholder="(none — the Questions? line is hidden)" value="' + esc(b.contactEmail || '') + '">' +
+
+      '<label class="fieldlabel">Colors</label>' +
+      '<div class="colorrow">' +
+        BRAND_COLOR_FIELDS.map(([key, label]) =>
+          '<label class="colorfield"><span>' + label + '</span>' +
+            (function(){
+              var set = /^#[0-9a-fA-F]{6}$/.test(b[key] || '');
+              var shown = set ? b[key] : '#1C2B33';
+              return '<input type="color" data-color="' + key + '" data-initial="' + esc(shown.toLowerCase()) +
+                     '" value="' + esc(shown) + '">';
+            })() +
+            '<button type="button" class="linkbtn" data-clearcolor="' + key + '">clear</button>' +
+          '</label>').join('') +
+      '</div>' +
+
+      '<div class="actions">' +
+        '<button type="button" class="btn secondary" id="cancelDlg">Cancel</button>' +
+        '<button class="btn" type="submit" id="saveBrand">Save branding</button>' +
+      '</div></form>'
+  );
+  wireLogoPreview();
+  $('cancelDlg').addEventListener('click', closeDialog);
+
+  // Picking an onboarding logo only fills the box; nothing is saved until Save
+  // is pressed, so a mis-click is undone by cancelling.
+  if($('logoPick')) $('logoPick').addEventListener('change', (e) => {
+    if(e.target.value) $('brandLogoUrl').value = e.target.value;
+  });
+
+  $('logoFile').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if(!file) return;
+    if(file.size > 5 * 1024 * 1024) return flash('That image is larger than 5MB.');
+    const btn = e.target.closest('.filebtn');
+    const was = btn.textContent;
+    btn.textContent = 'Uploading…';
+    try{
+      // Raw bytes, matching the API: the file's own content type decides, and
+      // the route writes the public URL straight onto the company.
+      const out = await api('/rep-dealers/' + tenantId + '/logo', {
+        method: 'POST', body: file, headers: { 'Content-Type': file.type }
+      });
+      const url = (out.branding || {}).logoUrl || '';
+      $('brandLogoUrl').value = url;
+      flash('Logo uploaded and saved.', true);
+      closeDialog();
+      await brandDialog(tenantId);   // reopen so the preview shows the new file
+    }catch(err){
+      flash(err.message);
+      btn.textContent = was;
+    }
+  });
+
+  $('brandForm').querySelectorAll('[data-clearcolor]').forEach((btn) =>
+    btn.addEventListener('click', () => { btn.dataset.cleared = '1'; btn.textContent = 'cleared'; }));
+
+  $('brandForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('saveBrand');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    const f = e.target;
+    // An empty box means "remove this", which the API expresses as null --
+    // otherwise a wrong value could only ever be replaced, never cleared.
+    const trimmed = (el) => (el && el.value.trim()) || '';
+    const typedLogo = trimmed(f.querySelector('#brandLogoUrl'));
+    const body = {
+      name: trimmed(f.querySelector('#brandName')) || undefined,
+      tagline: trimmed(f.querySelector('#brandTagline')) || null,
+      contactEmail: trimmed(f.querySelector('#brandContact')) || null,
+    };
+    // Untouched box -> say nothing about the logo. Cleared box -> null, which
+    // removes it. Anything else -> the new value.
+    if(typedLogo !== shownLogo) body.logoUrl = typedLogo || null;
+    f.querySelectorAll('[data-color]').forEach((el) => {
+      const clear = f.querySelector('[data-clearcolor="' + el.dataset.color + '"]');
+      if(clear && clear.dataset.cleared === '1'){ body[el.dataset.color] = null; return; }
+      // Unchanged swatch -> say nothing. Otherwise saving a logo would also
+      // stamp the placeholder navy onto a company that had no colour set,
+      // quietly restyling their customers' page.
+      if(el.value.toLowerCase() !== el.dataset.initial) body[el.dataset.color] = el.value;
+    });
+    try{
+      await patch('/rep-dealers/' + tenantId + '/brand', body);
+      closeDialog();
+      flash('Branding saved for ' + cur.name + '.', true);
+      await renderDealers();
+    }catch(err){
+      flash(err.message);
+      btn.disabled = false; btn.textContent = 'Save branding';
     }
   });
 }
