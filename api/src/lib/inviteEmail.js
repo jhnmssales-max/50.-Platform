@@ -14,11 +14,16 @@
 const DEFAULT_OFFER_HOW =
   "Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building through that link, you each receive a **{reward} Amazon E-Gift Card**.";
 
-function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency, logoUrl, offerHow, cardNoun, unsubscribeUrl }) {
+function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency, logoUrl, offerHow, cardNoun, shareButton, unsubscribeUrl }) {
   const btnColor = /^#[0-9a-fA-F]{3,8}$/.test(buttonColor || '') ? buttonColor : '#1C2B33';
   const firstName = (customerName || '').trim().split(' ')[0] || 'there';
 
   const amount = formatAmount(rewardAmountCents, rewardCurrency);
+
+  // Never an empty button: a tenant that has set no wording gets the generic
+  // label rather than an anchor with nothing in it.
+  const shareLabel = (typeof shareButton === 'string' && shareButton.trim())
+    ? shareButton.trim() : 'Share My Referral Link';
 
   // Only an absolute https URL is used: email clients can't resolve a
   // relative path, and http images get blocked or flagged.
@@ -69,7 +74,7 @@ ${unsubscribeUrl}`;
   <p style="margin:28px 0;">
     <a href="${inviteUrl}" style="background:${btnColor};color:#FFFFFF;text-decoration:none;
        padding:14px 22px;border-radius:8px;font-weight:bold;display:inline-block;">
-      Get my referral link
+      ${escapeHtml(shareLabel)}
     </a>
   </p>
   <p style="font-size:12px;color:#6B6A63;word-break:break-all;">

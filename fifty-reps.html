@@ -2777,10 +2777,18 @@ function wireLogoPreview(){
   });
 }
 
+// The wording a company falls back to when it has set none of its own. Shown
+// as placeholder text so an empty box reads as "uses the standard line".
+const GENERIC_OFFER_HOW = "Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} {card}**.";
+
 const BRAND_COLOR_FIELDS = [
   ['primaryColor', 'Primary'],
   ['accentColor', 'Accent'],
   ['bg', 'Background'],
+  // Unset, the tagline follows the accent. Its own swatch exists because the
+  // accent is also the gift-card amount inside the button, where a dark colour
+  // would be unreadable on the primary.
+  ['taglineColor', 'Tagline'],
 ];
 
 async function brandDialog(tenantId){
@@ -2831,6 +2839,17 @@ async function brandDialog(tenantId){
       '<label class="fieldlabel" for="brandContact">Contact email shown to customers</label>' +
       '<input id="brandContact" name="contactEmail" type="email" maxlength="200" placeholder="(none — the Questions? line is hidden)" value="' + esc(b.contactEmail || '') + '">' +
 
+      '<label class="fieldlabel" for="copyOfferHow">How the program works</label>' +
+      '<textarea id="copyOfferHow" data-copyfield="offerHow" rows="4" maxlength="600" placeholder="' +
+        esc(GENERIC_OFFER_HOW) + '">' + esc((b.copy || {}).offerHow || '') + '</textarea>' +
+      '<p class="muted small">The main offer line, in the invite email and on their share page. ' +
+        '{reward} becomes the gift card amount, {name} the company, {card} what they call the card. ' +
+        '**stars** bold a phrase in the email. Leave blank for the standard line.</p>' +
+
+      '<label class="fieldlabel" for="copyShareButton">Share button</label>' +
+      '<input id="copyShareButton" data-copyfield="shareButton" type="text" maxlength="80" placeholder="Share My Referral Link" value="' +
+        esc((b.copy || {}).shareButton || '') + '">' +
+
       '<label class="fieldlabel">Colors</label>' +
       '<div class="colorrow">' +
         BRAND_COLOR_FIELDS.map(([key, label]) =>
@@ -2851,6 +2870,9 @@ async function brandDialog(tenantId){
       '</div></form>'
   );
   wireLogoPreview();
+  document.querySelectorAll('[data-copyfield]').forEach((el) => {
+    el.dataset.initialCopy = el.value.trim();
+  });
   $('cancelDlg').addEventListener('click', closeDialog);
 
   // Picking an onboarding logo only fills the box; nothing is saved until Save
@@ -2911,6 +2933,12 @@ async function brandDialog(tenantId){
       // quietly restyling their customers' page.
       if(el.value.toLowerCase() !== el.dataset.initial) body[el.dataset.color] = el.value;
     });
+    const copyChanges = {};
+    f.querySelectorAll('[data-copyfield]').forEach((el) => {
+      const was = el.dataset.initialCopy || '';
+      if(el.value.trim() !== was) copyChanges[el.dataset.copyfield] = el.value.trim();
+    });
+    if(Object.keys(copyChanges).length) body.copy = copyChanges;
     try{
       await patch('/rep-dealers/' + tenantId + '/brand', body);
       closeDialog();

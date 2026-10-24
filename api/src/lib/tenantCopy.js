@@ -34,6 +34,13 @@ const COPY_FIELDS = [
     multiline: true,
   },
   {
+    key: 'shareButton',
+    stage: 'The invite email, and their share page',
+    label: 'The button a customer presses to share their link',
+    where: 'The main call to action, on the page and in the email. Keep it short — it is a button.',
+    max: 80,
+  },
+  {
     key: 'cardNoun',
     stage: 'The invite email, and their share page',
     label: 'What the gift card is called',
@@ -108,6 +115,7 @@ const COPY_KEYS = COPY_FIELDS.map((f) => f.key);
 const GENERIC_COPY = {
   offerHow:
     "Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} {card}**.",
+  shareButton: 'Share My Referral Link',
   cardNoun: 'electronic gift card',
   shareTitle: 'Get {reward} when you make a purchase from {name}',
   shareText: 'I referred you — make your purchase through my link and we both get {reward}.',

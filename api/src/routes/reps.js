@@ -1063,7 +1063,7 @@ router.patch('/rep-dealers/:tenantId/pricing', requireAuth, wrap(async (req, res
 // branding is already jsonb with a check that it is an object, so none of
 // this needs a migration. Keys are merged, not replaced: a PATCH that sends
 // only logoUrl must not wipe the colors and copy set at build time.
-const BRAND_COLORS = ['primaryColor', 'primaryDark', 'secondary', 'accentColor', 'accentDark', 'bg'];
+const BRAND_COLORS = ['primaryColor', 'primaryDark', 'secondary', 'accentColor', 'accentDark', 'bg', 'taglineColor'];
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{3,8}$/, 'Use a hex color like #C9974B');
 
 // An https URL or a root-relative path. http is refused: email clients block

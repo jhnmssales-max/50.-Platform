@@ -30,7 +30,7 @@
   .shield-wrap{display:flex;justify-content:center;margin-bottom:14px;}
   .shield-wrap img{width:52px;height:auto;display:block;}
   .wordmark .name{font-family:'Fraunces',serif;font-weight:600;font-size:21px;color:var(--primary);line-height:1.2;}
-  .wordmark .tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:700;margin-top:2px;}
+  .wordmark .tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--tagline, var(--accent));font-weight:700;margin-top:2px;}
 
   .greeting{font-size:13px;color:var(--muted);margin:20px 0 6px;}
 
@@ -111,7 +111,7 @@
 
   <hr class="divider" />
 
-  <button class="sharebtn" id="shareBtn">Get my referral link</button>
+  <button class="sharebtn" id="shareBtn" data-copy="shareButton">Share My Referral Link</button>
 
   <p class="finePrint">When you recommend <span data-tenant-name-inline>us</span> to a friend, you're trusting us to take good care of someone you know. That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.</p>
   <p class="finePrint" data-copy="offerHow">Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building through that link, you each receive a $50 Amazon E-Gift Card.</p>
