@@ -16,6 +16,7 @@ function buildInviteFollowupEmail({
   rewardAmountCents,
   rewardCurrency,
   logoUrl,
+  shareButton,
   cardNoun,
   unsubscribeUrl,
 }) {
@@ -24,6 +25,8 @@ function buildInviteFollowupEmail({
   const amount = formatAmount(rewardAmountCents, rewardCurrency);
   const card = (cardNoun || '').trim() || 'gift card';
   const logo = /^https:\/\/[^\s"'<>]+$/i.test(logoUrl || '') ? logoUrl : null;
+  const shareLabel = (typeof shareButton === 'string' && shareButton.trim())
+    ? shareButton.trim() : 'Share My Referral Link';
   const logoHtml = logo
     ? `<p style="margin:0 0 20px;"><img src="${escapeHtml(logo)}" alt="${escapeHtml(tenantName)}" width="160" style="display:block;width:160px;max-width:60%;height:auto;border:0;"></p>`
     : '';
@@ -59,7 +62,7 @@ ${unsubscribeUrl}`;
   <p style="margin:28px 0;">
     <a href="${inviteUrl}" style="background:${btnColor};color:#FFFFFF;text-decoration:none;
        padding:14px 22px;border-radius:8px;font-weight:bold;display:inline-block;">
-      Get my referral link
+      ${escapeHtml(shareLabel)}
     </a>
   </p>
   <p style="font-size:12px;color:#6B6A63;word-break:break-all;">

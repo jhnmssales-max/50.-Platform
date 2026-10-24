@@ -9,7 +9,7 @@
 //
 // Branding keys read (all optional; missing ones fall back to 50.'s own
 // neutral look): primaryColor, primaryDark, secondary, accentColor,
-// accentDark, bg, logoUrl, contactEmail.
+// accentDark, bg, taglineColor, logoUrl, contactEmail.
 (function(){
   var DEFAULT = {
     name: "50.",
@@ -35,6 +35,7 @@
   // nothing looks exactly as it always did.
   var DEFAULT_COPY = {
     offerHow: "Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building through that link, you each receive a {reward} Amazon E-Gift Card.",
+    shareButton: "Share My Referral Link",
     shareTitle: "Get {reward} when you make a purchase from {name}",
     shareText: "I referred you \u2014 make your purchase through my link and we both get {reward}.",
     friendAction: "place your order",
@@ -79,7 +80,10 @@
         secondary: t.secondary || d.secondary,
         accent: t.accentColor || d.accent,
         accentDark: t.accentDark || d.accentDark,
-        bg: t.bg || d.bg
+        bg: t.bg || d.bg,
+        // No default: unset means the tagline keeps following the accent, which
+        // is how every page already looked.
+        tagline: t.taglineColor || null
       },
       logoUrl: t.logoUrl || DEFAULT.logoUrl,
       rewardAmountCents: (tenant && tenant.reward_amount_cents) || DEFAULT.rewardAmountCents,
@@ -109,6 +113,7 @@
     r.setProperty('--accent', b.colors.accent);
     r.setProperty('--accent-dark', b.colors.accentDark);
     r.setProperty('--bg', b.colors.bg);
+    if(b.colors.tagline) r.setProperty('--tagline', b.colors.tagline);
     document.querySelectorAll('[data-tenant-logo]').forEach(function(el){
       // A broken image icon is never what anyone wants on a page a customer
       // has been emailed a link to. If the logo will not load -- a URL that

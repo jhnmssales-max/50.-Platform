@@ -184,6 +184,7 @@ async function sendInviteEmail({ tenant, customerName, customerEmail, inviteUrl,
     // What this dealer calls their gift card, for the {card} token in their
     // offer line. Without it the email would print the raw token.
     cardNoun: (branding.copy || {}).cardNoun,
+    shareButton: (branding.copy || {}).shareButton,
     unsubscribeUrl: unsubUrl,
   });
 

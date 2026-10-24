@@ -139,6 +139,7 @@ async function sendOne(person) {
     rewardCurrency: person.reward_currency,
     logoUrl: resolveLogoUrl(branding.logoUrl),
     cardNoun: (branding.copy || {}).cardNoun,
+    shareButton: (branding.copy || {}).shareButton,
     unsubscribeUrl: unsubUrl,
   });
 
