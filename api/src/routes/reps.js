@@ -1107,7 +1107,10 @@ router.get('/rep-dealers/:tenantId/brand', requireAuth, wrap(async (req, res) =>
         limit 8`,
       [tenantId]
     );
-    return { ...row, logo_files: files };
+    // The wording fields, with their labels and help text, so the dialog can
+    // render whatever exists rather than carrying its own copy of the list
+    // that drifts every time one is added.
+    return { ...row, logo_files: files, copy_fields: tenantCopy.COPY_FIELDS };
   });
   res.json(out);
 }));

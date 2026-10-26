@@ -34,6 +34,60 @@ const COPY_FIELDS = [
     multiline: true,
   },
   {
+    key: 'inviteSubject',
+    stage: 'The invite email',
+    label: 'Subject line',
+    where: 'The only thing most people read. {name} is the company, {reward} the amount.',
+    max: 150,
+  },
+  {
+    key: 'inviteOpening',
+    stage: 'The invite email',
+    label: 'Opening line',
+    where: 'The first thing after \u201cHi Dana\u201d. Thank them for the purchase they just made.',
+    max: 400,
+    multiline: true,
+  },
+  {
+    key: 'inviteHowItWorks',
+    stage: 'The invite email',
+    label: 'How it works (optional)',
+    where: 'What happens after they share. Left out of the email entirely when blank.',
+    max: 700,
+    multiline: true,
+  },
+  {
+    key: 'inviteAfterLink',
+    stage: 'The invite email',
+    label: 'Under the link (optional)',
+    where: 'A nudge about where to share it. Left out when blank.',
+    max: 300,
+  },
+  {
+    key: 'inviteClosing',
+    stage: 'The invite email',
+    label: 'Closing line',
+    where: 'The last line before any signature.',
+    max: 400,
+    multiline: true,
+  },
+  {
+    key: 'inviteSignature',
+    stage: 'The invite email',
+    label: 'Signature (optional)',
+    where: 'A real person\u2019s name and the company, on their own lines. Left out when blank.',
+    max: 200,
+    multiline: true,
+  },
+  {
+    key: 'inviteDisclaimer',
+    stage: 'The invite email',
+    label: 'Small print (optional)',
+    where: 'Conditions on the reward, under the signature. Left out when blank.',
+    max: 400,
+    multiline: true,
+  },
+  {
     key: 'friendGreeting',
     stage: 'The page a referred friend lands on',
     label: 'How the referrer opens',
@@ -123,21 +177,21 @@ const COPY_FIELDS = [
   },
   {
     key: 'friendAction',
-    stage: 'The page the referred friend lands on',
+    stage: 'The page a referred friend lands on',
     label: 'What the friend has to do',
     where: 'Finishes: “When you …, you and your friend each get a card.” A few words.',
     max: 120,
   },
   {
     key: 'afterPurchase',
-    stage: 'The page the referred friend lands on',
+    stage: 'The page a referred friend lands on',
     label: 'The same thing, past tense',
     where: 'Finishes: “Once you have …, you will each get a card.” Shown after they send the form.',
     max: 120,
   },
   {
     key: 'inquiryNoun',
-    stage: 'The page the referred friend lands on',
+    stage: 'The page a referred friend lands on',
     label: 'What their form submission is called',
     where: 'Used on the privacy page, e.g. “we keep your roofing inquiry”.',
     max: 120,
@@ -175,6 +229,18 @@ const GENERIC_COPY = {
   offerHow:
     "Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} {card}**.",
   shareButton: 'Share My Referral Link',
+  // The invite email, as blocks. The optional ones default to empty, so a
+  // dealer that sets nothing gets exactly the email that shipped before
+  // these existed -- no dealer's mail changes because this went in.
+  inviteSubject: '{name} wants to say thank you.',
+  inviteOpening:
+    "When you recommend **{name}** to a friend, you're trusting us to take good care of someone you know. That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.",
+  inviteHowItWorks: '',
+  inviteAfterLink: '',
+  inviteClosing:
+    'Thank you for supporting our business and giving us the opportunity to serve the people you care about.',
+  inviteSignature: '',
+  inviteDisclaimer: '',
   // The landing page speaks as the friend who shared the link, not as the
   // business. The recommendation is the thing being traded on, and it is
   // theirs to make.

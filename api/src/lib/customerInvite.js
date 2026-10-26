@@ -224,6 +224,14 @@ async function sendInviteEmail({ tenant, customerName, customerEmail, inviteUrl,
     // offer line. Without it the email would print the raw token.
     cardNoun: (branding.copy || {}).cardNoun,
     shareButton: (branding.copy || {}).shareButton,
+    // The email's blocks, as this dealer wrote them.
+    inviteSubject: (branding.copy || {}).inviteSubject,
+    inviteOpening: (branding.copy || {}).inviteOpening,
+    inviteHowItWorks: (branding.copy || {}).inviteHowItWorks,
+    inviteAfterLink: (branding.copy || {}).inviteAfterLink,
+    inviteClosing: (branding.copy || {}).inviteClosing,
+    inviteSignature: (branding.copy || {}).inviteSignature,
+    inviteDisclaimer: (branding.copy || {}).inviteDisclaimer,
     unsubscribeUrl: unsubUrl,
   });
 

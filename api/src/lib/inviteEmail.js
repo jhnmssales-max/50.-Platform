@@ -14,7 +14,18 @@
 const DEFAULT_OFFER_HOW =
   "Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building through that link, you each receive a **{reward} Amazon E-Gift Card**.";
 
-function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency, logoUrl, offerHow, cardNoun, shareButton, unsubscribeUrl }) {
+// "Creative Backyards's referral program" is how a name ending in s reads
+// when an apostrophe-s is bolted on regardless. English drops the second s.
+function possessive(name) {
+  const n = String(name || '').trim();
+  if (!n) return '';
+  return /s$/i.test(n) ? `${n}'` : `${n}'s`;
+}
+
+function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, rewardAmountCents, rewardCurrency, logoUrl, offerHow, cardNoun, shareButton, unsubscribeUrl,
+  // The email as blocks a dealer can write. The optional ones are left out
+  // of the email entirely when blank, rather than rendered as empty space.
+  inviteSubject, inviteOpening, inviteHowItWorks, inviteAfterLink, inviteClosing, inviteSignature, inviteDisclaimer }) {
   const btnColor = /^#[0-9a-fA-F]{3,8}$/.test(buttonColor || '') ? buttonColor : '#1C2B33';
   const firstName = (customerName || '').trim().split(' ')[0] || 'there';
 
@@ -32,7 +43,39 @@ function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, re
     ? `<p style="margin:0 0 20px;"><img src="${escapeHtml(logo)}" alt="${escapeHtml(tenantName)}" width="160" style="display:block;width:160px;max-width:60%;height:auto;border:0;"></p>`
     : '';
 
-  const subject = `${tenantName} wants to say thank you.`;
+  // Every block goes through the same token filling as the offer line, so
+  // {reward} and {name} work wherever a dealer puts them.
+  const token = (text, fallback) => {
+    const raw = (typeof text === 'string' && text.trim()) ? text.trim() : fallback;
+    if (!raw) return '';
+    return raw
+      .replace(/\{reward\}/g, amount)
+      .replace(/\{name\}/g, tenantName)
+      .replace(/\{card\}/g, (cardNoun && String(cardNoun).trim()) || 'electronic gift card');
+  };
+
+  const subject = token(inviteSubject, `${tenantName} wants to say thank you.`).replace(/\*\*/g, '');
+
+  // A block becomes a paragraph, or nothing at all. **stars** bold a phrase,
+  // and a blank line inside a block starts a new paragraph, so a dealer can
+  // write a signature on two lines without knowing any HTML.
+  const para = (text, style = 'font-size:15px;line-height:1.6;') => {
+    if (!text) return '';
+    return text.split(/\n\s*\n/).map((chunk) =>
+      `<p style="${style}">` +
+      escapeHtml(chunk.trim()).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>') +
+      '</p>').join('');
+  };
+  const plain = (text) => (text ? text.replace(/\*\*/g, '') : '');
+
+  const openingText = token(inviteOpening,
+    `When you recommend **${tenantName}** to a friend, you're trusting us to take good care of someone you know. That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.`);
+  const howText = token(inviteHowItWorks, '');
+  const afterLinkText = token(inviteAfterLink, '');
+  const closingText = token(inviteClosing,
+    'Thank you for supporting our business and giving us the opportunity to serve the people you care about.');
+  const signatureText = token(inviteSignature, '');
+  const disclaimerText = token(inviteDisclaimer, '');
 
   const offerTemplate = typeof offerHow === 'string' && offerHow.trim() ? offerHow.trim() : DEFAULT_OFFER_HOW;
   const withAmount = offerTemplate
@@ -42,46 +85,43 @@ function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, re
   const offerText = withAmount.replace(/\*\*/g, '');
   const offerHtml = escapeHtml(withAmount).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 
-  const textBody = `Hi ${firstName},
-
-When you recommend ${tenantName} to a friend, you're trusting us to take good care of someone you know. That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.
-
-${offerText}
-
-Thank you for supporting our business and giving us the opportunity to serve the people you care about.
-
-Your personal referral link (it never expires, share it as often as you like):
-${inviteUrl}
-
----
-Don't want emails about ${tenantName}'s referral program? Unsubscribe here:
-${unsubscribeUrl}`;
+  const join = (...parts) => parts.filter(Boolean).join('\n\n');
+  const textBody = join(
+    `Hi ${firstName},`,
+    plain(openingText),
+    offerText,
+    plain(howText),
+    `Your personal referral link (it never expires, share it as often as you like):\n${inviteUrl}`,
+    plain(afterLinkText),
+    plain(closingText),
+    plain(signatureText),
+    plain(disclaimerText),
+    `---\nDon't want emails about ${possessive(tenantName)} referral program? Unsubscribe here:\n${unsubscribeUrl}`
+  );
 
   const htmlBody = `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;color:#1B1B1B;">
   ${logoHtml}
   <p style="font-size:15px;line-height:1.6;">Hi ${escapeHtml(firstName)},</p>
-  <p style="font-size:15px;line-height:1.6;">
-    When you recommend <strong>${escapeHtml(tenantName)}</strong> to a friend, you're trusting us to take good care of someone you know.
-    That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.
-  </p>
+  ${para(openingText)}
   <p style="font-size:15px;line-height:1.6;">
     ${offerHtml}
   </p>
-  <p style="font-size:15px;line-height:1.6;">
-    Thank you for supporting our business and giving us the opportunity to serve the people you care about.
-  </p>
+  ${para(howText)}
   <p style="margin:28px 0;">
     <a href="${inviteUrl}" style="background:${btnColor};color:#FFFFFF;text-decoration:none;
        padding:14px 22px;border-radius:8px;font-weight:bold;display:inline-block;">
       ${escapeHtml(shareLabel)}
     </a>
   </p>
-  <p style="font-size:12px;color:#6B6A63;word-break:break-all;">
-    Or copy this link: ${inviteUrl}
-  </p>
+  <p style="font-size:13px;line-height:1.6;color:#4A4A4A;margin:0 0 4px;">Your personal referral link:</p>
+  <p style="font-size:13px;color:#6B6A63;word-break:break-all;margin:0 0 18px;">${inviteUrl}</p>
+  ${para(afterLinkText)}
+  ${para(closingText)}
+  ${para(signatureText)}
+  ${para(disclaimerText, 'font-size:12px;line-height:1.6;color:#8A887F;margin-top:18px;')}
   <p style="font-size:12px;color:#8A887F;border-top:1px solid #E6E0D5;padding-top:14px;margin-top:24px;">
-    Don't want emails about ${escapeHtml(tenantName)}'s referral program?
+    Don't want emails about ${escapeHtml(possessive(tenantName))} referral program?
     <a href="${unsubscribeUrl}" style="color:#8A887F;">Unsubscribe</a>.
   </p>
 </div>`;
