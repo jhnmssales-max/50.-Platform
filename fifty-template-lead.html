@@ -163,19 +163,23 @@
 
   <div id="activeState">
     <div class="referral-msg">
-      <h1>Your friend <span data-referrer-name>your friend</span> trusts <span data-tenant-name-inline>50.</span></h1>
-      <p>
-        <span class="who" data-referrer-name>A friend</span> thought you might need <span data-tenant-name-inline>50.</span>'s
-        services and wanted to pass along a personal recommendation. When you <span data-copy="friendAction">place your order</span>, you and
-        <span class="who" data-referrer-name>A friend</span> will each get a <span class="reward"><span data-reward-amount>$50</span> <span data-copy="cardNoun">electronic gift card</span></span> — no strings attached.
+      <!-- Written as the friend speaking, not as the business. The thing
+           being traded on is their recommendation, and a page that says
+           "your friend trusts us" is the business talking about itself. -->
+      <h1 data-copy="friendGreeting">Hey, it&rsquo;s <span data-referrer-name>a friend</span>.</h1>
+      <p data-copy="friendPitch">
+        I had a great experience with <span data-tenant-name-inline>50.</span> and thought of you.
+        Fill out the form below, and if you end up buying something, we&rsquo;ll each get a
+        <span class="reward"><span data-reward-amount>$50</span> <span data-copy="cardNoun">electronic gift card</span></span>!
       </p>
     </div>
 
     <div id="formMsg" class="msg"></div>
 
     <form id="leadForm">
-      <label for="leadMessage">Tell us what you're looking for</label>
-      <textarea id="leadMessage" placeholder="A quick description of what you need — even a rough idea helps."></textarea>
+      <label for="leadMessage" data-copy="leadPrompt">What are you thinking about?</label>
+      <textarea id="leadMessage" data-copy-placeholder="leadPlaceholder"
+        placeholder="A rough idea is plenty."></textarea>
 
       <label for="leadName">Your name</label>
       <input type="text" id="leadName" placeholder="Mike Torres" autocomplete="off" />
@@ -184,13 +188,14 @@
       <input type="text" id="leadEmail" placeholder="mike@email.com" autocomplete="off" />
 
       <label for="leadPhone">Phone number</label>
-      <input type="text" id="leadPhone" placeholder="(717) 555-0134" autocomplete="off" />
+      <input type="text" id="leadPhone" placeholder="(402) 555-0134" autocomplete="off" />
 
       <label for="leadZip">ZIP code</label>
-      <input type="text" id="leadZip" placeholder="17201" inputmode="numeric" maxlength="10" autocomplete="postal-code" />
+      <input type="text" id="leadZip" placeholder="68048" inputmode="numeric" maxlength="10" autocomplete="postal-code" />
 
-      <button type="submit" class="submitbtn" id="submitBtn">Get my <span data-reward-amount>$50</span> offer</button>
+      <button type="submit" class="submitbtn" id="submitBtn" data-copy="leadButton">Get my <span data-reward-amount>$50</span> offer</button>
 
+      <p class="finePrint" data-copy="responseNote">We&rsquo;ll reach out within one business day. Gift cards are sent after your purchase.</p>
       <p class="finePrint">By submitting, you agree to be contacted about your inquiry and to our <a href="privacy-policy.html" data-legal-link target="_blank" rel="noopener">Privacy Policy</a> and <a href="referral-terms.html" data-legal-link target="_blank" rel="noopener">Referral Program Terms</a>.</p>
     </form>
 
@@ -298,6 +303,12 @@ async function checkAndRender(){
     // type scales to however many occurrences the copy needs, rather
     // than a getElementById call per occurrence.
     document.querySelectorAll('[data-referrer-name]').forEach(el => { el.textContent = referrerName; });
+    // Copy written in the friend's voice carries {referrer}; it was applied
+    // before the link resolved, so the branding layer re-applies it now that
+    // the name is known.
+    if(window.TenantBranding && TenantBranding.setReferrer){
+      TenantBranding.setReferrer(link.referrer_first_name);
+    }
     if(link.kind !== 'share' || link.status !== 'active'){
       showState('invalidState');
       return false;
