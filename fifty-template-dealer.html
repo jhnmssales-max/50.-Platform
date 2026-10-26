@@ -828,13 +828,29 @@ document.getElementById('sendForm').addEventListener('submit', async (e)=>{
     const link = result.invite_link.url || ('Invite code: ' + result.invite_link.code);
     const emailSent = result.email && result.email.sent;
 
-    document.getElementById('confirmHeadline').textContent = emailSent
-      ? 'Emailed to ' + name + ' (' + email + ')'
-      : name + ' created — but the email couldn\'t be sent';
+    // Somebody already on the list gets their own link sent again rather
+    // than a second record, so the wording has to say which happened.
+    // "Emailed to Dana" for a resend reads as a new customer, which is how
+    // a dealer ends up thinking they have two.
+    const resent = result.reused === true;
+    // A customer who asked to stop being emailed is a third outcome, and
+    // not a failure to apologise for.
+    const unsubscribed = result.email && result.email.reason === 'unsubscribed';
+
+    document.getElementById('confirmHeadline').textContent =
+      unsubscribed ? name + ' has unsubscribed — nothing was sent'
+      : emailSent ? (resent ? 'Sent again to ' + name + ' (' + email + ')'
+                            : 'Emailed to ' + name + ' (' + email + ')')
+      : name + (resent ? ' is already on your list — but the email couldn\'t be sent'
+                       : ' created — but the email couldn\'t be sent');
     document.getElementById('confirmLink').textContent = link;
-    document.getElementById('confirmNote').textContent = emailSent
-      ? 'We\'ve emailed this link to them. Here it is too, in case you want to share it another way.'
-      : 'Their referral link was created, but sending the email failed' +
+    document.getElementById('confirmNote').textContent =
+      unsubscribed ? (result.email.error || 'They asked to stop receiving referral emails.') +
+        ' Their link above still works if you want to pass it on another way.'
+      : emailSent ? (resent
+          ? 'They were already on your list, so we sent their own link again rather than making a second one. This is the same link they had before.'
+          : 'We\'ve emailed this link to them. Here it is too, in case you want to share it another way.')
+      : 'Their referral link is ready, but sending the email failed' +
         (result.email && result.email.error ? ' (' + result.email.error + ')' : '') +
         ' — copy the link above and send it yourself for now.';
     document.getElementById('confirmBox').classList.add('show');
