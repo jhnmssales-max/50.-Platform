@@ -96,6 +96,45 @@ async function findInviteLink(client, customerId) {
 // conversion is the one that minted the row, which is how the invite email
 // is sent exactly once however many times the referral is re-marked.
 async function findOrCreateReferralCustomer(client, { tenantId, referralId, name, email, phone }) {
+  // Somebody already on this dealer's list is this same person, so they are
+  // adopted rather than entered a second time, and they keep the link they
+  // already have.
+  //
+  // This reverses the reasoning in the reward_issuance_worker migration,
+  // which chose a per-referral claim over an email match because an email
+  // match "could silently merge a referred friend into an unrelated customer
+  // row a dealer happened to create with the same address". That was a fair
+  // worry while two rows in one tenant could share an address. The unique
+  // index on (tenant_id, lower(email)) removes that possibility, which is
+  // what turns an address into a reliable identity inside a tenant -- and
+  // the duplicate it was guarding against is the one that actually happened,
+  // eighteen times.
+  //
+  // It also has to be a lookup rather than a second ON CONFLICT: with that
+  // index in place, a conflict clause naming a different index does not
+  // catch the collision and the insert raises instead of claiming.
+  const { rows: [sameAddress] } = await client.query(
+    `select id, source_referral_id from customers
+      where tenant_id = $1 and lower(email) = lower($2)
+      order by created_at asc
+      limit 1`,
+    [tenantId, email]
+  );
+  if (sameAddress) {
+    // Record which referral brought them in, if nothing else has. Never
+    // overwritten: the first referral that converted them is the one that
+    // did it.
+    if (!sameAddress.source_referral_id) {
+      await client.query(
+        'update customers set source_referral_id = $1 where id = $2 and source_referral_id is null',
+        [referralId, sameAddress.id]
+      );
+    }
+    // created: false, so the caller does not send a second invite to
+    // somebody who already has their link.
+    return { id: sameAddress.id, created: false };
+  }
+
   const { rows: [inserted] } = await client.query(
     `insert into customers (tenant_id, name, email, phone, source_referral_id)
      values ($1, $2, $3, $4, $5)
