@@ -149,6 +149,26 @@ router.get('/referrals', requireAuth, async (req, res, next) => {
       counts: { pending: Number(result.counts.pending), paid: Number(result.counts.paid) },
     });
   } catch (err) {
+    // The fee is charged before the transaction that records the status, so
+    // a failure in between leaves the dealer charged for a referral that
+    // still reads unpaid. billing_events_one_referral_fee_idx means a retry
+    // cannot charge again -- pressing the button a second time finishes the
+    // job -- but only if whoever pressed it knows that. A generic failure
+    // reads as "nothing happened", and nothing happening is the one thing
+    // that did not occur.
+    if (fee) {
+      console.error(
+        `REFERRAL_FEE CHARGED BUT STATUS NOT SAVED referral=${referralId} ` +
+        `charge=${fee.id || fee.payment_intent_id || 'unknown'} amount=${fee.amount_cents || '?'} — ${err.message}`
+      );
+      const wrapped = new Error(
+        "50.'s fee for this referral was charged, but saving the status failed. " +
+        'Press Mark paid again — the fee is charged at most once per referral, so this will not charge twice.'
+      );
+      wrapped.status = err.status && err.status >= 400 && err.status < 500 ? err.status : 500;
+      wrapped.code = 'fee_charged_status_unsaved';
+      return next(wrapped);
+    }
     next(err);
   }
 });
