@@ -1161,6 +1161,28 @@ router.patch('/rep-dealers/:tenantId/brand', requireAuth, wrap(async (req, res) 
   res.json(out);
 }));
 
+// The wording fields, for any rep. The build screen used to carry its own
+// copy of this list, which is how it ended up offering ten of twenty-six --
+// a rep could not set any of the invite email, the landing page voice or the
+// gift-card notes, because the page did not know they existed.
+//
+// Served to reps as well as admins: it is the list of questions to ask a
+// business, and it is a rep sitting across from that business.
+router.get('/copy-fields', requireAuth, wrap(async (req, res) => {
+  await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { rep: true });
+  });
+  // Each field carries the wording that runs when the box is left empty.
+  // The build screen shows it as the box's placeholder, so a rep can see what
+  // a business gets for free before deciding whether it needs changing.
+  res.json({
+    fields: tenantCopy.COPY_FIELDS.map((f) => ({
+      ...f,
+      generic: tenantCopy.GENERIC_COPY[f.key] || '',
+    })),
+  });
+}));
+
 router.get('/rep-dealers', requireAuth, wrap(async (req, res) => {
   // Closed companies are left out unless asked for, and the function itself
   // refuses to hand one to a rep however this is called.

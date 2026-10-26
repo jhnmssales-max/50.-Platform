@@ -27,6 +27,7 @@
 const COPY_FIELDS = [
   {
     key: 'offerHow',
+    ask: 'In a sentence or two, how would you explain this deal to one of your customers?',
     stage: 'The invite email, and their share page',
     label: 'How the program works, in one or two sentences',
     where: 'The main offer line, the first thing a past customer reads. **stars** bold a phrase in the email.',
@@ -35,6 +36,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'inviteSubject',
+    ask: 'What subject line would make one of your customers open this?',
     stage: 'The invite email',
     label: 'Subject line',
     where: 'The only thing most people read. {name} is the company, {reward} the amount.',
@@ -42,6 +44,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'inviteOpening',
+    ask: 'How do you want to thank them for the purchase they just made?',
     stage: 'The invite email',
     label: 'Opening line',
     where: 'The first thing after \u201cHi Dana\u201d. Thank them for the purchase they just made.',
@@ -50,6 +53,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'inviteHowItWorks',
+    ask: 'Walk me through what happens after they share it — who calls, what you do. Optional.',
     stage: 'The invite email',
     label: 'How it works (optional)',
     where: 'What happens after they share. Left out of the email entirely when blank.',
@@ -58,6 +62,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'inviteAfterLink',
+    ask: 'Anything to add about where they could share it? Optional.',
     stage: 'The invite email',
     label: 'Under the link (optional)',
     where: 'A nudge about where to share it. Left out when blank.',
@@ -65,6 +70,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'inviteClosing',
+    ask: 'How do you want to sign off to a customer?',
     stage: 'The invite email',
     label: 'Closing line',
     where: 'The last line before any signature.',
@@ -73,6 +79,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'inviteSignature',
+    ask: 'Whose name should this come from, and the company under it? Optional.',
     stage: 'The invite email',
     label: 'Signature (optional)',
     where: 'A real person\u2019s name and the company, on their own lines. Left out when blank.',
@@ -81,6 +88,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'inviteDisclaimer',
+    ask: 'Any conditions on the reward you want spelled out at the bottom? Optional.',
     stage: 'The invite email',
     label: 'Small print (optional)',
     where: 'Conditions on the reward, under the signature. Left out when blank.',
@@ -89,6 +97,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'friendGreeting',
+    ask: 'Their customer is introducing you to a friend. How should that open?',
     stage: 'The page a referred friend lands on',
     label: 'How the referrer opens',
     where: 'First line of the landing page, in the referrer\u2019s own voice. {referrer} is their first name.',
@@ -96,6 +105,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'friendPitch',
+    ask: 'If one of your customers recommended you to a friend, what would they say? Name what you actually sell.',
     stage: 'The page a referred friend lands on',
     label: 'What the referrer says about the business',
     where: 'The recommendation itself, written as the friend speaking. Name what the business actually sells. {name} is the company, {reward} the amount, {card} what you call the card.',
@@ -104,6 +114,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'leadButton',
+    ask: 'What should the button say that sends you their details?',
     stage: 'The page a referred friend lands on',
     label: 'The button that submits the form',
     where: 'The conversion point. {reward} is the amount.',
@@ -111,6 +122,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'leadPrompt',
+    ask: 'What should we ask the friend they send over?',
     stage: 'The page a referred friend lands on',
     label: 'The question above the message box',
     where: 'Asks what they are after. Short and conversational beats formal.',
@@ -118,6 +130,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'leadPlaceholder',
+    ask: 'Give me two or three things people actually ask you for.',
     stage: 'The page a referred friend lands on',
     label: 'The grey example inside the message box',
     where: 'Concrete examples of what people ask for, so the box does not look like homework.',
@@ -125,6 +138,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'responseNote',
+    ask: 'How soon do you get back to someone, and when does the card arrive?',
     stage: 'The page a referred friend lands on',
     label: 'The reassurance under the button',
     where: 'When they will hear back, and when the card arrives. {name} is the company.',
@@ -132,6 +146,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'rewardNoteReferrer',
+    ask: 'What do you want to say to the customer when you send their card?',
     stage: 'The "send the gift cards" alert',
     label: 'What to say to the customer who referred someone',
     where: 'Printed in the alert email, ready to copy into the gift card or an email. {name} is their first name, {reward} the amount, {card} what you call the card, {business} the company.',
@@ -140,6 +155,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'rewardNoteFriend',
+    ask: 'And to the friend who bought, when you send theirs?',
     stage: 'The "send the gift cards" alert',
     label: 'What to say to the friend who bought',
     where: 'The same, for the person who was referred in and placed the order. Same tokens.',
@@ -148,6 +164,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'shareButton',
+    ask: 'What should the button say that sends them to share their link?',
     stage: 'The invite email, and their share page',
     label: 'The button a customer presses to share their link',
     where: 'The main call to action, on the page and in the email. Keep it short — it is a button.',
@@ -155,6 +172,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'cardNoun',
+    ask: 'What should we call the reward? Most say Amazon gift card.',
     stage: 'The invite email, and their share page',
     label: 'What the gift card is called',
     where: 'Used wherever the reward is named, right after the amount. Change it for a business that mails real cards rather than emailing them.',
@@ -162,6 +180,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'shareTitle',
+    ask: 'When a customer taps share on their phone, what should the heading say?',
     stage: 'The invite email, and their share page',
     label: 'Title when a customer shares their link',
     where: 'What shows as the heading on a phone’s share sheet.',
@@ -169,6 +188,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'shareText',
+    ask: 'What message should we put in for them, before they edit it?',
     stage: 'The invite email, and their share page',
     label: 'Message the share sheet fills in',
     where: 'The text their customer sends to a friend, before they edit it.',
@@ -177,6 +197,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'friendAction',
+    ask: 'Finish this: “When you ______, you both get a card.” A few words.',
     stage: 'The page a referred friend lands on',
     label: 'What the friend has to do',
     where: 'Finishes: “When you …, you and your friend each get a card.” A few words.',
@@ -184,6 +205,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'afterPurchase',
+    ask: 'The same thing, past tense: “Once you have ______.”',
     stage: 'The page a referred friend lands on',
     label: 'The same thing, past tense',
     where: 'Finishes: “Once you have …, you will each get a card.” Shown after they send the form.',
@@ -191,6 +213,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'inquiryNoun',
+    ask: 'What do you call it when someone enquires? A roofing enquiry, a quote request?',
     stage: 'The page a referred friend lands on',
     label: 'What their form submission is called',
     where: 'Used on the privacy page, e.g. “we keep your roofing inquiry”.',
@@ -198,6 +221,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'eligibility',
+    ask: 'Who is allowed to refer someone? Usually anyone who has bought from you.',
     stage: 'Their terms page',
     label: 'Who can take part',
     where: 'Finishes: “Anyone who has … may refer a friend.”',
@@ -205,6 +229,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'qualifyingEvent',
+    ask: 'What does the friend have to do before anyone earns a card?',
     stage: 'Their terms page',
     label: 'What earns the reward',
     where: 'Finishes: “A reward is earned when the referred friend …”',
@@ -212,6 +237,7 @@ const COPY_FIELDS = [
   },
   {
     key: 'rewardCondition',
+    ask: 'What do you check before sending a card, so a cancelled order does not pay out?',
     stage: 'Their terms page',
     label: 'What the business confirms before a card goes out',
     where: 'Finishes: “Cards are sent once …” This is what protects them from paying on a cancelled order.',
