@@ -86,8 +86,31 @@ async function enrolActivatedDealerAdmins({ dealerTenantId }) {
 
     const enrolled = [];
     for (const admin of admins) {
-      // The claim. DO NOTHING rather than DO UPDATE: an admin already
-      // enrolled keeps the row and the link they already have.
+      // Already a customer of 50.? Then they already have a link, and this
+      // is a redelivered activation -- or they were entered by hand, or
+      // converted after a referral. Any of those means they have been told
+      // once, which is the whole point of the claim.
+      //
+      // The lookup is on (tenant_id, lower(email)) and NOT on the old
+      // (source_activated_tenant_id, email) claim, for two reasons. Info@
+      // and info@ are one inbox, and matching case-sensitively is how one
+      // dealer's owner got three copies of the same invite. And the row that
+      // already holds this person may carry no activation marker at all --
+      // a hand-entered row, or the survivor of a merge -- so a claim keyed
+      // on that marker cannot see them.
+      //
+      // ON CONFLICT is gone deliberately. Once a unique index exists on
+      // (tenant_id, lower(email)), a conflict clause naming a different
+      // index does not catch it, and the insert raises instead of doing
+      // nothing. A lookup first is the thing that actually holds.
+      const { rows: [already] } = await client.query(
+        `select id from customers
+          where tenant_id = $1 and lower(email) = lower($2)
+          limit 1`,
+        [platform.id, admin.email]
+      );
+      if (already) continue;
+
       const { rows: [created] } = await client.query(
         `insert into customers (tenant_id, name, email, source_activated_tenant_id)
          values ($1, $2, $3, $4)
@@ -95,8 +118,8 @@ async function enrolActivatedDealerAdmins({ dealerTenantId }) {
          returning id`,
         [platform.id, admin.name, admin.email, dealerTenantId]
       );
-      // No row back means this admin was enrolled by an earlier delivery of
-      // this same activation. They have their link; they were told once.
+      // Still possible: two deliveries of the same activation racing each
+      // other past the lookup above. The old claim catches that case.
       if (!created) continue;
 
       const { link } = await ensureInviteLink(client, {
