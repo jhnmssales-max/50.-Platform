@@ -3,7 +3,7 @@ const cors = require('cors');
 const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
 const { withUserTransaction, getCallerContext } = require('../db');
-const { buildInviteUrl, createInviteLink, sendInviteEmail } = require('../lib/customerInvite');
+const { buildInviteUrl, ensureInviteLink, sendInviteEmail } = require('../lib/customerInvite');
 const { tokenForSending } = require('../lib/unsubscribe');
 
 const router = express.Router();
@@ -52,17 +52,43 @@ router.post('/customers', requireAuth, async (req, res, next) => {
       const ctx = await getCallerContext(client, req.userId);
       if (!ctx) throw forbidden('No staff account found for this user');
 
-      const { rows: [customer] } = await client.query(
-        `insert into customers (tenant_id, name, email, phone, created_by_user_id)
-         values ($1, $2, $3, $4, $5)
-         returning id, name, email, phone, created_at`,
-        [ctx.tenant_id, name, email, phone || null, req.userId]
+      // Somebody already on this dealer's list gets their OWN link sent
+      // again rather than a second record. Adding an address twice is
+      // almost always a customer saying they cannot find their invite, and
+      // the answer to that is the link they already have -- a new row would
+      // mint a second link, so the one they eventually share would not be
+      // the one the dealer is looking at.
+      //
+      // Matched on lower(email) because Info@ and info@ are one inbox
+      // everywhere except a case-sensitive comparison. There is no unique
+      // index backing this yet (duplicates already in the table would stop
+      // one being created), so this is the check, not a safety net over one.
+      const { rows: [existing] } = await client.query(
+        `select id, name, email, phone, created_at from customers
+          where tenant_id = $1 and lower(email) = lower($2)
+          order by created_at asc
+          limit 1`,
+        [ctx.tenant_id, email]
       );
 
-      const link = await createInviteLink(client, {
+      let customer = existing;
+      if (!customer) {
+        const { rows: [created] } = await client.query(
+          `insert into customers (tenant_id, name, email, phone, created_by_user_id)
+           values ($1, $2, $3, $4, $5)
+           returning id, name, email, phone, created_at`,
+          [ctx.tenant_id, name, email, phone || null, req.userId]
+        );
+        customer = created;
+      }
+
+      // Their existing link if they have one. A customer who somehow has
+      // none -- a row from before links were minted on creation -- gets one
+      // now rather than an error.
+      const { link } = await ensureInviteLink(client, {
         tenantId: ctx.tenant_id,
         customerId: customer.id,
-        name,
+        name: customer.name || name,
       });
 
       // Minted inside the same transaction as the customer, so the invite
@@ -71,12 +97,17 @@ router.post('/customers', requireAuth, async (req, res, next) => {
       // than assuming that stays true.
       const unsubscribeToken = await tokenForSending(client, customer.id);
 
-      return { customer, link, ctx, unsubscribeToken };
+      return { customer, link, ctx, unsubscribeToken, reused: Boolean(existing) };
     });
 
     const inviteUrl = buildInviteUrl(result.link.code, result.ctx.tenant_domain);
 
     const responseBody = {
+      // `reused` is the difference between "added" and "resent", which the
+      // dealer needs told: pressing Add and seeing "Customer added" for
+      // somebody already on their list is how you end up believing you have
+      // two customers.
+      reused: result.reused,
       customer: result.customer,
       invite_link: {
         code: result.link.code,
@@ -90,6 +121,19 @@ router.post('/customers', requireAuth, async (req, res, next) => {
     // customer and link are safely committed: a slow or failed send must
     // never roll back data that already exists, and shouldn't hold the DB
     // transaction open while waiting on a third-party HTTP call either.
+    // Somebody who asked this dealer to stop emailing them is not resent to,
+    // however they got here. tokenForSending returns null for them, and
+    // sendInviteEmail would refuse anyway -- but refusing here means the
+    // dealer is told why rather than shown a send failure.
+    if (!result.unsubscribeToken) {
+      responseBody.email = {
+        sent: false,
+        reason: 'unsubscribed',
+        error: `${result.customer.name || 'This customer'} asked to stop receiving referral emails, so nothing was sent. Their link still works if you want to pass it on another way.`,
+      };
+      return res.status(result.reused ? 200 : 201).json(responseBody);
+    }
+
     try {
       await sendInviteEmail({
         tenant: result.ctx,
@@ -102,12 +146,12 @@ router.post('/customers', requireAuth, async (req, res, next) => {
         replyToEmail: result.ctx.user_email,
       });
 
-      responseBody.email = { sent: true };
+      responseBody.email = { sent: true, resent: result.reused };
     } catch (emailErr) {
       responseBody.email = { sent: false, error: emailErr.message };
     }
 
-    res.status(201).json(responseBody);
+    res.status(result.reused ? 200 : 201).json(responseBody);
   } catch (err) {
     next(err);
   }
