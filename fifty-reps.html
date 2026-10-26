@@ -94,6 +94,8 @@
   .colorfield{display:flex;flex-direction:column;gap:3px;font-size:12px;}
   .colorfield input[type=color]{width:52px;height:30px;padding:0;border:1px solid var(--line);
     border-radius:6px;background:none;cursor:pointer;}
+  .wask{margin:0 0 4px;font-size:14px;font-weight:600;line-height:1.4;}
+  .wbox label{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);}
   .copygroup{border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:10px 0;}
   .copygroup > summary{cursor:pointer;font-weight:600;font-size:13px;padding:4px 0;}
   .copygroup[open] > summary{margin-bottom:6px;border-bottom:1px solid var(--line);padding-bottom:8px;}
@@ -998,46 +1000,37 @@ function readPricingFields(form, { onlyChanges = false } = {}){
 // what the key is called. `generic` is what runs if the box is left empty: it
 // is deliberately trade-neutral, so a roofer whose rep typed nothing still
 // never reads "buy a shed from us".
-const COPY_FIELDS = [
-  { key:'offerHow', stage:'Their invite email, and their share page', label:'How the program works, in a sentence or two', multiline:true, max:600,
-    where:'The main offer line — the first thing a past customer reads. Wrap words in **stars** to bold them in the email.',
-    generic:"Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} {card}**." },
-  { key:'cardNoun', stage:'Their invite email, and their share page', label:'What the gift card is called', max:60,
-    where:'Used wherever the reward is named, right after the amount. Change it for a business that mails real cards rather than emailing them.',
-    generic:'electronic gift card' },
-  { key:'shareTitle', stage:'Their invite email, and their share page', label:'Title when a customer shares their link', max:200,
-    where:'The heading on a phone’s share sheet.',
-    generic:'Get {reward} when you make a purchase from {name}' },
-  { key:'shareText', stage:'Their invite email, and their share page', label:'Message the share sheet fills in', multiline:true, max:400,
-    where:'What their customer sends a friend, before they edit it.',
-    generic:'I referred you — make your purchase through my link and we both get {reward}.' },
-  { key:'friendAction', stage:'The page the referred friend lands on', label:'What the friend has to do', max:120,
-    where:'Finishes “When you …, you and your friend each get a card.” A few words.',
-    generic:'make your purchase' },
-  { key:'afterPurchase', stage:'The page the referred friend lands on', label:'The same thing, past tense', max:120,
-    where:'Finishes “Once you have …” on the screen after they send the form.',
-    generic:'made your purchase' },
-  { key:'inquiryNoun', stage:'The page the referred friend lands on', label:'What their form submission is called', max:120,
-    where:'Used on the privacy page, e.g. “we keep your roofing inquiry”.',
-    generic:'inquiry' },
-  { key:'eligibility', stage:'Their terms page', label:'Who can take part', max:300,
-    where:'Finishes “Anyone who has … may refer a friend.”',
-    generic:'have made a purchase with us' },
-  { key:'qualifyingEvent', stage:'Their terms page', label:'What earns the reward', max:300,
-    where:'Finishes “A reward is earned when the referred friend …”',
-    generic:'places and completes a qualifying order' },
-  { key:'rewardCondition', stage:'Their terms page', label:'What they confirm before a card goes out', multiline:true, max:600,
-    where:'Finishes “Cards are sent once …” — this is what keeps them from paying on a cancelled order.',
-    generic:'confirms the referred order has actually been placed and a qualifying deposit received. Cancelled, refunded, or unfulfilled orders do not qualify for a reward.' },
-];
+// Fetched from the API rather than written here. The previous hardcoded copy
+// drifted to ten of twenty-six fields, so a rep building a company could not
+// set the invite email, the landing page voice or the gift-card notes -- they
+// were not on the screen at all. One list, on the server, is the fix.
+let COPY_FIELDS = [];
+let WORDING_STEPS = [];
 
-// The three steps, and which fields belong to each. Grouped by the page the
-// words come out on, which is also the order a customer meets them in.
-const WORDING_STEPS = [
-  { title:'What their past customers get', keys:['offerHow','cardNoun','shareTitle','shareText'] },
-  { title:'The page their friend lands on', keys:['friendAction','afterPurchase','inquiryNoun'] },
-  { title:'Their terms page',               keys:['eligibility','qualifyingEvent','rewardCondition'] },
-];
+function buildWordingSteps(fields){
+  COPY_FIELDS = fields || [];
+  const steps = [];
+  COPY_FIELDS.forEach((f) => {
+    const st = steps.find((x) => x.title === f.stage);
+    (st ? st.keys : (steps[steps.push({ title: f.stage || 'Wording', keys: [] }) - 1]).keys).push(f.key);
+  });
+  WORDING_STEPS = steps;
+  return steps;
+}
+
+// Loaded once per session, before the build screen needs it. A failure here
+// must not stop a rep building a company, so it falls back to whatever the
+// page last had rather than throwing.
+let copyFieldsPromise = null;
+function loadCopyFields(){
+  if(COPY_FIELDS.length) return Promise.resolve(COPY_FIELDS);
+  if(!copyFieldsPromise){
+    copyFieldsPromise = api('/copy-fields')
+      .then((r) => { buildWordingSteps(r.fields); return COPY_FIELDS; })
+      .catch((err) => { console.error('copy fields unavailable: ' + err.message); return COPY_FIELDS; });
+  }
+  return copyFieldsPromise;
+}
 
 // The pictures and pin coordinates, built by api/scripts/build-wording-shots.js
 // from the real pages. Fetched once, lazily, and never load-bearing: a rep in
@@ -1115,6 +1108,7 @@ function copyFieldsHtml(values, name){
       const common = 'name="copy_' + key + '" maxlength="' + f.max + '" data-wkey="' + esc(key) + '" ' +
         'placeholder="' + esc(wfill(f.generic, name, null)) + '"';
       return '<div class="wbox" data-wbox="' + esc(key) + '">' +
+        (f.ask ? '<p class="wask">' + esc(f.ask) + '</p>' : '') +
         '<label>' + esc(f.label) + '</label>' +
         (f.multiline
           ? '<textarea ' + common + ' rows="3">' + val + '</textarea>'
@@ -1144,6 +1138,29 @@ function copyFieldsHtml(values, name){
 
 // Called after the markup is on the page. Safe to call twice on the same
 // scope: a wizard already wired is skipped.
+// The same questions as a plain list, for a rep to paste into an email. The
+// hard part of onboarding is not the boxes, it is telling a business what is
+// wanted from them before the call -- in their words, not ours.
+function wordingQuestionsText(companyName){
+  const name = companyName || 'your business';
+  const lines = ['Hi — before we set up your referral program, a few questions.',
+    'Short answers are fine, and anything you skip we will fill with sensible wording you can change later.', ''];
+  // Grouped properly rather than by run: the fields are not in contiguous
+  // stage order, so checking "did the stage change" splits one heading into
+  // several and scatters its questions.
+  WORDING_STEPS.forEach((st) => {
+    lines.push('— ' + st.title + ' —');
+    st.keys.forEach((k) => {
+      const f = COPY_FIELDS.find((x) => x.key === k);
+      if(f) lines.push('  ' + (f.ask || f.label));
+    });
+    lines.push('');
+  });
+  lines.push('', 'We also need your logo as an image file, and the email address your customers should reply to.');
+  lines.push('', 'Thanks,');
+  return lines.join('\n').replace(/\{name\}/g, name);
+}
+
 function wireWording(scope){
   (scope || document).querySelectorAll('.wiz').forEach((wiz) => {
     if(wiz.dataset.wired) return;
@@ -1867,6 +1884,10 @@ const FILE_TYPES = 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml,appl
 async function wordingDialog(leadId){
   const lead = state.leads.find((x) => x.id === leadId);
   if(!lead) return flash('That lead is gone.');
+  // The field list lives on the server now, so it has to be here before the
+  // boxes are drawn. Without this the dialog opens empty the first time.
+  await loadCopyFields();
+  if(!COPY_FIELDS.length) return flash('Could not load the wording questions. Check your connection and try again.');
   openDialog(
     '<h3>What ' + esc(lead.company_name) + '’s customers will read</h3>' +
     '<p class="muted">Their words, in their trade. Leave a box empty and the wording shown inside it is used instead. ' +
@@ -1874,6 +1895,7 @@ async function wordingDialog(leadId){
     '<form id="wordingForm">' + copyFieldsHtml(lead.copy, lead.company_name) +
       '<div class="actions">' +
         '<button type="button" class="btn secondary" id="cancelDlg">Cancel</button>' +
+        '<button type="button" class="btn secondary" id="copyQuestions">Copy questions to send them</button>' +
         '<button class="btn" type="submit" id="saveWording">Save wording</button>' +
       '</div></form>',
     // The default dialog is 560px, which was right for a single column of
@@ -1883,6 +1905,23 @@ async function wordingDialog(leadId){
     { wide: true }
   );
   $('cancelDlg').addEventListener('click', closeDialog);
+  // For the call that ends "send me what you need and I'll get back to you".
+  $('copyQuestions').addEventListener('click', async (e) => {
+    const text = wordingQuestionsText(lead.company_name);
+    try{
+      await navigator.clipboard.writeText(text);
+      e.target.textContent = 'Copied — paste into an email';
+      setTimeout(() => { e.target.textContent = 'Copy questions to send them'; }, 2500);
+    }catch(err){
+      // Clipboard refused (older desktop app, some app views). Show the text
+      // so it can still be selected by hand rather than failing silently.
+      flash('Could not copy automatically — select the questions below.');
+      const box = document.createElement('textarea');
+      box.rows = 12; box.style.width = '100%'; box.value = text;
+      e.target.closest('.actions').before(box);
+      box.select();
+    }
+  });
   $('wordingForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = $('saveWording');
@@ -2807,7 +2846,7 @@ const BRAND_COLOR_FIELDS = [
 // Driven by the server's own list so a field added there appears here with
 // no change to this page -- there are 26 of them now and hand-writing each
 // one is how the two lists drift apart.
-function copyFieldsHtml(fields, copy){
+function brandCopyFieldsHtml(fields, copy){
   if(!Array.isArray(fields) || !fields.length) return '';
   const groups = [];
   fields.forEach((f) => {
@@ -2877,7 +2916,7 @@ async function brandDialog(tenantId){
       '<label class="fieldlabel" for="brandContact">Contact email shown to customers</label>' +
       '<input id="brandContact" name="contactEmail" type="email" maxlength="200" placeholder="(none — the Questions? line is hidden)" value="' + esc(b.contactEmail || '') + '">' +
 
-      copyFieldsHtml(cur.copy_fields, b.copy || {}) +
+      brandCopyFieldsHtml(cur.copy_fields, b.copy || {}) +
 
       '<label class="fieldlabel">Colors</label>' +
       '<div class="colorrow">' +
