@@ -94,6 +94,9 @@
   .colorfield{display:flex;flex-direction:column;gap:3px;font-size:12px;}
   .colorfield input[type=color]{width:52px;height:30px;padding:0;border:1px solid var(--line);
     border-radius:6px;background:none;cursor:pointer;}
+  .copygroup{border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:10px 0;}
+  .copygroup > summary{cursor:pointer;font-weight:600;font-size:13px;padding:4px 0;}
+  .copygroup[open] > summary{margin-bottom:6px;border-bottom:1px solid var(--line);padding-bottom:8px;}
   .nologo{font-size:12px;color:#A33;margin-top:2px;}
   .linkbtn{border:0;background:none;padding:0;font:inherit;font-size:11px;
     color:var(--muted);text-decoration:underline;cursor:pointer;}
@@ -2800,6 +2803,32 @@ const BRAND_COLOR_FIELDS = [
   ['taglineColor', 'Tagline'],
 ];
 
+// Every wording field the API knows about, grouped by where it shows up.
+// Driven by the server's own list so a field added there appears here with
+// no change to this page -- there are 26 of them now and hand-writing each
+// one is how the two lists drift apart.
+function copyFieldsHtml(fields, copy){
+  if(!Array.isArray(fields) || !fields.length) return '';
+  const groups = [];
+  fields.forEach((f) => {
+    const g = groups.find((x) => x.stage === f.stage);
+    (g ? g.fields : (groups[groups.push({ stage: f.stage, fields: [] }) - 1]).fields).push(f);
+  });
+  return groups.map((g) =>
+    '<details class="copygroup"><summary>' + esc(g.stage || 'Wording') +
+      ' <span class="muted">(' + g.fields.length + ')</span></summary>' +
+    g.fields.map((f) => {
+      const val = esc(copy[f.key] || '');
+      const ph = esc(f.placeholder || '');
+      return '<label class="fieldlabel" for="cf_' + esc(f.key) + '">' + esc(f.label || f.key) + '</label>' +
+        (f.multiline
+          ? '<textarea id="cf_' + esc(f.key) + '" data-copyfield="' + esc(f.key) + '" rows="3" maxlength="' + (f.max || 600) + '" placeholder="' + ph + '">' + val + '</textarea>'
+          : '<input id="cf_' + esc(f.key) + '" data-copyfield="' + esc(f.key) + '" type="text" maxlength="' + (f.max || 200) + '" placeholder="' + ph + '" value="' + val + '">') +
+        (f.where ? '<p class="muted small">' + esc(f.where) + '</p>' : '');
+    }).join('') +
+    '</details>').join('');
+}
+
 async function brandDialog(tenantId){
   let cur;
   try{
@@ -2848,27 +2877,7 @@ async function brandDialog(tenantId){
       '<label class="fieldlabel" for="brandContact">Contact email shown to customers</label>' +
       '<input id="brandContact" name="contactEmail" type="email" maxlength="200" placeholder="(none — the Questions? line is hidden)" value="' + esc(b.contactEmail || '') + '">' +
 
-      '<label class="fieldlabel" for="copyOfferHow">How the program works</label>' +
-      '<textarea id="copyOfferHow" data-copyfield="offerHow" rows="4" maxlength="600" placeholder="' +
-        esc(GENERIC_OFFER_HOW) + '">' + esc((b.copy || {}).offerHow || '') + '</textarea>' +
-      '<p class="muted small">The main offer line, in the invite email and on their share page. ' +
-        '{reward} becomes the gift card amount, {name} the company, {card} what they call the card. ' +
-        '**stars** bold a phrase in the email. Leave blank for the standard line.</p>' +
-
-      '<label class="fieldlabel" for="copyNoteReferrer">Note sent with the referrer\u2019s gift card</label>' +
-      '<textarea id="copyNoteReferrer" data-copyfield="rewardNoteReferrer" rows="3" maxlength="600" placeholder="' +
-        esc(GENERIC_NOTE_REFERRER) + '">' + esc((b.copy || {}).rewardNoteReferrer || '') + '</textarea>' +
-
-      '<label class="fieldlabel" for="copyNoteFriend">Note sent with the buyer\u2019s gift card</label>' +
-      '<textarea id="copyNoteFriend" data-copyfield="rewardNoteFriend" rows="3" maxlength="600" placeholder="' +
-        esc(GENERIC_NOTE_FRIEND) + '">' + esc((b.copy || {}).rewardNoteFriend || '') + '</textarea>' +
-      '<p class="muted small">These two arrive already written in the \u201csend the gift cards\u201d email, ready to copy. ' +
-        '{name} is the recipient\u2019s first name, {reward} the amount, {card} what you call the card, {business} the company. ' +
-        'Leave blank for the standard wording.</p>' +
-
-      '<label class="fieldlabel" for="copyShareButton">Share button</label>' +
-      '<input id="copyShareButton" data-copyfield="shareButton" type="text" maxlength="80" placeholder="Share My Referral Link" value="' +
-        esc((b.copy || {}).shareButton || '') + '">' +
+      copyFieldsHtml(cur.copy_fields, b.copy || {}) +
 
       '<label class="fieldlabel">Colors</label>' +
       '<div class="colorrow">' +
