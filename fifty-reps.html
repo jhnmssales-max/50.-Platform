@@ -627,6 +627,9 @@ async function start(){
   try{
     state.me = await api('/me');
     // /reps is for 50. staff only; anyone else (a dealer's login) gets a 403.
+    // Fetched once at sign-in so every screen that needs the wording list
+    // has it before it draws, rather than each one racing the request.
+    loadCopyFields();
     await loadReps();
   }catch(err){
     if(err.status === 403){
@@ -1162,6 +1165,12 @@ function wordingQuestionsText(companyName){
 }
 
 function wireWording(scope){
+  // The field list is fetched now rather than hardcoded, so this can run
+  // before it has arrived. Nothing to wire then -- and it must not throw:
+  // this is called while the Leads tab renders, so an exception here takes
+  // the whole tab down, which is exactly what it did.
+  if(!WORDING_STEPS.length || !WORDING_STEPS[0].keys.length) return;
+
   (scope || document).querySelectorAll('.wiz').forEach((wiz) => {
     if(wiz.dataset.wired) return;
     wiz.dataset.wired = '1';
