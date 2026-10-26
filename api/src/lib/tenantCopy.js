@@ -196,14 +196,6 @@ const COPY_FIELDS = [
     multiline: true,
   },
   {
-    key: 'friendAction',
-    ask: 'Finish this: “When you ______, you both get a card.” A few words.',
-    stage: 'The page a referred friend lands on',
-    label: 'What the friend has to do',
-    where: 'Finishes: “When you …, you and your friend each get a card.” A few words.',
-    max: 120,
-  },
-  {
     key: 'afterPurchase',
     ask: 'The same thing, past tense: “Once you have ______.”',
     stage: 'The page a referred friend lands on',
@@ -287,7 +279,6 @@ const GENERIC_COPY = {
   cardNoun: 'electronic gift card',
   shareTitle: 'Get {reward} when you make a purchase from {name}',
   shareText: 'I referred you — make your purchase through my link and we both get {reward}.',
-  friendAction: 'make your purchase',
   afterPurchase: 'made your purchase',
   inquiryNoun: 'inquiry',
   eligibility: 'have made a purchase with us',
