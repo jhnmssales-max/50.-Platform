@@ -34,6 +34,49 @@ const COPY_FIELDS = [
     multiline: true,
   },
   {
+    key: 'friendGreeting',
+    stage: 'The page a referred friend lands on',
+    label: 'How the referrer opens',
+    where: 'First line of the landing page, in the referrer\u2019s own voice. {referrer} is their first name.',
+    max: 120,
+  },
+  {
+    key: 'friendPitch',
+    stage: 'The page a referred friend lands on',
+    label: 'What the referrer says about the business',
+    where: 'The recommendation itself, written as the friend speaking. Name what the business actually sells. {name} is the company, {reward} the amount, {card} what you call the card.',
+    max: 600,
+    multiline: true,
+  },
+  {
+    key: 'leadButton',
+    stage: 'The page a referred friend lands on',
+    label: 'The button that submits the form',
+    where: 'The conversion point. {reward} is the amount.',
+    max: 80,
+  },
+  {
+    key: 'leadPrompt',
+    stage: 'The page a referred friend lands on',
+    label: 'The question above the message box',
+    where: 'Asks what they are after. Short and conversational beats formal.',
+    max: 120,
+  },
+  {
+    key: 'leadPlaceholder',
+    stage: 'The page a referred friend lands on',
+    label: 'The grey example inside the message box',
+    where: 'Concrete examples of what people ask for, so the box does not look like homework.',
+    max: 200,
+  },
+  {
+    key: 'responseNote',
+    stage: 'The page a referred friend lands on',
+    label: 'The reassurance under the button',
+    where: 'When they will hear back, and when the card arrives. {name} is the company.',
+    max: 300,
+  },
+  {
     key: 'rewardNoteReferrer',
     stage: 'The "send the gift cards" alert',
     label: 'What to say to the customer who referred someone',
@@ -132,6 +175,16 @@ const GENERIC_COPY = {
   offerHow:
     "Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} {card}**.",
   shareButton: 'Share My Referral Link',
+  // The landing page speaks as the friend who shared the link, not as the
+  // business. The recommendation is the thing being traded on, and it is
+  // theirs to make.
+  friendGreeting: "Hey, it's {referrer}.",
+  friendPitch:
+    "I had a great experience with {name} and thought of you. Fill out the form below, and if you end up buying something, we'll each get a {reward} {card}!",
+  leadButton: 'Get my {reward} offer',
+  leadPrompt: 'What are you thinking about?',
+  leadPlaceholder: 'A rough idea is plenty.',
+  responseNote: '{name} will reach out within one business day. Gift cards are sent after your purchase.',
   // Written to be pasted into a gift card's own message box, so: no
   // greeting line of its own beyond the name, no signature, nothing that
   // assumes it is an email rather than a card.

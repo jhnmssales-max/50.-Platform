@@ -36,6 +36,12 @@
   var DEFAULT_COPY = {
     offerHow: "Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building through that link, you each receive a {reward} Amazon E-Gift Card.",
     shareButton: "Share My Referral Link",
+    friendGreeting: "Hey, it's {referrer}.",
+    friendPitch: "I had a great experience with {name} and thought of you. Fill out the form below, and if you end up buying something, we'll each get a {reward} {card}!",
+    leadButton: "Get my {reward} offer",
+    leadPrompt: "What are you thinking about?",
+    leadPlaceholder: "A rough idea is plenty.",
+    responseNote: "{name} will reach out within one business day. Gift cards are sent after your purchase.",
     shareTitle: "Get {reward} when you make a purchase from {name}",
     shareText: "I referred you \u2014 make your purchase through my link and we both get {reward}.",
     friendAction: "place your order",
@@ -54,6 +60,10 @@
   DEFAULT.copy = DEFAULT_COPY;
 
   var current = DEFAULT;
+  // The first name of the person who shared the link. Null until the lead
+  // page resolves the code, so {referrer} falls back to "a friend" rather
+  // than printing a raw token at someone.
+  var referrerFirstName = null;
 
   function formatAmount(cents, currency){
     var whole = cents % 100 === 0;
@@ -101,7 +111,8 @@
       // Whatever this dealer calls their gift card. Falls back to the
       // wording the pages ship with rather than leaving a raw token on a
       // customer's screen.
-      .replace(/\{card\}/g, (b.copy && b.copy.cardNoun) || 'electronic gift card');
+      .replace(/\{card\}/g, (b.copy && b.copy.cardNoun) || 'electronic gift card')
+      .replace(/\{referrer\}/g, referrerFirstName || 'a friend');
   }
 
   function apply(b){
@@ -137,6 +148,13 @@
       var text = b.copy && b.copy[key];
       if(text) el.textContent = fill(text, b);
     });
+    // Same wording system, but into the placeholder attribute rather than
+    // the element's text.
+    document.querySelectorAll('[data-copy-placeholder]').forEach(function(el){
+      var key = el.getAttribute('data-copy-placeholder');
+      var text = b.copy && b.copy[key];
+      if(text) el.setAttribute('placeholder', fill(text, b));
+    });
     var amount = formatAmount(b.rewardAmountCents, b.rewardCurrency);
     document.querySelectorAll('[data-reward-amount]').forEach(function(el){ el.textContent = amount; });
     document.querySelectorAll('[data-contact-email]').forEach(function(el){
@@ -159,6 +177,13 @@
   setTimeout(reveal, 4000);
 
   window.TenantBranding = {
+    // Told by the lead page once it knows who shared the link. Re-applies,
+    // because the copy carrying {referrer} was already written to the page
+    // with the fallback in it.
+    setReferrer: function(firstName){
+      referrerFirstName = (firstName && String(firstName).trim()) || null;
+      apply(current);
+    },
     // Call with the JSON from GET /api/links/:code (or null if the code
     // didn't resolve — the page then shows 50.'s neutral look, never
     // another tenant's).
