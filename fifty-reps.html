@@ -2787,6 +2787,9 @@ function wireLogoPreview(){
 // as placeholder text so an empty box reads as "uses the standard line".
 const GENERIC_OFFER_HOW = "Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} {card}**.";
 
+const GENERIC_NOTE_REFERRER = "Hi {name} \u2014 thank you for recommending {business}. Your friend's order came through, so here is the {reward} {card} we promised you. It means a lot that you trusted us with someone you know.";
+const GENERIC_NOTE_FRIEND = "Hi {name} \u2014 thank you for your order, and for coming to us through a friend. Here is your {reward} {card}. You have a referral link of your own now too, so if you know someone else who could use us, it works the same way.";
+
 const BRAND_COLOR_FIELDS = [
   ['primaryColor', 'Primary'],
   ['accentColor', 'Accent'],
@@ -2851,6 +2854,17 @@ async function brandDialog(tenantId){
       '<p class="muted small">The main offer line, in the invite email and on their share page. ' +
         '{reward} becomes the gift card amount, {name} the company, {card} what they call the card. ' +
         '**stars** bold a phrase in the email. Leave blank for the standard line.</p>' +
+
+      '<label class="fieldlabel" for="copyNoteReferrer">Note sent with the referrer\u2019s gift card</label>' +
+      '<textarea id="copyNoteReferrer" data-copyfield="rewardNoteReferrer" rows="3" maxlength="600" placeholder="' +
+        esc(GENERIC_NOTE_REFERRER) + '">' + esc((b.copy || {}).rewardNoteReferrer || '') + '</textarea>' +
+
+      '<label class="fieldlabel" for="copyNoteFriend">Note sent with the buyer\u2019s gift card</label>' +
+      '<textarea id="copyNoteFriend" data-copyfield="rewardNoteFriend" rows="3" maxlength="600" placeholder="' +
+        esc(GENERIC_NOTE_FRIEND) + '">' + esc((b.copy || {}).rewardNoteFriend || '') + '</textarea>' +
+      '<p class="muted small">These two arrive already written in the \u201csend the gift cards\u201d email, ready to copy. ' +
+        '{name} is the recipient\u2019s first name, {reward} the amount, {card} what you call the card, {business} the company. ' +
+        'Leave blank for the standard wording.</p>' +
 
       '<label class="fieldlabel" for="copyShareButton">Share button</label>' +
       '<input id="copyShareButton" data-copyfield="shareButton" type="text" maxlength="80" placeholder="Share My Referral Link" value="' +

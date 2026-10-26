@@ -6,7 +6,7 @@ const { withUserTransaction, getCallerContext } = require('../db');
 const { createOrder } = require('../lib/tremendous');
 const { encryptionKey } = require('../lib/tenantCredentials');
 const { sendEmail } = require('../lib/postmark');
-const { buildPaidNotificationEmail } = require('../lib/paidNotificationEmail');
+const { buildPaidNotificationEmail, fillRewardNote, formatAmountForCustomer } = require('../lib/paidNotificationEmail');
 const {
   buildInviteUrl,
   ensureInviteLink,
@@ -15,6 +15,7 @@ const {
 } = require('../lib/customerInvite');
 const { tokenForSending } = require('../lib/unsubscribe');
 const { collectReferralFee } = require('../lib/referralFee');
+const tenantCopy = require('../lib/tenantCopy');
 
 const router = express.Router();
 
@@ -307,6 +308,9 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
              t.send_from_name as tenant_send_from_name,
              t.reward_amount_cents, t.reward_currency,
              t.reward_fulfillment,
+             -- Carries branding.copy, which holds this dealer's own wording
+             -- for the two notes that go out with the cards.
+             t.branding as tenant_branding,
              (select array_agg(u2.email) from users u2 where u2.tenant_id = t.id and u2.role = 'admin') as admin_emails,
              -- Whoever this dealer has been told to send the alert to. Empty
              -- for every dealer where nobody has been ticked, which is the
@@ -548,6 +552,17 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
             (paidNotification.tenant_send_domain_verified && paidNotification.tenant_send_from_name) ||
             paidNotification.tenant_name;
 
+          // A dealer that has set none of its own wording gets the generic
+          // lines, the same way every other customer-facing phrase works.
+          const noteCopy = {
+            ...tenantCopy.GENERIC_COPY,
+            ...((paidNotification.tenant_branding || {}).copy || {}),
+          };
+          // The customer-facing spelling: the note is pasted into a gift
+          // card and read by the person who was promised "$50".
+          const noteAmount = formatAmountForCustomer(
+            paidNotification.reward_amount_cents, paidNotification.reward_currency);
+
           const { subject, htmlBody, textBody } = buildPaidNotificationEmail({
             tenantName: paidNotification.tenant_name,
             // Nobody at the dealer is being addressed when 50. sends the
@@ -562,6 +577,21 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
             rewardAmountCents: paidNotification.reward_amount_cents,
             currency: paidNotification.reward_currency,
             forPlatform: platformSends,
+            // Each dealer's own wording, falling back to the generic lines.
+            // Resolved here rather than in the template so the two notes and
+            // every other customer-facing phrase come from one place.
+            referrerNote: fillRewardNote(noteCopy.rewardNoteReferrer, {
+              recipientName: paidNotification.referrer_name,
+              amount: noteAmount,
+              cardNoun: noteCopy.cardNoun,
+              businessName: paidNotification.tenant_name,
+            }),
+            friendNote: fillRewardNote(noteCopy.rewardNoteFriend, {
+              recipientName: paidNotification.friend_name,
+              amount: noteAmount,
+              cardNoun: noteCopy.cardNoun,
+              businessName: paidNotification.tenant_name,
+            }),
           });
 
 
