@@ -6,16 +6,137 @@
       "img": "assets/wording/invite-email.webp",
       "page": {
         "w": 760,
-        "h": 421
+        "h": 760
       },
       "marks": [
+        {
+          "key": "inviteSubject",
+          "box": {
+            "x": 140,
+            "y": 20,
+            "w": 480,
+            "h": 17
+          },
+          "before": "",
+          "after": ""
+        },
         {
           "key": "offerHow",
           "box": {
             "x": 140,
-            "y": 158,
+            "y": 213,
             "w": 480,
             "h": 72
+          },
+          "before": "",
+          "after": ""
+        },
+        {
+          "key": "shareButton",
+          "box": {
+            "x": 162,
+            "y": 390,
+            "w": 173,
+            "h": 17
+          },
+          "before": "",
+          "after": ""
+        },
+        {
+          "key": "inviteOpening",
+          "box": {
+            "x": 140,
+            "y": 102,
+            "w": 480,
+            "h": 96
+          },
+          "before": "",
+          "after": ""
+        },
+        {
+          "key": "inviteHowItWorks",
+          "box": {
+            "x": 140,
+            "y": 300,
+            "w": 480,
+            "h": 48
+          },
+          "before": "",
+          "after": ""
+        },
+        {
+          "key": "inviteAfterLink",
+          "box": {
+            "x": 140,
+            "y": 508,
+            "w": 480,
+            "h": 24
+          },
+          "before": "",
+          "after": ""
+        },
+        {
+          "key": "inviteClosing",
+          "box": {
+            "x": 140,
+            "y": 547,
+            "w": 480,
+            "h": 48
+          },
+          "before": "",
+          "after": ""
+        },
+        {
+          "key": "inviteSignature",
+          "box": {
+            "x": 140,
+            "y": 610,
+            "w": 480,
+            "h": 48
+          },
+          "before": "",
+          "after": ""
+        },
+        {
+          "key": "inviteDisclaimer",
+          "box": {
+            "x": 140,
+            "y": 676,
+            "w": 480,
+            "h": 19
+          },
+          "before": "",
+          "after": ""
+        }
+      ]
+    },
+    {
+      "id": "reward-alert",
+      "title": "The “send the gift cards” email you get",
+      "img": "assets/wording/reward-alert.webp",
+      "page": {
+        "w": 760,
+        "h": 616
+      },
+      "marks": [
+        {
+          "key": "rewardNoteReferrer",
+          "box": {
+            "x": 154,
+            "y": 228,
+            "w": 452,
+            "h": 112
+          },
+          "before": "",
+          "after": ""
+        },
+        {
+          "key": "rewardNoteFriend",
+          "box": {
+            "x": 154,
+            "y": 481,
+            "w": 452,
+            "h": 112
           },
           "before": "",
           "after": ""
@@ -41,6 +162,17 @@
           },
           "before": "",
           "after": ""
+        },
+        {
+          "key": "shareButton",
+          "box": {
+            "x": 260,
+            "y": 415,
+            "w": 380,
+            "h": 67
+          },
+          "before": "{name} Referral Program Thanks for choosing us. ",
+          "after": " When you recommend {name} to a friend, you're trusting us to take good care of someone you know. That means a lot to us. That's why we designed our new referral program as a simple way to say thank you. Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a {reward} electronic gift card. Thank you for supporting our business and giving us the opportunity to serve the people you care about. Your referral code Copy Demo settings Load In a real deployment this page already knows who you are from the link the staff member sent you (?code=...) — this field only exists so the demo works without that link."
         }
       ]
     },
@@ -83,30 +215,74 @@
       "img": "assets/wording/friend-page.webp",
       "page": {
         "w": 900,
-        "h": 1046
+        "h": 1042
       },
       "marks": [
         {
-          "key": "friendAction",
+          "key": "friendGreeting",
           "box": {
-            "x": 258,
-            "y": 311,
-            "w": 378,
-            "h": 36
+            "x": 250,
+            "y": 208,
+            "w": 400,
+            "h": 34
           },
-          "before": "Sarah thought you might need {name}'s services and wanted to pass along a personal recommendation. When you ",
-          "after": ", you and Sarah will each get a {reward} electronic gift card — no strings attached."
+          "before": "",
+          "after": ""
         },
         {
-          "key": "cardNoun",
+          "key": "friendPitch",
           "box": {
-            "x": 520,
-            "y": 331,
-            "w": 106,
-            "h": 15
+            "x": 250,
+            "y": 254,
+            "w": 400,
+            "h": 62
           },
-          "before": "Sarah thought you might need {name}'s services and wanted to pass along a personal recommendation. When you make your purchase, you and Sarah will each get a {reward} ",
-          "after": " — no strings attached."
+          "before": "",
+          "after": ""
+        },
+        {
+          "key": "leadPrompt",
+          "box": {
+            "x": 250,
+            "y": 342,
+            "w": 400,
+            "h": 12
+          },
+          "before": "Hey, it's {referrer}. I had a great experience with {name} and thought of you. Fill out the form below, and if you end up buying something, we'll each get a {reward} electronic gift card! ",
+          "after": " Your name Your email Phone number ZIP code Get my {reward} offer {name} will reach out within one business day. Gift cards are sent after your purchase. By submitting, you agree to be contacted about your inquiry and to our Privacy Policy and Referral Program Terms. Demo settings Referral link code (from page 2) In a real build this comes from the link itself (?ref=code) — shown here only so the demo works standalone."
+        },
+        {
+          "key": "leadPlaceholder",
+          "box": {
+            "x": 250,
+            "y": 360,
+            "w": 400,
+            "h": 80
+          },
+          "before": "",
+          "after": ""
+        },
+        {
+          "key": "leadButton",
+          "box": {
+            "x": 250,
+            "y": 765,
+            "w": 400,
+            "h": 49
+          },
+          "before": "Hey, it's {referrer}. I had a great experience with {name} and thought of you. Fill out the form below, and if you end up buying something, we'll each get a {reward} electronic gift card! What are you thinking about? Your name Your email Phone number ZIP code ",
+          "after": " {name} will reach out within one business day. Gift cards are sent after your purchase. By submitting, you agree to be contacted about your inquiry and to our Privacy Policy and Referral Program Terms. Demo settings Referral link code (from page 2) In a real build this comes from the link itself (?ref=code) — shown here only so the demo works standalone."
+        },
+        {
+          "key": "responseNote",
+          "box": {
+            "x": 252,
+            "y": 828,
+            "w": 396,
+            "h": 37
+          },
+          "before": "",
+          "after": ""
         }
       ]
     },
@@ -116,19 +292,30 @@
       "img": "assets/wording/friend-confirm.webp",
       "page": {
         "w": 900,
-        "h": 1166
+        "h": 1163
       },
       "marks": [
         {
           "key": "afterPurchase",
           "box": {
             "x": 371,
-            "y": 1016,
+            "y": 1012,
             "w": 123,
             "h": 15
           },
           "before": "Thanks, Sarah — we've got your info and someone will reach out soon. Once you've ",
           "after": ", you and Sarah will each get a {reward} electronic gift card."
+        },
+        {
+          "key": "cardNoun",
+          "box": {
+            "x": 423,
+            "y": 1034,
+            "w": 110,
+            "h": 15
+          },
+          "before": "Thanks, Sarah — we've got your info and someone will reach out soon. Once you've made your purchase, you and Sarah will each get a {reward} ",
+          "after": "."
         }
       ]
     },

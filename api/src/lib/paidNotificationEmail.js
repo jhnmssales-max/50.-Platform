@@ -79,9 +79,11 @@ function buildPaidNotificationEmail({
   // face, so it reads as "these are the words" rather than as more of the
   // alert. Selecting it on a phone then picks up the message and nothing
   // around it.
-  function noteBlock(note) {
+  function noteBlock(note, key) {
     if (!note) return '';
-    return `<div style="background:#FFFFFF;border:1px solid #E6E0D5;border-radius:6px;padding:10px 12px;margin:8px 0 0;">
+    // Inert in email clients; lets the wording screenshots pin this block.
+    const mark = key ? ` data-copy="${key}"` : '';
+    return `<div style="background:#FFFFFF;border:1px solid #E6E0D5;border-radius:6px;padding:10px 12px;margin:8px 0 0;"${mark}>
       <p style="margin:0 0 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8A8A8A;">Send with their card</p>
       <p style="margin:0;font-family:Georgia,'Times New Roman',serif;font-size:14px;line-height:1.55;color:#1B1B1B;white-space:pre-wrap;">${escapeHtml(note)}</p>
     </div>`;
@@ -117,14 +119,14 @@ ${friendNote ? `
     <p style="margin:0 0 2px;">${escapeHtml(referrerName)}</p>
     <p style="margin:0 0 2px;">${escapeHtml(referrerEmail)}${referrerPhone ? ` / ${escapeHtml(referrerPhone)}` : ''}</p>
     <p style="margin:0;">Amount: ${escapeHtml(amount)}</p>
-    ${noteBlock(referrerNote)}
+    ${noteBlock(referrerNote, 'rewardNoteReferrer')}
   </div>
   <div style="font-size:14px;line-height:1.6;color:#3a3a3a;background:#F8F5F0;border-radius:8px;padding:12px 14px;margin:12px 0;">
     <p style="margin:0 0 4px;"><strong>Referred friend</strong> (submitted the lead)</p>
     <p style="margin:0 0 2px;">${escapeHtml(friendName)}</p>
     <p style="margin:0 0 2px;">${escapeHtml(friendEmail)}${friendPhone ? ` / ${escapeHtml(friendPhone)}` : ''}</p>
     <p style="margin:0;">Amount: ${escapeHtml(amount)}</p>
-    ${noteBlock(friendNote)}
+    ${noteBlock(friendNote, 'rewardNoteFriend')}
   </div>
 </div>`;
 

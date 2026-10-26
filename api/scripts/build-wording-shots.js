@@ -49,6 +49,10 @@ const SHOTS = [
     id: 'invite-email',
     title: 'The email their past customer gets',
     width: 760,
+    // Every optional block is given sample wording, because a block left
+    // blank is left out of the email entirely -- and a rep needs to see
+    // where their words would land, not an email missing the paragraph
+    // they are being asked to write.
     html: () => buildInviteEmail({
       tenantName: SAMPLE.tenantName,
       customerName: SAMPLE.customerName,
@@ -58,25 +62,53 @@ const SHOTS = [
       rewardCurrency: 'USD',
       logoUrl: null,
       offerHow: GENERIC_COPY.offerHow,
-    }).htmlBody,
-    keys: ['offerHow'],
-    // The email is built as a string, not a page with data-copy spans, so the
-    // offer paragraph is found by its text instead and tagged on the fly.
-    prep: (copy) => {
-      const want = copy.offerHow.replace(/\*\*/g, '').replace(/\{reward\}/g, '$50').replace(/\{name\}/g, 'Your Business');
-      const first = want.split(' ').slice(0, 6).join(' ');
-      const el = [...document.querySelectorAll('p,td,div')]
-        .reverse()
-        .find((n) => n.children.length <= 2 && n.textContent.includes(first));
-      if (el) el.setAttribute('data-copy', 'offerHow');
+      shareButton: GENERIC_COPY.shareButton,
+      inviteSubject: GENERIC_COPY.inviteSubject,
+      inviteOpening: GENERIC_COPY.inviteOpening,
+      inviteHowItWorks: 'Share your link with anyone who has been talking about one. They fill in a short form and we take it from there.',
+      inviteAfterLink: 'Text it, email it, or post it wherever your friends are.',
+      inviteClosing: GENERIC_COPY.inviteClosing,
+      inviteSignature: 'Sam Carter\nYour Business',
+      inviteDisclaimer: 'Cards are sent once the purchase is complete.',
+    }).htmlBody.replace('<div style="font-family:Arial',
+      '<div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto 10px;padding:0 0 10px;border-bottom:1px solid #E6E0D5;">' +
+      '<div style="font-size:11px;color:#8A887F;text-transform:uppercase;letter-spacing:.06em;">Subject</div>' +
+      '<div style="font-size:15px;font-weight:bold;color:#1B1B1B;" data-copy="inviteSubject">' +
+      GENERIC_COPY.inviteSubject.replace(/\{name\}/g, SAMPLE.tenantName).replace(/\{reward\}/g, '$50') +
+      '</div></div><div style="font-family:Arial'),
+    // No prep hack any more: inviteEmail.js marks each block with its own
+    // data-copy, so these are found the same way every page field is.
+    keys: ['inviteSubject', 'offerHow', 'shareButton', 'inviteOpening', 'inviteHowItWorks',
+           'inviteAfterLink', 'inviteClosing', 'inviteSignature', 'inviteDisclaimer'],
+  },
+  {
+    id: 'reward-alert',
+    title: 'The \u201csend the gift cards\u201d email you get',
+    width: 760,
+    html: () => {
+      const { buildPaidNotificationEmail, fillRewardNote, formatAmountForCustomer } = require('../src/lib/paidNotificationEmail');
+      const amount = formatAmountForCustomer(5000, 'USD');
+      const note = (t, who) => fillRewardNote(t, { recipientName: who, amount, cardNoun: GENERIC_COPY.cardNoun, businessName: SAMPLE.tenantName });
+      return buildPaidNotificationEmail({
+        tenantName: SAMPLE.tenantName,
+        staffName: 'Sam',
+        referrerName: 'Dana Whitfield', referrerEmail: 'dana@example.com', referrerPhone: '(717) 555-0142',
+        friendName: 'Marcus Lee', friendEmail: 'marcus@example.com', friendPhone: '(717) 555-0198',
+        rewardAmountCents: 5000, currency: 'USD',
+        referrerNote: note(GENERIC_COPY.rewardNoteReferrer, 'Dana Whitfield'),
+        friendNote: note(GENERIC_COPY.rewardNoteFriend, 'Marcus Lee'),
+      }).htmlBody;
     },
+    keys: ['rewardNoteReferrer', 'rewardNoteFriend'],
+    // Same reason as the invite email: the notes are marked where they are
+    // rendered, so the pin follows if the layout moves.
   },
   {
     id: 'share-page',
     title: 'Their customer’s share page',
     file: 'fifty-template-customer.html',
     width: 900,
-    keys: ['offerHow'],
+    keys: ['offerHow', 'shareButton'],
   },
   {
     id: 'share-sheet',
@@ -98,7 +130,7 @@ const SHOTS = [
     // where a rep meets it: the main offer line, in the sentence a customer
     // actually reads. It appears on the terms page too, and querySelector
     // takes the first match, which is this one.
-    keys: ['friendAction', 'cardNoun'],
+    keys: ['friendGreeting', 'friendPitch', 'leadPrompt', 'leadPlaceholder', 'leadButton', 'responseNote'],
     // Without a link code the page falls back to "A friend", which reads
     // oddly mid-sentence ("you and A friend will each get"). A real name
     // makes the captured sentence read the way a customer will see it.
@@ -111,7 +143,7 @@ const SHOTS = [
     title: 'What their friend sees after sending the form',
     file: 'fifty-template-lead.html',
     width: 900,
-    keys: ['afterPurchase'],
+    keys: ['afterPurchase', 'cardNoun'],
     // afterPurchase lives on the confirmation panel, which is display:none
     // until the form is sent. Shooting the page as-loaded would record a
     // zero-size box and pin the marker to the top-left corner.
@@ -177,10 +209,17 @@ function shareSheetHtml(copy) {
 </div>`;
 }
 
-// Replaces {reward} and {name} the same way the live pages do, so the picture
+// Replaces {reward}, {name} and {card} the same way the live pages do, so the
+// picture
 // reads like a finished page rather than a template.
 function fill(s) {
-  return String(s).replace(/\*\*/g, '').replace(/\{reward\}/g, '$50').replace(/\{name\}/g, SAMPLE.tenantName);
+  return String(s)
+    .replace(/\*\*/g, '')
+    .replace(/\{reward\}/g, '$50')
+    .replace(/\{name\}/g, SAMPLE.tenantName)
+    // Left as a raw {card} before, so the example email showed a rep a pair
+    // of braces where a customer sees "electronic gift card".
+    .replace(/\{card\}/g, GENERIC_COPY.cardNoun);
 }
 
 async function main() {
@@ -227,12 +266,18 @@ async function main() {
     const marks = await page.evaluate((keys) => {
       const BLOCK = 'p,li,h1,h2,h3,div';
       return keys.map((key) => {
-        const el = document.querySelector('[data-copy="' + key + '"]');
+        // Some wording lands in a placeholder attribute rather than in the
+        // text of an element -- the grey example inside the message box. It
+        // is still a thing a rep writes and still needs pointing at.
+        const el = document.querySelector('[data-copy="' + key + '"]')
+          || document.querySelector('[data-copy-placeholder="' + key + '"]');
         if (!el) return { key, missing: true };
         const r = el.getBoundingClientRect();
-        const par = el.closest(BLOCK) || el.parentElement;
-        const full = par ? par.textContent : el.textContent;
-        const own = el.textContent;
+        const isPlaceholder = el.hasAttribute('data-copy-placeholder')
+          && el.getAttribute('data-copy-placeholder') === key;
+        const par = isPlaceholder ? el : (el.closest(BLOCK) || el.parentElement);
+        const full = isPlaceholder ? (el.getAttribute('placeholder') || '') : (par ? par.textContent : el.textContent);
+        const own = isPlaceholder ? full : el.textContent;
         const i = full.indexOf(own);
         const tidy = (s) => s.replace(/\s+/g, ' ').replace(/ /g, ' ');
         return {

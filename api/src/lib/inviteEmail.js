@@ -59,10 +59,15 @@ function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, re
   // A block becomes a paragraph, or nothing at all. **stars** bold a phrase,
   // and a blank line inside a block starts a new paragraph, so a dealer can
   // write a signature on two lines without knowing any HTML.
-  const para = (text, style = 'font-size:15px;line-height:1.6;') => {
+  const para = (text, style = 'font-size:15px;line-height:1.6;', key = '') => {
     if (!text) return '';
+    // data-* attributes are inert in every email client, and they let the
+    // screenshot builder find each block by key rather than matching its
+    // text -- which is how it found the offer line before, and would have
+    // gone wrong the moment that sentence was reworded.
+    const mark = key ? ` data-copy="${key}"` : '';
     return text.split(/\n\s*\n/).map((chunk) =>
-      `<p style="${style}">` +
+      `<p style="${style}"${mark}>` +
       escapeHtml(chunk.trim()).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>') +
       '</p>').join('');
   };
@@ -103,23 +108,23 @@ function buildInviteEmail({ tenantName, customerName, inviteUrl, buttonColor, re
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;color:#1B1B1B;">
   ${logoHtml}
   <p style="font-size:15px;line-height:1.6;">Hi ${escapeHtml(firstName)},</p>
-  ${para(openingText)}
-  <p style="font-size:15px;line-height:1.6;">
+  ${para(openingText, 'font-size:15px;line-height:1.6;', 'inviteOpening')}
+  <p style="font-size:15px;line-height:1.6;" data-copy="offerHow">
     ${offerHtml}
   </p>
-  ${para(howText)}
+  ${para(howText, 'font-size:15px;line-height:1.6;', 'inviteHowItWorks')}
   <p style="margin:28px 0;">
     <a href="${inviteUrl}" style="background:${btnColor};color:#FFFFFF;text-decoration:none;
        padding:14px 22px;border-radius:8px;font-weight:bold;display:inline-block;">
-      ${escapeHtml(shareLabel)}
+      <span data-copy="shareButton">${escapeHtml(shareLabel)}</span>
     </a>
   </p>
   <p style="font-size:13px;line-height:1.6;color:#4A4A4A;margin:0 0 4px;">Your personal referral link:</p>
   <p style="font-size:13px;color:#6B6A63;word-break:break-all;margin:0 0 18px;">${inviteUrl}</p>
-  ${para(afterLinkText)}
-  ${para(closingText)}
-  ${para(signatureText)}
-  ${para(disclaimerText, 'font-size:12px;line-height:1.6;color:#8A887F;margin-top:18px;')}
+  ${para(afterLinkText, 'font-size:15px;line-height:1.6;', 'inviteAfterLink')}
+  ${para(closingText, 'font-size:15px;line-height:1.6;', 'inviteClosing')}
+  ${para(signatureText, 'font-size:15px;line-height:1.6;', 'inviteSignature')}
+  ${para(disclaimerText, 'font-size:12px;line-height:1.6;color:#8A887F;margin-top:18px;', 'inviteDisclaimer')}
   <p style="font-size:12px;color:#8A887F;border-top:1px solid #E6E0D5;padding-top:14px;margin-top:24px;">
     Don't want emails about ${escapeHtml(possessive(tenantName))} referral program?
     <a href="${unsubscribeUrl}" style="color:#8A887F;">Unsubscribe</a>.

@@ -44,7 +44,6 @@
     responseNote: "{name} will reach out within one business day. Gift cards are sent after your purchase.",
     shareTitle: "Get {reward} when you make a purchase from {name}",
     shareText: "I referred you \u2014 make your purchase through my link and we both get {reward}.",
-    friendAction: "place your order",
     afterPurchase: "made your purchase",
     eligibility: "have placed an order with us",
     qualifyingEvent: "places and completes an order for a building",
