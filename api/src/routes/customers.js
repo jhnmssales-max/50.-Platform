@@ -4,6 +4,7 @@ const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
 const { withUserTransaction, getCallerContext } = require('../db');
 const { buildInviteUrl, ensureInviteLink, sendInviteEmail } = require('../lib/customerInvite');
+const { noteDeliveryOutcome } = require('../lib/deliveryOutcome');
 const { tokenForSending } = require('../lib/unsubscribe');
 
 const router = express.Router();
@@ -147,8 +148,12 @@ router.post('/customers', requireAuth, async (req, res, next) => {
       });
 
       responseBody.email = { sent: true, resent: result.reused };
+      await noteDeliveryOutcome(result.customer.id, null);
     } catch (emailErr) {
       responseBody.email = { sent: false, error: emailErr.message };
+      // Kept on the customer, so the dealer's monthly summary can say which
+      // addresses are not reaching anyone.
+      await noteDeliveryOutcome(result.customer.id, emailErr);
     }
 
     res.status(result.reused ? 200 : 201).json(responseBody);

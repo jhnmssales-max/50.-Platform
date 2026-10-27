@@ -23,6 +23,7 @@ const { sendEmail } = require('../lib/postmark');
 const { buildInviteFollowupEmail } = require('../lib/inviteFollowupEmail');
 const { buildInviteUrl, resolveLogoUrl } = require('../lib/customerInvite');
 const { unsubscribeUrl, tokenForSending } = require('../lib/unsubscribe');
+const { noteDeliveryOutcome } = require('../lib/deliveryOutcome');
 
 const MAX_FOLLOWUPS = 3;
 const STALE_CLAIM = "15 minutes";
@@ -185,12 +186,17 @@ async function runInviteFollowupCycle({ limit = 200, dryRun = false } = {}) {
       await withServiceRole((client) =>
         client.query('update invite_followups set sent_at = now() where id = $1', [claimId])
       );
+      await noteDeliveryOutcome(person.customer_id, null);
       summary.sent += 1;
       console.log(
         `INVITE_FOLLOWUP sent #${person.sequence} to ${person.email} for ${person.tenant_name}`
       );
     } catch (err) {
       await release(claimId);
+      // A reminder refused because the address is suppressed is the clearest
+      // signal there is that this customer stopped being reachable, and the
+      // dealer should see it in their monthly summary.
+      await noteDeliveryOutcome(person.customer_id, err);
       summary.failed += 1;
       console.error(
         `INVITE_FOLLOWUP failed #${person.sequence} to ${person.email} for ${person.tenant_name}: ${err.message}`

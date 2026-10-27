@@ -25,6 +25,7 @@
 const { withServiceRole, assertServiceRoleConnection } = require('../db');
 const { buildInviteUrl, ensureInviteLink, sendInviteEmail } = require('./customerInvite');
 const { tokenForSending } = require('./unsubscribe');
+const { noteDeliveryOutcome } = require('./deliveryOutcome');
 
 // The 50. tenant's own slug. is_platform_staff() in the rep-pipeline
 // migration is defined against this same value -- 50. is a tenant like any
@@ -130,6 +131,9 @@ async function enrolActivatedDealerAdmins({ dealerTenantId }) {
       enrolled.push({
         name: admin.name,
         email: admin.email,
+        // Carried through so the send's outcome can be recorded against the
+        // right customer row rather than guessed at from the address.
+        customerId: created.id,
         code: link.code,
         unsubscribeToken: await tokenForSending(client, created.id),
       });
@@ -157,7 +161,9 @@ async function sendPlatformInvites(enrolled) {
         replyToEmail: process.env.BILLING_SUPPORT_EMAIL || 'joseph@referwith50.com',
       });
       console.log(`Sent the 50. referral invite to activated dealer admin ${person.email} (link ${person.code})`);
+      await noteDeliveryOutcome(person.customerId, null);
     } catch (err) {
+      await noteDeliveryOutcome(person.customerId, err);
       // The link exists and works regardless; this only means they were not
       // told about it. Name the address so it can be resent by hand.
       console.error(
