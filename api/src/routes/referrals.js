@@ -16,6 +16,7 @@ const {
 const { tokenForSending } = require('../lib/unsubscribe');
 const { collectReferralFee } = require('../lib/referralFee');
 const tenantCopy = require('../lib/tenantCopy');
+const { noteDeliveryOutcome } = require('../lib/deliveryOutcome');
 
 const router = express.Router();
 
@@ -659,7 +660,9 @@ router.patch('/referrals/:id/status', requireAuth, async (req, res, next) => {
         console.log(
           `Sent referral invite to converted friend ${friendInvite.email} for referral ${referralId}`
         );
+        await noteDeliveryOutcome(friendInvite.id, null);
       } catch (emailErr) {
+        await noteDeliveryOutcome(friendInvite.id, emailErr);
         // Names the address: the link exists and works either way, so what
         // a human needs from this line is who to resend to.
         console.error(

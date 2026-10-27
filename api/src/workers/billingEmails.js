@@ -39,6 +39,7 @@ const {
   buildReferralStatementEmail,
   buildAnnualSummaryEmail,
 } = require('../lib/billingEmails');
+const { buildMonthlyActivityEmail } = require('../lib/monthlyActivityEmail');
 
 // Fixed and dedicated to this worker (rewards 5031982004, renewals ...05).
 const ADVISORY_LOCK_KEY = 5031982006;
@@ -358,6 +359,105 @@ async function sweepReferralStatements({ now, dryRun, stripeMode, clock }) {
 }
 
 // ---------------------------------------------------------------------------
+// Monthly activity -- who was invited, and who cannot be reached
+// ---------------------------------------------------------------------------
+// The one monthly email every dealer gets. The referral statement above is a
+// bill: it goes only to a dealer with fees to report, so a dealer with a
+// quiet month hears nothing and an in-house company never hears anything at
+// all. This is the other half, and it names people instead of totalling
+// money.
+async function buildMonthlyActivity(tenant, admins, clock) {
+  // Invited during the month, in Eastern time, with how each send went and
+  // how many referrals that person has actually brought in. Counted from
+  // referral_links.created_at because that is the moment the customer got a
+  // link -- customers.created_at would also count somebody entered months
+  // earlier and only invited now.
+  const { rows: invited } = await pool.query(
+    `select c.id, c.name, c.email, c.unsubscribed_at, c.delivery_failed_at, c.delivery_error,
+            (select count(*)::int from referrals r
+               join referral_links l2 on l2.id = r.referral_link_id
+              where l2.customer_id = c.id) as referrals
+       from customers c
+       join referral_links l on l.customer_id = c.id and l.kind = 'invite'
+      where c.tenant_id = $1
+        and l.created_at >= $2::timestamptz and l.created_at < $3::timestamptz
+      group by c.id, c.name, c.email, c.unsubscribed_at, c.delivery_failed_at, c.delivery_error
+      order by min(l.created_at)`,
+    [tenant.id, clock.previous_month_start.toISOString(), clock.month_start.toISOString()]
+  );
+
+  // Unreachable whenever they were invited. A customer who bounced in August
+  // is still unreachable in October, and the month they were added is not the
+  // month the dealer can do anything about it.
+  const { rows: unreachable } = await pool.query(
+    `select c.name, c.email from customers c
+      where c.tenant_id = $1 and c.delivery_failed_at is not null
+      order by c.delivery_failed_at desc limit 25`,
+    [tenant.id]
+  );
+
+  const { rows: [counts] } = await pool.query(
+    `select (select count(*)::int from customers where tenant_id = $1
+               and email not like '%@removed.invalid') as total_customers,
+            (select count(*)::int from referrals r
+              where r.tenant_id = $1
+                and r.submitted_at >= $2::timestamptz and r.submitted_at < $3::timestamptz) as referrals_this_month`,
+    [tenant.id, clock.previous_month_start.toISOString(), clock.month_start.toISOString()]
+  );
+
+  // Nothing invited, nothing broken, nothing referred: there is no report to
+  // write, and a monthly email saying so is the kind of mail people filter.
+  if (!invited.length && !unreachable.length && !counts.referrals_this_month) return { nothing: true };
+
+  return {
+    email: buildMonthlyActivityEmail({
+      tenantName: tenant.name,
+      period: clock.previous_month,
+      invited,
+      totalCustomers: counts.total_customers,
+      referralsThisMonth: counts.referrals_this_month,
+      unreachable,
+    }),
+    detail: {
+      invited: invited.length,
+      unreachable: unreachable.length,
+      referrals: counts.referrals_this_month,
+    },
+  };
+}
+
+async function sweepMonthlyActivity({ now, dryRun, clock }) {
+  const outcomes = {};
+  if (now < clock.month_send_after) return outcomes; // before 9 am Eastern on the 1st
+  // Every open company, in-house included. No billing_required and no
+  // activation gate: a company that is live has customers worth reporting on
+  // whether or not it pays 50. anything.
+  const { rows } = await pool.query(
+    `select ${TENANT_COLUMNS}
+     from tenants t
+     where t.closed_at is null
+       and not exists (
+         select 1 from billing_emails e
+         where e.tenant_id = t.id and e.kind = 'monthly_activity' and e.period = $1 and e.sent_at is not null)
+     order by t.name
+     limit $2`,
+    [clock.previous_month, MAX_TENANTS_PER_JOB]
+  );
+  for (const tenant of rows) {
+    const r = await claimAndSend({
+      tenant,
+      kind: 'monthly_activity',
+      period: clock.previous_month,
+      copySupport: false,
+      dryRun,
+      build: (admins) => buildMonthlyActivity(tenant, admins, clock),
+    });
+    outcomes[r.outcome] = (outcomes[r.outcome] || 0) + 1;
+  }
+  return outcomes;
+}
+
+// ---------------------------------------------------------------------------
 // Yearly summary
 // ---------------------------------------------------------------------------
 async function buildAnnualSummary(tenant, admins, clock, stripeMode) {
@@ -466,6 +566,7 @@ async function runBillingEmailCycle({ dryRun = false, now = new Date() } = {}) {
       const jobs = [
         ['activationReceipts', () => sweepActivationReceipts({ dryRun, stripeMode })],
         ['referralSummaries', () => sweepReferralStatements({ now, dryRun, stripeMode, clock })],
+        ['monthlyActivity', () => sweepMonthlyActivity({ now, dryRun, clock })],
         ['yearlySummaries', () => sweepAnnualSummaries({ now, dryRun, stripeMode, clock })],
       ];
       for (const [name, job] of jobs) {

@@ -38,6 +38,9 @@ const REQUIRED_COLUMNS = [
   ['tenants', 'invite_followup_months', '20261028000000_invite_followups'],
   ['customers', 'unsubscribed_at', '20261028000000_invite_followups'],
   ['customers', 'unsubscribe_token', '20261028000000_invite_followups'],
+  // 20261027000000_record_delivery_failures
+  ['customers', 'delivery_failed_at', '20261027000000_record_delivery_failures'],
+  ['customers', 'delivery_error', '20261027000000_record_delivery_failures'],
 ];
 
 // Returns the entries this database does not have, in the order listed.
