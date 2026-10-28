@@ -44,6 +44,7 @@
 // A heads-up email goes out NOTICE_LEAD_DAYS before each charge, once per
 // renewal period (tenants.renewal_notice_sent_for).
 const { pool, withServiceRole, assertRowsAffected, assertServiceRoleConnection } = require('../db');
+const { isQuietDay } = require('../lib/quietDay');
 const { assertRealStripeConfigured, chargeOffSession, retrievePaymentIntent } = require('../lib/stripe');
 const { activationState } = require('../lib/activation');
 const { sendEmail } = require('../lib/postmark');
@@ -378,7 +379,16 @@ async function notifyAdmins(tenantId, kind, details) {
 // The two-weeks-ahead heads-up. Claims the send first (so two overlapping
 // runs can't both send it), and releases the claim if the send fails so the
 // next hourly run tries again.
-async function sendUpcomingNotices({ dryRun, stripeMode }) {
+async function sendUpcomingNotices({ dryRun, stripeMode, now = new Date() }) {
+  // Sunday holds the advance notice and nothing else in this worker. The
+  // charge itself, the receipt for it, and a failed-payment alert all still
+  // run today: one is money and the other two are a dealer needing to know
+  // now. The notice goes out NOTICE_LEAD_DAYS ahead, so a day later is still
+  // days of warning, and it is claimed per renewal date -- Monday sends it.
+  if (isQuietDay(now)) {
+    log('quiet_day', { note: 'Sunday: renewal notices held until Monday; charges and receipts unaffected' });
+    return 0;
+  }
   const { rows: candidates } = await pool.query(
     `select t.id, t.name, t.slug, t.renewal_due_at, t.renewal_due_at::text as due_text, t.annual_fee_cents, t.reward_currency,
             t.billing_required, t.billing_status, t.activation_paid_at, t.activation_livemode
@@ -430,7 +440,7 @@ async function sendUpcomingNotices({ dryRun, stripeMode }) {
 // The cycle
 // ---------------------------------------------------------------------------
 
-async function runAnnualRenewalCycle({ dryRun = false } = {}) {
+async function runAnnualRenewalCycle({ dryRun = false, now = new Date() } = {}) {
   // Same hard gate as every other money-moving path: a stand-in or
   // placeholder Stripe configuration can't make a renewal look paid.
   const { mode: stripeMode } = assertRealStripeConfigured();
@@ -477,7 +487,7 @@ async function runAnnualRenewalCycle({ dryRun = false } = {}) {
       }
 
       try {
-        summary.noticesSent = await sendUpcomingNotices({ dryRun, stripeMode });
+        summary.noticesSent = await sendUpcomingNotices({ dryRun, stripeMode, now });
       } catch (err) {
         summary.errored += 1;
         console.error('RENEWAL_WORKER error sending renewal notices:', err);

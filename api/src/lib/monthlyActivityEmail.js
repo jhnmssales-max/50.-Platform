@@ -90,8 +90,18 @@ function buildMonthlyActivityEmail({
     ${totalCustomers != null ? ` You have <strong>${totalCustomers}</strong> customer${totalCustomers === 1 ? '' : 's'} in the program altogether.` : ''}
   </p>`;
 
+  // A header, so the email identifies itself before it starts listing people.
+  // The company's own name is the title because that is what a dealer
+  // recognises in a crowded inbox; "50." and the month sit under it.
+  const header = `
+  <div style="border-bottom:2px solid #1B1B1B;padding-bottom:10px;margin-bottom:18px;">
+    <div style="font-size:19px;font-weight:bold;letter-spacing:-.01em;">${escapeHtml(tenantName)}</div>
+    <div style="font-size:13px;color:#8A887F;margin-top:3px;">Referral program &middot; ${escapeHtml(month)} &middot; sent by 50.</div>
+  </div>`;
+
   const htmlBody = `
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1B1B1B;">
+  ${header}
   <p style="font-size:15px;line-height:1.6;">${escapeHtml(lead)}</p>
   ${table}
   ${stuck}
@@ -107,6 +117,7 @@ function buildMonthlyActivityEmail({
   }).join('\n');
 
   const textBody = [
+    `${tenantName} — referral program — ${month}`,
     lead,
     n ? textRows : null,
     unreachable.length

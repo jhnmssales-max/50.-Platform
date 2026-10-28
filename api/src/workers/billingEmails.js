@@ -29,6 +29,7 @@
 // Structures, North Mountain Structures, 50. itself) and test-mode
 // activations on a live key are never emailed.
 const { pool, withServiceRole, assertRowsAffected, assertServiceRoleConnection } = require('../db');
+const { isQuietDay } = require('../lib/quietDay');
 const { sendEmail } = require('../lib/postmark');
 const { activationState } = require('../lib/activation');
 const { stripeKeyMode, retrievePaymentReceiptDetails } = require('../lib/stripe');
@@ -563,12 +564,22 @@ async function runBillingEmailCycle({ dryRun = false, now = new Date() } = {}) {
     try {
       const clock = await clockAt(now);
       const summary = { dryRun, stripeMode, errored: 0 };
+      // Activation receipts are a reply to money somebody just paid, so they
+      // go out every day. The other three are the platform's own scheduled
+      // mail and wait for Monday. Each claims its send in the database before
+      // making it, keyed to the period it covers, so Monday's run sends
+      // exactly what today's would have -- once, not twice.
+      const quiet = isQuietDay(now);
       const jobs = [
         ['activationReceipts', () => sweepActivationReceipts({ dryRun, stripeMode })],
         ['referralSummaries', () => sweepReferralStatements({ now, dryRun, stripeMode, clock })],
         ['monthlyActivity', () => sweepMonthlyActivity({ now, dryRun, clock })],
         ['yearlySummaries', () => sweepAnnualSummaries({ now, dryRun, stripeMode, clock })],
-      ];
+      ].filter(([name]) => !quiet || name === 'activationReceipts');
+      if (quiet) {
+        summary.quietDay = true;
+        log('quiet_day', { note: 'Sunday: scheduled mail held until Monday; activation receipts still send' });
+      }
       for (const [name, job] of jobs) {
         try {
           summary[name] = await job();

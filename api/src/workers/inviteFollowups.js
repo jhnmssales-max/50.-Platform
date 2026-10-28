@@ -19,6 +19,7 @@
 // servers, can never both send the same person the same reminder.
 
 const { withServiceRole, assertServiceRoleConnection } = require('../db');
+const { isQuietDay, quietDaySummary } = require('../lib/quietDay');
 const { sendEmail } = require('../lib/postmark');
 const { buildInviteFollowupEmail } = require('../lib/inviteFollowupEmail');
 const { buildInviteUrl, resolveLogoUrl } = require('../lib/customerInvite');
@@ -158,7 +159,14 @@ async function sendOne(person) {
 // One pass. `limit` bounds a single cycle so a dealer switching the setting
 // on for a list of thousands sends them over several hours rather than in
 // one burst that a mail provider would read as a blast.
-async function runInviteFollowupCycle({ limit = 200, dryRun = false } = {}) {
+async function runInviteFollowupCycle({ limit = 200, dryRun = false, now = new Date() } = {}) {
+  // Every one of these is the platform mailing a customer on its own schedule.
+  // A follow-up is due once an invite is older than the interval, so a day
+  // skipped is a day later, never a send missed.
+  if (isQuietDay(now)) {
+    console.log('INVITE_FOLLOWUP quiet_day Sunday: holding follow-ups until Monday');
+    return quietDaySummary({ due: 0, skipped: 0, failed: 0, dryRun });
+  }
   const due = await withServiceRole(async (client) => {
     await assertServiceRoleConnection(client);
     return findDue(client, limit);
