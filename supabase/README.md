@@ -146,11 +146,26 @@ supabase db push
 **Against local Supabase** (`supabase start`), or **plain Postgres** for a quick check:
 
 ```bash
-psql "$DATABASE_URL" -f supabase/migrations/20260826000000_init_schema.sql
-psql "$DATABASE_URL" -f supabase/migrations/20260826020000_rls_policies.sql
-psql "$DATABASE_URL" -f supabase/migrations/20260826030000_public_link_functions.sql
-psql "$DATABASE_URL" -f supabase/migrations/20260826040000_audit_log_admin_insert.sql
+for f in supabase/migrations/*.sql; do
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f" || break
+done
 ```
+
+Filename order is the apply order, and the whole directory replays cleanly in
+that order onto an empty database — verified 2026-10-28, all 34 of them. Two
+things it needs first, neither of which is a bug in the migrations:
+
+- the `auth` stand-ins described in the note below, on plain Postgres;
+- a `tenants` row for each slug in `20261001000000_activation_gate_and_referral_fee.sql`.
+  That migration deliberately aborts rather than run without them, because the
+  exemption it grants is what keeps those companies from being billed. On a
+  fresh database, insert the three tenants before you reach it.
+
+If you add a migration that alters something an earlier-numbered one created,
+check the number: a file that sorts before the migration creating the column it
+touches works by hand and fails on replay. That happened once, and the fix was
+to renumber -- see the note at the top of
+`20261029000000_followups_default_six_months.sql`.
 
 Note: this depends on Supabase's own `auth` schema (`auth.users`, `auth.uid()`) and its standard `anon`/`authenticated` roles. Running against a Postgres instance with none of that (i.e. not Supabase, and not `supabase start`) will fail unless you first create stand-ins — see `auth.uid()`'s definition in the RLS migration for the shape Supabase provides.
 

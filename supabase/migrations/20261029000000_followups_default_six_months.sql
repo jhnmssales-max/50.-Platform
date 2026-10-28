@@ -1,3 +1,13 @@
+-- Renumbered from 20261026000000 to 20261029000000 on 2026-10-28, and the
+-- number is the whole point of the file's name: this migration alters
+-- tenants.invite_followup_months, and that column is ADDED by
+-- 20261028000000_invite_followups.sql. Under the old number this one sorted
+-- two days earlier than the migration that creates the column it changes, so
+-- replaying the directory in filename order -- `supabase db push`, a rebuild,
+-- a staging copy -- failed here with "column invite_followup_months does not
+-- exist". The live database was never affected: both were applied by hand, in
+-- the order they were written. Nothing about what this migration does has
+-- changed; only when it runs.
 -- Six months becomes the standard follow-up interval, rather than off.
 --
 -- The feature shipped off everywhere so that nothing started sending because
