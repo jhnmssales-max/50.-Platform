@@ -19,6 +19,7 @@
 // the 50. tenant and rep_followups' RLS deliberately shows a signed-in person
 // only their own rows.
 const { pool, withServiceRole, assertServiceRoleConnection } = require('../db');
+const { isQuietDay, quietDaySummary } = require('../lib/quietDay');
 const { sendEmail } = require('../lib/postmark');
 const followupDigestEmail = require('../lib/followupDigestEmail');
 
@@ -193,6 +194,13 @@ async function runFollowupReminderCycle({ dryRun = false, now = new Date(), forc
       const clock = await clockAt(now);
       // force is for the CLI and the tests: it skips the hour gate so a run by
       // hand at 2pm still does something. The scheduler never passes it.
+      // Sunday: the digest is the platform's own reminder mail, and the work
+      // it lists is still there on Monday. `force` overrides, same as the
+      // hour gate, so a run by hand still does something.
+      if (!force && isQuietDay(now)) {
+        log('quiet_day', { today: clock.today, note: 'Sunday: digest held until Monday' });
+        return quietDaySummary({ today: clock.today });
+      }
       if (!force && clock.hour < SEND_AFTER_HOUR) {
         log('too_early', { today: clock.today, hour: clock.hour, sendAfterHour: SEND_AFTER_HOUR });
         return { tooEarly: true, errored: 0, sent: 0, today: clock.today };
