@@ -277,4 +277,53 @@ router.post('/links/:code/referrals', submitReferralLimiter, async (req, res, ne
   }
 });
 
+// ---------------------------------------------------------------------------
+// GET /api/public/dealers — the logo strip at the bottom of referwith50.com.
+//
+// Unauthenticated and cross-origin by design: a static marketing page on
+// another domain fetches this. It returns only what a logo needs — name,
+// image URL, brand colour — for companies that have agreed to be listed
+// (see public_dealer_logos() and tenants.list_on_website).
+//
+// It fails quietly, on purpose. This decorates a sales page; it is not
+// load-bearing. If the migration has not been applied yet, or the database
+// is having a moment, the right outcome is an empty strip on the website and
+// a note in the log — never a 500 that puts an error in front of somebody
+// deciding whether to buy. So a missing function or column returns [] rather
+// than throwing, and this endpoint is deliberately NOT in schemaCheck's
+// REQUIRED_COLUMNS: a cosmetic strip must never be able to stop the API
+// from booting.
+// ---------------------------------------------------------------------------
+const UNDEFINED_FUNCTION = '42883';
+const UNDEFINED_COLUMN = '42703';
+
+router.get('/public/dealers', resolveLinkLimiter, async (req, res) => {
+  try {
+    const rows = await withPublicTransaction(async (client) => {
+      const { rows: r } = await client.query('select * from public_dealer_logos()');
+      return r;
+    });
+    // A dealer with no logo uploaded yet would render as a broken image, so
+    // they wait until there is something to show.
+    const dealers = rows
+      .filter((d) => d.logo_url)
+      .map((d) => ({ name: d.name, logoUrl: d.logo_url, color: d.color || null }));
+
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json({ dealers });
+  } catch (err) {
+    if (err && (err.code === UNDEFINED_FUNCTION || err.code === UNDEFINED_COLUMN)) {
+      console.warn(
+        'PUBLIC_DEALERS public_dealer_logos() is not in this database yet — ' +
+          'apply supabase/migrations/20261031000000_list_dealers_on_website.sql. ' +
+          'Serving an empty list meanwhile.'
+      );
+    } else {
+      console.error('PUBLIC_DEALERS failed:', err && err.message);
+    }
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json({ dealers: [] });
+  }
+});
+
 module.exports = router;
