@@ -236,6 +236,79 @@ const COPY_FIELDS = [
     max: 600,
     multiline: true,
   },
+  // The reminder that goes out months later. Every one of these defaults to
+  // what the follow-up said before it was editable, so a dealer who writes
+  // nothing gets exactly the email they were getting.
+  {
+    key: 'followupSubject',
+    ask: 'Months later, what subject line would make this customer open a reminder about their link?',
+    stage: 'The reminder email',
+    label: 'Reminder subject line',
+    where: 'The subject of the follow-up, sent every few months. Blank uses “Your {name} referral link is still here”.',
+    max: 120,
+  },
+  {
+    key: 'followupPreview',
+    ask: 'One short line to show under that subject in their inbox?',
+    stage: 'The reminder email',
+    label: 'Reminder preview line',
+    where: 'The grey line a phone shows next to the subject. Blank shows the start of the email instead.',
+    max: 150,
+  },
+  {
+    key: 'followupOpening',
+    ask: 'How would you remind a past customer their link is still good?',
+    stage: 'The reminder email',
+    label: 'Reminder opening',
+    where: 'The first thing they read in the reminder. **stars** bold a phrase.',
+    max: 700,
+    multiline: true,
+  },
+  {
+    key: 'followupBeforeLink',
+    ask: 'Anything that helps them think of someone to send it to?',
+    stage: 'The reminder email',
+    label: 'Before the link',
+    where: 'Sits just above the button. A good place for “think of anyone who has said…”. Left out when blank.',
+    max: 900,
+    multiline: true,
+  },
+  {
+    key: 'followupAfterLink',
+    ask: 'What happens once they send it to somebody?',
+    stage: 'The reminder email',
+    label: 'After the link',
+    where: 'Below the button. What you do with their friend once the form comes in. Left out when blank.',
+    max: 900,
+    multiline: true,
+  },
+  {
+    key: 'followupClosing',
+    ask: 'How would you like to sign off to someone who has bought from you before?',
+    stage: 'The reminder email',
+    label: 'Reminder closing',
+    where: 'The last line before your name. Left out when blank.',
+    max: 500,
+    multiline: true,
+  },
+  {
+    key: 'followupSignature',
+    ask: 'Who should this come from, and how do they reach you?',
+    stage: 'The reminder email',
+    label: 'Reminder signature',
+    where: 'Your name, business and number. One per line. Left out when blank.',
+    max: 300,
+    multiline: true,
+  },
+  {
+    key: 'followupDisclaimer',
+    ask: 'Any small print about when cards are sent?',
+    stage: 'The reminder email',
+    label: 'Reminder small print',
+    where: 'The small grey line at the bottom, above the unsubscribe. Left out when blank.',
+    max: 400,
+    multiline: true,
+  },
 ];
 
 const COPY_KEYS = COPY_FIELDS.map((f) => f.key);
@@ -247,6 +320,18 @@ const GENERIC_COPY = {
   offerHow:
     "Here's how it works: make a purchase with us and you'll receive your own referral link to share. When a friend buys through that link, you each receive a **{reward} {card}**.",
   shareButton: 'Share My Referral Link',
+  // The reminder. Its opening reproduces, word for word, what the follow-up
+  // said before any of this was editable -- so nothing changes for a dealer
+  // who writes nothing.
+  followupSubject: 'Your {name} referral link is still here',
+  followupPreview: '',
+  followupOpening:
+    'A quick reminder that you have a referral link for **{name}**, and it still works.\n\nIf you know someone who could use us, send them your link. When they buy, you each get a **{reward}** {card}.',
+  followupBeforeLink: '',
+  followupAfterLink: '',
+  followupClosing: '',
+  followupSignature: '',
+  followupDisclaimer: '',
   // The invite email, as blocks. The optional ones default to empty, so a
   // dealer that sets nothing gets exactly the email that shipped before
   // these existed -- no dealer's mail changes because this went in.

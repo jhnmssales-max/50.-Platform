@@ -142,6 +142,16 @@ async function sendOne(person) {
     logoUrl: resolveLogoUrl(branding.logoUrl),
     cardNoun: (branding.copy || {}).cardNoun,
     shareButton: (branding.copy || {}).shareButton,
+    // The dealer's own reminder wording. Anything they have not written
+    // falls back inside the builder to what this email always said.
+    followupSubject: (branding.copy || {}).followupSubject,
+    followupPreview: (branding.copy || {}).followupPreview,
+    followupOpening: (branding.copy || {}).followupOpening,
+    followupBeforeLink: (branding.copy || {}).followupBeforeLink,
+    followupAfterLink: (branding.copy || {}).followupAfterLink,
+    followupClosing: (branding.copy || {}).followupClosing,
+    followupSignature: (branding.copy || {}).followupSignature,
+    followupDisclaimer: (branding.copy || {}).followupDisclaimer,
     unsubscribeUrl: unsubUrl,
   });
 
