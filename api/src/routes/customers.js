@@ -23,6 +23,89 @@ function forbidden(message) {
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/customers — everyone this dealer has already sent a referral link
+// to, newest send first, searchable by name, email or phone.
+//
+// Joseph: "so they can see or search who they have already sent to, but do
+// not keep a visual number of invites sent or received on the page. They will
+// get that info on their monthly summary."
+//
+// So this deliberately returns NO counts object, unlike GET /referrals. The
+// page has nothing to render a tally from even if a later change wanted one;
+// the monthly activity email is where the numbers live. `total` is in the
+// pagination block because Load more has to know when to stop asking, not
+// because anything shows it.
+//
+// Scoped by RLS, not by a tenant_id in the WHERE clause -- same as
+// GET /referrals. customers_select_same_tenant already limits this to the
+// caller's own tenant, and a second filter here would be a copy of that rule
+// that could drift away from it.
+//
+// Includes customers who were auto-created from a converted referral or from
+// an activated dealer, not just ones a dealer typed in: those people were all
+// sent a link too, so "who have we sent to" has to count them or the answer
+// is wrong in exactly the case the dealer is checking.
+// ---------------------------------------------------------------------------
+const listCustomersQuerySchema = z.object({
+  query: z.string().trim().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  offset: z.coerce.number().int().min(0).optional().default(0),
+});
+
+router.get('/customers', requireAuth, async (req, res, next) => {
+  const parsed = listCustomersQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid query', details: parsed.error.flatten() });
+  }
+  const { query, limit, offset } = parsed.data;
+
+  try {
+    const result = await withUserTransaction(req.userId, async (client) => {
+      const ctx = await getCallerContext(client, req.userId);
+      if (!ctx) throw forbidden('No staff account found for this user');
+
+      const { rows } = await client.query(
+        `select id, name, email, phone, created_at, last_invited_at,
+                delivery_failed_at, unsubscribed_at,
+                count(*) over() as total
+           from customers
+          where (
+            $1::text is null
+            or lower(name) like $1
+            or lower(email) like $1
+            or lower(coalesce(phone, '')) like $1
+          )
+          order by coalesce(last_invited_at, created_at) desc, created_at desc
+          limit $2 offset $3`,
+        [query ? `%${query.toLowerCase()}%` : null, limit, offset]
+      );
+      return rows;
+    });
+
+    const total = result[0]?.total ? Number(result[0].total) : 0;
+
+    res.json({
+      customers: result.map((c) => ({
+        id: c.id,
+        name: c.name,
+        email: c.email,
+        phone: c.phone,
+        created_at: c.created_at,
+        last_invited_at: c.last_invited_at,
+        // Two reasons a send stops arriving. Both are worth seeing on the row
+        // rather than once a month in the summary: a bounced address is the
+        // dealer's to correct, and an unsubscribe is theirs to respect.
+        delivery_failed_at: c.delivery_failed_at,
+        unsubscribed_at: c.unsubscribed_at,
+      })),
+      pagination: { limit, offset, total },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/customers — a staff member enters a customer's name/contact;
 // the customer and their referral (invite) link are created atomically,
 // then the invite is emailed to them through Postmark. This is "creating a
@@ -75,12 +158,23 @@ router.post('/customers', requireAuth, async (req, res, next) => {
       let customer = existing;
       if (!customer) {
         const { rows: [created] } = await client.query(
-          `insert into customers (tenant_id, name, email, phone, created_by_user_id)
-           values ($1, $2, $3, $4, $5)
-           returning id, name, email, phone, created_at`,
+          `insert into customers (tenant_id, name, email, phone, created_by_user_id, last_invited_at)
+           values ($1, $2, $3, $4, $5, now())
+           returning id, name, email, phone, created_at, last_invited_at`,
           [ctx.tenant_id, name, email, phone || null, req.userId]
         );
         customer = created;
+      } else {
+        // A resend is the case the dealer's list most needs recorded: the row
+        // already exists, created_at still says March, and without this the
+        // page would show a date from before the send that just happened.
+        const { rows: [touched] } = await client.query(
+          `update customers set last_invited_at = now()
+            where id = $1
+            returning id, name, email, phone, created_at, last_invited_at`,
+          [customer.id]
+        );
+        customer = touched || customer;
       }
 
       // Their existing link if they have one. A customer who somehow has
