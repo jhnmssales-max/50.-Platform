@@ -201,9 +201,13 @@ async function runInviteFollowupCycle({ limit = 200, dryRun = false, now = new D
         summary.skipped += 1;
         continue;
       }
-      await withServiceRole((client) =>
-        client.query('update invite_followups set sent_at = now() where id = $1', [claimId])
-      );
+      await withServiceRole(async (client) => {
+        await client.query('update invite_followups set sent_at = now() where id = $1', [claimId]);
+        // A follow-up is a send, so it moves the customer's "last sent" date
+        // too. Same transaction as the stamp above: the dealer's list and the
+        // follow-up ledger must never disagree about whether this went out.
+        await client.query('update customers set last_invited_at = now() where id = $1', [person.customer_id]);
+      });
       await noteDeliveryOutcome(person.customer_id, null);
       summary.sent += 1;
       console.log(

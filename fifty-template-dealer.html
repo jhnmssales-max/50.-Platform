@@ -116,8 +116,29 @@
 
   .listsection{margin-top:26px;padding-top:22px;border-top:1px solid #e3ddd0;}
   .listsection h2{font-family:'Fraunces',serif;font-weight:500;font-size:16px;color:var(--primary);margin:0 0 4px;}
-  .listsection .counts{font-size:12px;color:var(--muted);margin-bottom:14px;}
   .searchrow input[type=text]{margin-bottom:14px;}
+
+  /* Two lists, one at a time. Deliberately no tally anywhere on this page --
+     the monthly activity email is where invite and referral numbers live. */
+  .listtabs{display:flex;gap:6px;margin:0 0 14px;}
+  .listtab{
+    flex:1;min-width:0;padding:8px 10px;border:1px solid #e3ddd0;border-radius:8px;
+    background:#fff;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:600;
+    color:var(--muted);cursor:pointer;transition:.15s;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  .listtab:hover{border-color:#d2c9b6;}
+  .listtab.active{background:var(--primary);border-color:var(--primary);color:#fff;}
+  .loadmore{
+    display:block;width:100%;margin-top:12px;padding:10px;border:1px solid #e3ddd0;
+    border-radius:8px;background:#fff;font-family:'Inter',sans-serif;font-size:12.5px;
+    font-weight:600;color:var(--primary);cursor:pointer;
+  }
+  .loadmore:hover{border-color:#d2c9b6;}
+  .loadmore[disabled]{opacity:.6;cursor:default;}
+  .refrow .who .rmeta{font-size:11.5px;color:var(--muted);margin-top:2px;}
+  .refrow .who .rstate.warn{color:#B3261E;}
+  .refrow .who .rstate.quiet{color:var(--muted);}
 
   .reflist{max-height:360px;overflow-y:auto;}
   .refrow{
@@ -268,12 +289,15 @@
     </div>
 
     <div class="listsection">
-      <h2>Referrals in progress</h2>
-      <div class="counts" id="listCounts">Loading...</div>
+      <div class="listtabs">
+        <button type="button" class="listtab active" id="tabReferrals">Referrals</button>
+        <button type="button" class="listtab" id="tabInvited">People you've invited</button>
+      </div>
       <div class="searchrow">
         <input type="text" id="searchBox" placeholder="Search by name, phone, or email..." />
       </div>
       <div class="reflist" id="refList"></div>
+      <button type="button" class="loadmore" id="loadMoreBtn" hidden>Load more</button>
     </div>
   </div>
 </div>
@@ -887,41 +911,118 @@ document.getElementById('sendAgainBtn').addEventListener('click', ()=>{
 
 function fmtDate(iso){ return new Date(iso).toLocaleDateString(undefined,{month:'short',day:'numeric'}); }
 
-// Rows are referrals — friend submissions — not the customers staff
-// invited: one customer can send several referral links, and each is paid
-// out on its own, so status lives per row here, matching the API.
-async function renderList(query){
+// One container, one search box, two lists:
+//   referrals — friend submissions that came back through a link. One
+//     customer can send several, and each is paid on its own, so status
+//     lives per row here, matching the API.
+//   invited   — everyone this dealer has already sent a link to. The
+//     question this answers is "did we ever get to Bob", asked before
+//     typing his address in again.
+//
+// There is deliberately no tally on this page. The counts line that used to
+// sit under the heading ("9 in progress · 4 paid") is gone on purpose:
+// Joseph wants invite and referral numbers in the monthly summary email
+// instead, where a slow-moving figure reads as progress rather than as "0"
+// on a dealer's third day. GET /api/customers returns no counts at all for
+// the same reason; `total` comes back only so Load more knows when to stop.
+let listMode = 'referrals';
+let listOffset = 0;
+const LIST_PAGE = 50;
+
+function setListMode(mode){
+  if(listMode === mode) return;
+  listMode = mode;
+  document.getElementById('tabReferrals').classList.toggle('active', mode === 'referrals');
+  document.getElementById('tabInvited').classList.toggle('active', mode === 'invited');
+  document.getElementById('searchBox').placeholder = mode === 'invited'
+    ? 'Search everyone you\'ve sent to...'
+    : 'Search by name, phone, or email...';
+  renderList(document.getElementById('searchBox').value);
+}
+
+// A customer row. No referral status and no count on it: Joseph asked for
+// contact details and dates only. The two flags that do show are not
+// performance, they are "this is broken" — a bounced address means nothing
+// you send arrives, and an unsubscribe is theirs to respect.
+function invitedRowHtml(c){
+  const contact = [c.email, c.phone].filter(Boolean).join(' · ');
+  const invited = c.created_at ? 'Invited ' + fmtDate(c.created_at) : '';
+  // Only worth a second date when a follow-up or a resend actually moved it.
+  const last = c.last_invited_at && c.created_at
+    && fmtDate(c.last_invited_at) !== fmtDate(c.created_at)
+      ? ' · Last sent ' + fmtDate(c.last_invited_at) : '';
+  let flag = '';
+  if(c.delivery_failed_at){
+    flag = '<div class="rstate warn">Bounced — correct the address and add them again</div>';
+  } else if(c.unsubscribed_at){
+    flag = '<div class="rstate quiet">Unsubscribed — nothing further is sent</div>';
+  }
+  return `
+    <div class="refrow">
+      <div class="who">
+        <div class="rname">${escapeHtmlLite(c.name)}</div>
+        <div class="rcontact">${escapeHtmlLite(contact)}</div>
+        <div class="rmeta">${escapeHtmlLite(invited + last)}</div>
+        ${flag}
+      </div>
+    </div>`;
+}
+
+async function renderList(query, append){
   const container = document.getElementById('refList');
-  const countsEl = document.getElementById('listCounts');
+  const moreBtn = document.getElementById('loadMoreBtn');
+  const invited = listMode === 'invited';
 
   if(!getSession()){
-    countsEl.textContent = '';
-    container.innerHTML = '<div class="emptylist">Sign in to load referrals.</div>';
+    moreBtn.hidden = true;
+    container.innerHTML = '<div class="emptylist">Sign in to load ' + (invited ? 'your list.' : 'referrals.') + '</div>';
     return;
   }
 
-  countsEl.textContent = 'Loading…';
+  // A fresh render starts at the top; Load more keeps what is on screen.
+  if(!append){ listOffset = 0; container.innerHTML = '<div class="emptylist">Loading…</div>'; }
+  moreBtn.hidden = true;
+
   let data;
   try{
-    const params = new URLSearchParams({ limit: '100' });
+    const params = new URLSearchParams({ limit: String(LIST_PAGE), offset: String(listOffset) });
     if(query && query.trim()) params.set('query', query.trim());
-    data = await apiFetch('/referrals?' + params.toString());
+    data = await apiFetch((invited ? '/customers?' : '/referrals?') + params.toString());
   }catch(err){
     if(err.status === 401){ signOut(); return; }
-    countsEl.textContent = '';
-    container.innerHTML = '<div class="emptylist">Couldn\'t load referrals. Try again.</div>';
+    if(!append) container.innerHTML = '<div class="emptylist">Couldn\'t load that. Try again.</div>';
     return;
   }
 
-  countsEl.textContent = data.counts.pending + ' in progress · ' + data.counts.paid + ' paid';
+  // The tab may have been switched while this was in flight — dropping a
+  // stale response is better than painting referrals into the invited list.
+  if(invited !== (listMode === 'invited')) return;
 
-  if(data.referrals.length === 0){
+  if(invited){
+    const rows = data.customers || [];
+    if(!append && rows.length === 0){
+      container.innerHTML = '<div class="emptylist">' +
+        (query && query.trim() ? 'Nobody on your list matches that.' : 'You haven\'t sent any invites yet.') +
+        '</div>';
+      return;
+    }
+    const html = rows.map(invitedRowHtml).join('');
+    if(append) container.insertAdjacentHTML('beforeend', html);
+    else container.innerHTML = html;
+    listOffset += rows.length;
+    moreBtn.hidden = listOffset >= (data.pagination ? data.pagination.total : listOffset);
+    moreBtn.disabled = false;
+    moreBtn.textContent = 'Load more';
+    return;
+  }
+
+  if(!append && data.referrals.length === 0){
     container.innerHTML = '<div class="emptylist">No referrals found.</div>';
     return;
   }
 
   const canMarkPaid = currentUser && currentUser.role === 'admin';
-  container.innerHTML = data.referrals.map(r => {
+  const referralHtml = data.referrals.map(r => {
     const isPaid = r.status === 'paid';
     const contact = (r.email || r.phone || '') + (r.zip_code ? ' · ZIP ' + r.zip_code : '');
     const toggleTitle = isPaid
@@ -941,7 +1042,18 @@ async function renderList(query){
       </div>`;
   }).join('');
 
-  container.querySelectorAll('input[type=checkbox][data-referral-id]').forEach((input) => {
+  if(append) container.insertAdjacentHTML('beforeend', referralHtml);
+  else container.innerHTML = referralHtml;
+  listOffset += data.referrals.length;
+  moreBtn.hidden = listOffset >= (data.pagination ? data.pagination.total : listOffset);
+  moreBtn.disabled = false;
+  moreBtn.textContent = 'Load more';
+
+  // :not([data-wired]) because Load more appends rows into a container whose
+  // existing checkboxes already have a listener — re-running over all of them
+  // would stack a second handler on every old row and fire the confirm twice.
+  container.querySelectorAll('input[type=checkbox][data-referral-id]:not([data-wired])').forEach((input) => {
+    input.dataset.wired = '1';
     input.addEventListener('change', async (e) => {
       if(!e.target.checked) return; // already-paid rows render disabled+checked, nothing to un-check
       const referralId = e.target.dataset.referralId;
@@ -1006,6 +1118,13 @@ function markPaidConfirmText(){
 }
 
 document.getElementById('searchBox').addEventListener('input', debounce((e) => renderList(e.target.value), 300));
+document.getElementById('tabReferrals').addEventListener('click', () => setListMode('referrals'));
+document.getElementById('tabInvited').addEventListener('click', () => setListMode('invited'));
+document.getElementById('loadMoreBtn').addEventListener('click', (e) => {
+  e.target.disabled = true;
+  e.target.textContent = 'Loading…';
+  renderList(document.getElementById('searchBox').value, true);
+});
 init();
 </script>
 
