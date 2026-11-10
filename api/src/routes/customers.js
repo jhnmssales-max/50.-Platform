@@ -64,34 +64,51 @@ router.get('/customers', requireAuth, async (req, res, next) => {
       const ctx = await getCallerContext(client, req.userId);
       if (!ctx) throw forbidden('No staff account found for this user');
 
+      // The invite code comes back with the row so the list can offer Copy
+      // link without a request per customer. Same pick as findInviteLink():
+      // oldest 'invite' link, because that is the one already in the
+      // customer's inbox, and the one a resend sends again. A row from
+      // before links were minted on creation has none, and the page offers
+      // nothing to copy rather than a dead URL.
       const { rows } = await client.query(
-        `select id, name, email, phone, created_at, last_invited_at,
-                delivery_failed_at, unsubscribed_at,
+        `select c.id, c.name, c.email, c.phone, c.created_at, c.last_invited_at,
+                c.delivery_failed_at, c.unsubscribed_at,
+                l.code as invite_code,
                 count(*) over() as total
-           from customers
+           from customers c
+           left join lateral (
+             select code from referral_links
+              where customer_id = c.id and kind = 'invite'
+              order by created_at asc
+              limit 1
+           ) l on true
           where (
             $1::text is null
-            or lower(name) like $1
-            or lower(email) like $1
-            or lower(coalesce(phone, '')) like $1
+            or lower(c.name) like $1
+            or lower(c.email) like $1
+            or lower(coalesce(c.phone, '')) like $1
           )
-          order by coalesce(last_invited_at, created_at) desc, created_at desc
+          order by coalesce(c.last_invited_at, c.created_at) desc, c.created_at desc
           limit $2 offset $3`,
         [query ? `%${query.toLowerCase()}%` : null, limit, offset]
       );
-      return rows;
+      return { rows, ctx };
     });
 
-    const total = result[0]?.total ? Number(result[0].total) : 0;
+    const { rows: customerRows, ctx } = result;
+    const total = customerRows[0]?.total ? Number(customerRows[0].total) : 0;
 
     res.json({
-      customers: result.map((c) => ({
+      customers: customerRows.map((c) => ({
         id: c.id,
         name: c.name,
         email: c.email,
         phone: c.phone,
         created_at: c.created_at,
         last_invited_at: c.last_invited_at,
+        // The customer's own share link, ready to copy. Null for a customer
+        // who has no invite link yet; the page hides Copy in that case.
+        invite_url: c.invite_code ? buildInviteUrl(c.invite_code, ctx.tenant_domain) : null,
         // Two reasons a send stops arriving. Both are worth seeing on the row
         // rather than once a month in the summary: a bounced address is the
         // dealer's to correct, and an unsubscribe is theirs to respect.
@@ -251,6 +268,126 @@ router.post('/customers', requireAuth, async (req, res, next) => {
     }
 
     res.status(result.reused ? 200 : 201).json(responseBody);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/customers/:id/resend — send this customer their existing invite
+// link again.
+//
+// POST /customers already resends when the address is one it has seen, so
+// this could have been a second call to that. It is not, for one reason: that
+// route matches on lower(email) and takes the OLDEST row. There is no unique
+// index on (tenant_id, email) -- duplicates predating the dedupe check are
+// still in the table -- so for a duplicated address the dealer could press
+// Resend on the row in front of them and have a different row's link go out.
+// Resending from the row's own id cannot pick the wrong person.
+//
+// Nothing new is minted for somebody who already has a link, so the customer
+// receives the same URL they were sent the first time -- which is the point:
+// the usual reason to press this is "I can't find your email", and a fresh
+// link would strand any copy of the old one they eventually dig up.
+//
+// Scoped by RLS like everything else here: a customer id belonging to another
+// tenant simply isn't visible, so it reads as 404 rather than 403.
+// ---------------------------------------------------------------------------
+const resendParamsSchema = z.object({
+  id: z.string().uuid('That is not a customer id'),
+});
+
+router.post('/customers/:id/resend', requireAuth, async (req, res, next) => {
+  const parsed = resendParamsSchema.safeParse(req.params);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid request', details: parsed.error.flatten() });
+  }
+  const { id } = parsed.data;
+
+  try {
+    const result = await withUserTransaction(req.userId, async (client) => {
+      const ctx = await getCallerContext(client, req.userId);
+      if (!ctx) throw forbidden('No staff account found for this user');
+
+      const { rows: [customer] } = await client.query(
+        `select id, name, email, phone, created_at, last_invited_at, unsubscribed_at
+           from customers where id = $1`,
+        [id]
+      );
+      if (!customer) {
+        const err = new Error('No customer on your list with that id');
+        err.status = 404;
+        throw err;
+      }
+
+      // Their existing link, or one minted now for a row old enough not to
+      // have had one. Same helper the Add form uses.
+      const { link } = await ensureInviteLink(client, {
+        tenantId: ctx.tenant_id,
+        customerId: customer.id,
+        name: customer.name,
+      });
+
+      const unsubscribeToken = await tokenForSending(client, customer.id);
+
+      // last_invited_at is only moved when something is actually going to be
+      // sent. Stamping it for an unsubscribed customer would put a "Last
+      // sent" date on the row for a send that never happened.
+      let touched = customer;
+      if (unsubscribeToken) {
+        const { rows: [row] } = await client.query(
+          `update customers set last_invited_at = now()
+            where id = $1
+            returning id, name, email, phone, created_at, last_invited_at`,
+          [customer.id]
+        );
+        touched = row || customer;
+      }
+
+      return { customer: touched, link, ctx, unsubscribeToken };
+    });
+
+    const inviteUrl = buildInviteUrl(result.link.code, result.ctx.tenant_domain);
+    const responseBody = {
+      customer: result.customer,
+      invite_link: {
+        code: result.link.code,
+        url: inviteUrl,
+        status: result.link.status,
+        created_at: result.link.created_at,
+      },
+    };
+
+    // Same refusal, same wording as the Add form: somebody who asked this
+    // dealer to stop emailing them is not sent to, however the send started.
+    if (!result.unsubscribeToken) {
+      responseBody.email = {
+        sent: false,
+        reason: 'unsubscribed',
+        error: `${result.customer.name || 'This customer'} asked to stop receiving referral emails, so nothing was sent. Their link still works if you want to pass it on another way.`,
+      };
+      return res.status(200).json(responseBody);
+    }
+
+    try {
+      await sendInviteEmail({
+        tenant: result.ctx,
+        customerName: result.customer.name,
+        customerEmail: result.customer.email,
+        inviteUrl,
+        unsubscribeToken: result.unsubscribeToken,
+        replyToEmail: result.ctx.user_email,
+      });
+      responseBody.email = { sent: true, resent: true };
+      // A send that gets through clears an earlier bounce, so an address the
+      // dealer has since corrected stops being flagged on their row.
+      await noteDeliveryOutcome(result.customer.id, null);
+    } catch (emailErr) {
+      responseBody.email = { sent: false, error: emailErr.message };
+      await noteDeliveryOutcome(result.customer.id, emailErr);
+    }
+
+    res.status(200).json(responseBody);
   } catch (err) {
     next(err);
   }

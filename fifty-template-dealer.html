@@ -153,6 +153,26 @@
   .refrow .who .rstate.pending{color:var(--accent);}
   .refrow .who .rstate.paid{color:var(--secondary);}
 
+  /* Copy link / Resend, on every row of the invited list. Small and quiet:
+     they sit beside a name, and the list can be fifty rows long. */
+  .rowactions{display:flex;align-items:center;gap:6px;flex-shrink:0;}
+  .rowbtn{
+    padding:6px 10px;border:1px solid #e3ddd0;border-radius:7px;background:#fff;
+    font-family:'Inter',sans-serif;font-size:11.5px;font-weight:600;color:var(--primary);
+    cursor:pointer;white-space:nowrap;
+  }
+  .rowbtn:hover:not(:disabled){border-color:#d2c9b6;}
+  .rowbtn:disabled{opacity:.5;cursor:not-allowed;}
+  .rowbtn.done{border-color:var(--secondary);color:var(--secondary);}
+  .rowbtn.failed{border-color:#B3261E;color:#B3261E;}
+  /* The result of a resend, under the name, where the dates already are. */
+  .refrow .who .rsent{font-size:11px;font-weight:700;margin-top:2px;color:var(--secondary);}
+  .refrow .who .rsent.err{color:#B3261E;font-weight:600;}
+  @media (max-width:520px){
+    .refrow{align-items:flex-start;}
+    .rowactions{flex-direction:column;align-items:stretch;}
+  }
+
   .toggle{position:relative;display:inline-block;width:54px;height:30px;flex-shrink:0;}
   .toggle input{opacity:0;width:0;height:0;}
   .toggle .slider{
@@ -957,16 +977,142 @@ function invitedRowHtml(c){
   } else if(c.unsubscribed_at){
     flag = '<div class="rstate quiet">Unsubscribed — nothing further is sent</div>';
   }
+
+  // Copy is offered whenever there is a link, unsubscribed customers
+  // included: they asked us to stop emailing, not to void their link, and
+  // handing it over in person or by text is exactly what is left. Resend is
+  // the one that goes quiet for them, with the reason on the button.
+  const hasLink = Boolean(c.invite_url);
+  const copyBtn = hasLink
+    ? `<button type="button" class="rowbtn" data-copy-url="${escapeHtmlLite(c.invite_url)}" title="Copy ${escapeHtmlLite(c.name)}'s referral link">Copy link</button>`
+    : '';
+  const resendTitle = c.unsubscribed_at
+    ? escapeHtmlLite(c.name) + ' asked to stop receiving these'
+    : 'Email ' + escapeHtmlLite(c.name) + ' their link again';
+  const resendBtn = `<button type="button" class="rowbtn" data-resend-id="${escapeHtmlLite(c.id)}"${c.unsubscribed_at ? ' disabled' : ''} title="${resendTitle}">Resend</button>`;
+
   return `
-    <div class="refrow">
+    <div class="refrow" data-customer-row="${escapeHtmlLite(c.id)}">
       <div class="who">
         <div class="rname">${escapeHtmlLite(c.name)}</div>
         <div class="rcontact">${escapeHtmlLite(contact)}</div>
         <div class="rmeta">${escapeHtmlLite(invited + last)}</div>
         ${flag}
+        <div class="rsent" hidden></div>
       </div>
+      <div class="rowactions">${copyBtn}${resendBtn}</div>
     </div>`;
 }
+
+// Clipboard, with the old way behind it. navigator.clipboard is undefined on
+// a page served over plain http and can reject even on https if the click
+// that triggered it has already been handed back to the browser, so the
+// hidden-textarea fallback is not legacy politeness -- it is what runs for
+// some dealers. Throws if neither worked, so the caller can say so instead
+// of showing "Copied" over an empty clipboard.
+async function copyText(text){
+  try{
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  }catch(e){ /* fall through */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.top = '-1000px';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try{ ok = document.execCommand('copy'); }catch(e){ ok = false; }
+  document.body.removeChild(ta);
+  if(!ok) throw new Error('This browser would not let the page copy it.');
+}
+
+// Says a word on the button, then puts it back. Kept to the button so a
+// list fifty rows long never has to scroll to show what happened.
+function flashButton(btn, label, cls){
+  const original = btn.dataset.label || btn.textContent;
+  btn.dataset.label = original;
+  btn.textContent = label;
+  btn.classList.remove('done', 'failed');
+  if(cls) btn.classList.add(cls);
+  clearTimeout(Number(btn.dataset.flashTimer));
+  btn.dataset.flashTimer = String(setTimeout(() => {
+    btn.textContent = btn.dataset.label;
+    btn.classList.remove('done', 'failed');
+  }, 2000));
+}
+
+// One listener on the container, not one per row: Load more appends rows,
+// and a per-row listener would have to be re-wired for the new ones and
+// skipped on the old ones. Delegation has neither problem.
+document.getElementById('refList').addEventListener('click', async (e) => {
+  const copyTarget = e.target.closest('[data-copy-url]');
+  if(copyTarget){
+    try{
+      await copyText(copyTarget.dataset.copyUrl);
+      flashButton(copyTarget, 'Copied', 'done');
+    }catch(err){
+      flashButton(copyTarget, 'Press Ctrl+C', 'failed');
+      // Selected rather than alerted: the link is now theirs to copy by
+      // hand, which is the only thing left when the browser says no.
+      window.prompt('Copy this link:', copyTarget.dataset.copyUrl);
+    }
+    return;
+  }
+
+  const resendTarget = e.target.closest('[data-resend-id]');
+  if(!resendTarget || resendTarget.disabled) return;
+
+  const row = resendTarget.closest('[data-customer-row]');
+  const note = row ? row.querySelector('.rsent') : null;
+  resendTarget.disabled = true;
+  const before = resendTarget.textContent;
+  resendTarget.textContent = 'Sending…';
+  try{
+    const result = await apiFetch('/customers/' + encodeURIComponent(resendTarget.dataset.resendId) + '/resend', {
+      method: 'POST'
+    });
+    resendTarget.textContent = before;
+    const sent = result.email && result.email.sent;
+    if(note){
+      note.hidden = false;
+      note.className = 'rsent' + (sent ? '' : ' err');
+      note.textContent = sent
+        ? 'Sent again just now'
+        : (result.email && result.email.error) || 'That did not send.';
+    }
+    if(sent){
+      flashButton(resendTarget, 'Sent', 'done');
+      // The row's own "Last sent" line is now out of date. Rewritten here
+      // rather than by reloading the list, which would throw away every
+      // page the dealer has loaded and send them back to the top.
+      const meta = row && row.querySelector('.rmeta');
+      if(meta && result.customer && result.customer.created_at){
+        const createdLabel = fmtDate(result.customer.created_at);
+        const sentLabel = fmtDate(result.customer.last_invited_at || new Date().toISOString());
+        meta.textContent = 'Invited ' + createdLabel
+          + (sentLabel !== createdLabel ? ' · Last sent ' + sentLabel : '');
+      }
+    } else {
+      flashButton(resendTarget, 'Not sent', 'failed');
+    }
+    resendTarget.disabled = false;
+  }catch(err){
+    resendTarget.textContent = before;
+    resendTarget.disabled = false;
+    if(err.status === 401){ signOut(); return; }
+    if(err.code === 'activation_required') return; // the activation screen has taken over
+    flashButton(resendTarget, 'Not sent', 'failed');
+    if(note){
+      note.hidden = false;
+      note.className = 'rsent err';
+      note.textContent = err.message || 'That did not send. Try again.';
+    }
+  }
+});
 
 async function renderList(query, append){
   const container = document.getElementById('refList');
