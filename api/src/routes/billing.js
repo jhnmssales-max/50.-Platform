@@ -155,7 +155,20 @@ router.post('/billing/checkout-session', requireAuth, async (req, res, next) => 
 
   try {
     const ctx = await withUserTransaction(req.userId, async (client) => {
-      const ctx = await requireAdminCtx(client, req.userId, { allowUnactivatedTenant: true });
+      // Any staff member, not only an admin -- the one billing route where
+      // that is true, and only because of when it is reached. Activation is
+      // now asked for at a dealer's first send, so whoever hits it is
+      // whoever was doing the work, with a real customer already typed in.
+      // Requiring an admin there means a salesperson is told to go and find
+      // somebody else, at the exact moment they were about to use the thing.
+      //
+      // The blast radius is one fixed, one-time fee on an account that has
+      // paid nothing: the amount comes from the tenant row, not the request,
+      // and the two guards below mean it can only ever be charged once. Every
+      // other billing route -- changing the card, cancelling, anything that
+      // touches an account already paying us -- still requires an admin.
+      const ctx = await getCallerContext(client, req.userId, { allowUnactivatedTenant: true });
+      if (!ctx) throw forbidden('No staff account found for this user');
 
       if (ctx.billing_required === false) {
         throw conflict('This account isn\'t billed by 50., so there\'s no activation to pay.', 'billing_not_required');

@@ -88,7 +88,12 @@ router.get('/referrals', requireAuth, async (req, res, next) => {
 
   try {
     const result = await withUserTransaction(req.userId, async (client) => {
-      const ctx = await getCallerContext(client, req.userId);
+      // Readable before activation, for the same reason as GET /customers:
+      // the dashboard is what a new dealer is deciding whether to pay for,
+      // so they get to look at the real one. An unactivated tenant has no
+      // referrals to show -- a referral can only arrive through a link that
+      // a send created -- so this returns an empty list, honestly.
+      const ctx = await getCallerContext(client, req.userId, { allowUnactivatedTenant: true });
       if (!ctx) throw forbidden('No staff account found for this user');
 
       const { rows: [counts] } = await client.query(`

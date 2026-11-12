@@ -467,7 +467,10 @@ function tenantBrandingFromMe(me){
 applyBranding(DEFAULT_BRANDING);
 
 
-function showMsg(text){ const el = document.getElementById('formMsg'); el.textContent = text; el.className = 'msg show err'; }
+// kind defaults to 'err' because almost every caller is reporting a problem.
+// Cancelling a checkout is not one — nothing went wrong, they chose not to
+// pay yet — so that one passes 'info' and gets neutral styling.
+function showMsg(text, kind){ const el = document.getElementById('formMsg'); el.textContent = text; el.className = 'msg show ' + (kind || 'err'); }
 function clearMsg(){ const el = document.getElementById('formMsg'); el.className = 'msg'; }
 
 // Real login via Supabase Auth (email + password) — no more pasted access
@@ -591,7 +594,10 @@ function showLoggedIn(){
   // server is the gate and this is only about not showing somebody a screen
   // they cannot use. Loading is fire-and-forget: a settings section that
   // fails to load must not stop the page they came here to use.
-  if(currentUser && currentUser.role === 'admin'){
+  // Not before activation: /api/tenant/api-keys is still gated, so the
+  // section would appear and then fail to load. A dealer who has not paid
+  // has nothing to connect a CRM to yet anyway.
+  if(currentUser && currentUser.role === 'admin' && !isActivationRequired(currentUser)){
     document.getElementById('apiKeysSection').hidden = false;
     loadApiKeys().catch(() => {});
   }
@@ -775,11 +781,7 @@ function showGate(state, options={}){
   let btnText = '';
   let btnAction = null;
 
-  if(state === 'staff'){
-    title.textContent = 'Account not activated yet';
-    lede.innerHTML = tenant + ' hasn\'t finished its one-time activation with 50. An admin on your account needs to sign in and complete it — then you\'ll be able to send referrals here.';
-    btnText = 'Check again'; btnAction = recheckActivation;
-  } else if(state === 'processing' || state === 'processing_slow'){
+  if(state === 'processing' || state === 'processing_slow'){
     title.textContent = 'Payment received';
     lede.innerHTML = state === 'processing'
       ? 'We\'re confirming your payment with Stripe. This page opens automatically as soon as it\'s confirmed — usually within a few seconds.'
@@ -861,20 +863,28 @@ async function recheckActivation(){
 }
 
 // Where every successful sign-in (and page load) lands.
+//
+// An unactivated dealer lands in the dashboard, not on a payment screen.
+// What they are deciding whether to pay for is this page with their own
+// name and colours on it, and they could previously not see it at all --
+// sign-in went straight to Stripe. The fee is asked for at the first send
+// instead, which is the first thing that actually costs anything and the
+// first moment they have a reason to care.
+//
+// The two screens that still take over on arrival are the ones that are
+// about a payment already in flight. Somebody coming back from Checkout is
+// waiting on a webhook, and showing them the dashboard would invite them to
+// start over on a fee they may already have paid.
 function enterApp(fromCheckout){
   stopActivationPolling();
-  if(!isActivationRequired(currentUser)){
-    showLoggedIn();
-    renderList();
-    return;
+  if(fromCheckout === 'success' && isActivationRequired(currentUser)){
+    showGate('processing'); pollActivation(); return;
   }
-  if(currentUser.role !== 'admin'){ showGate('staff'); return; }
-  if(fromCheckout === 'success'){ showGate('processing'); pollActivation(); return; }
-  if(fromCheckout === 'cancelled'){
-    showGate('pay', { message: 'Checkout was cancelled, so nothing was charged. Continue whenever you\'re ready.' });
-    return;
+  showLoggedIn();
+  renderList();
+  if(fromCheckout === 'cancelled' && isActivationRequired(currentUser)){
+    showMsg('Checkout was cancelled, so nothing was charged. Add a customer whenever you\'re ready.', 'info');
   }
-  startCheckout();
 }
 
 // A staff endpoint said this account isn't activated (mid-session, e.g.
@@ -885,9 +895,11 @@ async function onActivationRequired(){
   handlingActivationRequired = true;
   try{
     await loadCurrentUser();
-    if(isActivationRequired(currentUser)){
-      if(currentUser.role === 'admin') showGate('pay'); else showGate('staff');
-    }
+    // Anyone on the account can pay, not only an admin. The server has
+    // never required one for checkout; this page used to, which left a
+    // salesperson who had done the work staring at "ask your admin" with
+    // the customer they wanted to invite already typed in.
+    if(isActivationRequired(currentUser)) showGate('pay');
   }catch(err){
     if(err.status === 401) signOut();
   }finally{
@@ -1075,6 +1087,17 @@ document.getElementById('sendForm').addEventListener('submit', async (e)=>{
   }catch(err){
     if(err.status === 401){
       signOut();
+    } else if(err.code === 'activation_required'){
+      // The first send is where the fee is asked for. apiFetch has already
+      // handed this to onActivationRequired, which is putting the payment
+      // screen up, so there is nothing to report here -- "something went
+      // wrong" would be both wrong and alarming at the exact moment we are
+      // asking somebody for $500.
+      //
+      // The typed customer is deliberately not kept. The server refuses
+      // before it writes anything, so nothing half-created is left behind
+      // for a dealer who decides not to pay, and nothing is sent later
+      // that they did not press send on themselves.
     } else {
       showMsg('Something went wrong sending that. Try again.');
     }

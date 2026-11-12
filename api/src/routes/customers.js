@@ -62,7 +62,12 @@ router.get('/customers', requireAuth, async (req, res, next) => {
 
   try {
     const result = await withUserTransaction(req.userId, async (client) => {
-      const ctx = await getCallerContext(client, req.userId);
+      // Readable before activation, so a dealer who has not paid yet sees
+      // their real dashboard rather than a wall. Nothing can be sent from it
+      // -- POST /customers below stays gated, which is where the fee is
+      // asked for -- and the list of an unactivated tenant is empty anyway,
+      // since the only way to get onto it is a send.
+      const ctx = await getCallerContext(client, req.userId, { allowUnactivatedTenant: true });
       if (!ctx) throw forbidden('No staff account found for this user');
 
       // The invite code comes back with the row so the list can offer Copy
