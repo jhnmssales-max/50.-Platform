@@ -1,2 +1,6 @@
 # e2e run output, written next to the suites that produce it
 api/*-results.md
+
+# The throwaway ES256 keypair crm-integration-e2e.js generates on first run.
+# Regenerated whenever it is missing, and connected to no real project.
+api/scripts/e2e/.crm-integration-keypair.json

@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
+const { pool } = require('../db');
+const { keyFromHeader, resolveKey } = require('../lib/apiKeys');
 
 if (!process.env.SUPABASE_URL) {
   throw new Error('SUPABASE_URL is not set — see .env.example');
@@ -64,4 +66,49 @@ function requireAuth(req, res, next) {
   });
 }
 
-module.exports = { requireAuth };
+// ---------------------------------------------------------------------------
+// requireAuthOrApiKey — the same thing, for a route a dealer's CRM may call.
+//
+// Only a handful of routes get this, never requireAuth's whole surface: a
+// leaked key should be able to add a customer and nothing else, so billing,
+// logins, reps and reports stay token-only. Which routes those are is visible
+// at the mount point, not buried in a flag here.
+//
+// Both paths end at exactly the same place -- req.userId, and nothing else.
+// Downstream, getCallerContext() takes a user id and cannot tell how the
+// caller proved it, so RLS, the activation gate and tenant scoping apply to a
+// CRM identically to a person, with nothing re-implemented for keys. That
+// sameness is the point: there is one authorization model here, not two.
+//
+// A key sets req.apiKeyId as well, which is what makes an automated call
+// recognisable afterwards -- it is recorded against the idempotency row -- and
+// what tells a route that an Idempotency-Key is expected of this caller.
+function requireAuthOrApiKey(req, res, next) {
+  const key = keyFromHeader(req.headers.authorization);
+
+  // Not a key: an ordinary signed-in request, verified the usual way. This
+  // branch is the common one and must behave exactly as requireAuth does,
+  // including for a malformed header.
+  if (!key) return requireAuth(req, res, next);
+
+  resolveKey(pool, key)
+    .then((row) => {
+      if (!row) {
+        // Unknown and revoked are one answer on purpose: telling a caller
+        // which it was says whether a key ever existed.
+        return res.status(401).json({ error: 'Invalid or revoked API key' });
+      }
+      req.userId = row.user_id;
+      req.apiKeyId = row.id;
+      // The tenant, straight off the key row. A route needing to claim an
+      // idempotency key needs the tenant before it opens the transaction
+      // that would otherwise tell it -- and this is the same tenant
+      // getCallerContext will resolve from the user, since api_keys.user_id
+      // points at a users row in api_keys.tenant_id.
+      req.apiKeyTenantId = row.tenant_id;
+      next();
+    })
+    .catch(next);
+}
+
+module.exports = { requireAuth, requireAuthOrApiKey };

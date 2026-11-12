@@ -41,6 +41,11 @@ const REQUIRED_COLUMNS = [
   // 20261027000000_record_delivery_failures
   ['customers', 'delivery_failed_at', '20261027000000_record_delivery_failures'],
   ['customers', 'delivery_error', '20261027000000_record_delivery_failures'],
+  // 20261112000000_crm_integration_api_keys
+  ['api_keys', 'key_hash', '20261112000000_crm_integration_api_keys'],
+  ['api_keys', 'revoked_at', '20261112000000_crm_integration_api_keys'],
+  ['integration_requests', 'idempotency_key', '20261112000000_crm_integration_api_keys'],
+  ['integration_requests', 'response_body', '20261112000000_crm_integration_api_keys'],
 ];
 
 // Returns the entries this database does not have, in the order listed.
