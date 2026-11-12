@@ -25,6 +25,7 @@
     "e2e:rep-pipeline": "node scripts/e2e/rep-pipeline-e2e.js",
     "e2e:dealer-build": "node scripts/e2e/dealer-build-e2e.js",
     "e2e:crm-integration": "node scripts/e2e/crm-integration-e2e.js",
+    "e2e:api-keys-ui": "node scripts/e2e/api-keys-ui-e2e.js",
     "e2e:activation-gate": "node scripts/e2e/activation-gate-e2e.js",
     "e2e:activation-gate:stripe-test": "node scripts/e2e/activation-gate-e2e.js --stripe=test"
   },
