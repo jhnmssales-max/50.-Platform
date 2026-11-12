@@ -173,6 +173,20 @@
     .rowactions{flex-direction:column;align-items:stretch;}
   }
 
+  /* API keys. Same row shape as the lists above, so the page has one
+     vocabulary rather than a second one bolted on for settings. */
+  .keyrow{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:12px 0;border-bottom:1px solid #efe9dc;
+  }
+  .keyrow:last-child{border-bottom:none;}
+  .keyrow .kname{font-size:13px;font-weight:700;color:var(--primary);}
+  .keyrow .kmeta{font-size:11.5px;color:var(--muted);margin-top:2px;font-family:'Inter',sans-serif;}
+  .keyrow .kmeta code{font-size:11px;color:var(--primary-dark);}
+  .keyrow .kunused{color:var(--accent-dark, #8a6300);font-weight:600;}
+  .keyempty{font-size:12.5px;color:var(--muted);padding:10px 0;}
+  #newKeyBox .linkbox code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;}
+
   .toggle{position:relative;display:inline-block;width:54px;height:30px;flex-shrink:0;}
   .toggle input{opacity:0;width:0;height:0;}
   .toggle .slider{
@@ -318,6 +332,42 @@
       </div>
       <div class="reflist" id="refList"></div>
       <button type="button" class="loadmore" id="loadMoreBtn" hidden>Load more</button>
+    </div>
+
+    <!-- Admins only, and hidden until GET /api/me says so. The server is the
+         real gate -- every one of these routes answers 403 to staff -- so this
+         is about not showing somebody a screen they cannot use. -->
+    <div class="listsection" id="apiKeysSection" hidden>
+      <h2>Connect your CRM</h2>
+      <p class="lede" style="margin-bottom:14px;">
+        A key lets your CRM add a customer and send their referral link automatically when an
+        order closes, instead of you entering them here. Hand it to whoever sets up the
+        connection — it works on one endpoint and cannot read anything.
+      </p>
+
+      <div id="apiKeyMsg" class="msg"></div>
+
+      <!-- Shown once, right after creating. The key is never stored in a form
+           that can be read back, so there is no second chance at it. -->
+      <div class="confirm" id="newKeyBox">
+        <div class="headline">Copy this key now</div>
+        <div class="linkbox">
+          <code id="newKeyValue"></code>
+          <button class="copybtn" id="copyKeyBtn">Copy</button>
+        </div>
+        <p class="note">
+          This is the only time it can be shown. We store a one-way hash of it, not the key, so
+          nobody can look it up later — us included. If it is lost, revoke it and make another.
+        </p>
+      </div>
+
+      <div id="apiKeyList"></div>
+
+      <form id="apiKeyForm" style="margin-top:14px;">
+        <label for="apiKeyName">Name a new key</label>
+        <input type="text" id="apiKeyName" placeholder="Velocity360" autocomplete="off" maxlength="80" />
+        <button type="submit" class="send" id="apiKeyBtn">Create a key</button>
+      </form>
     </div>
   </div>
 </div>
@@ -536,6 +586,15 @@ function showLoggedIn(){
   document.getElementById('gateBox').style.display = 'none';
   document.getElementById('appArea').style.display = 'block';
   document.getElementById('authWho').innerHTML = signedInAsHtml();
+
+  // Admins only. Every one of these routes answers 403 to staff, so the
+  // server is the gate and this is only about not showing somebody a screen
+  // they cannot use. Loading is fire-and-forget: a settings section that
+  // fails to load must not stop the page they came here to use.
+  if(currentUser && currentUser.role === 'admin'){
+    document.getElementById('apiKeysSection').hidden = false;
+    loadApiKeys().catch(() => {});
+  }
 }
 
 async function loadCurrentUser(){
@@ -546,6 +605,119 @@ async function loadCurrentUser(){
 function fmtMoney(cents, currency){
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: (currency || 'USD').toUpperCase() }).format(cents / 100);
 }
+
+// ---------------------------------------------------------------------
+// API keys — what a dealer's CRM authenticates with.
+//
+// The list never contains a usable credential: the server returns only the
+// key's first characters, enough to tell two keys apart. The whole key exists
+// in this page exactly once, in the box shown after creating it, and is never
+// written anywhere it could be read back.
+// ---------------------------------------------------------------------
+function keyMsg(text, isError){
+  const el = document.getElementById('apiKeyMsg');
+  el.textContent = text || '';
+  el.className = text ? ('msg show' + (isError ? ' err' : '')) : 'msg';
+}
+
+function apiKeyRowHtml(k){
+  // "Never used" is worth saying plainly: it is how a dealer tells a key that
+  // is waiting to be installed from one whose integration has quietly stopped.
+  const used = k.last_used_at
+    ? 'Last used ' + escapeHtmlLite(fmtDate(k.last_used_at))
+    : '<span class="kunused">Never used</span>';
+  return `
+    <div class="keyrow" data-key-row="${escapeHtmlLite(k.id)}">
+      <div>
+        <div class="kname">${escapeHtmlLite(k.name)}</div>
+        <div class="kmeta"><code>${escapeHtmlLite(k.key_prefix)}…</code> · Created ${escapeHtmlLite(fmtDate(k.created_at))} · ${used}</div>
+      </div>
+      <div class="rowactions">
+        <button type="button" class="rowbtn" data-revoke-key="${escapeHtmlLite(k.id)}">Revoke</button>
+      </div>
+    </div>`;
+}
+
+async function loadApiKeys(){
+  const result = await apiFetch('/tenant/api-keys');
+  const keys = result.api_keys || [];
+  document.getElementById('apiKeyList').innerHTML = keys.length
+    ? keys.map(apiKeyRowHtml).join('')
+    : '<div class="keyempty">No keys yet. Create one when you are ready to connect a CRM.</div>';
+}
+
+document.getElementById('apiKeyForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const nameInput = document.getElementById('apiKeyName');
+  const name = nameInput.value.trim();
+  if(!name){ keyMsg('Give the key a name so you can tell it apart later.', true); return; }
+
+  const btn = document.getElementById('apiKeyBtn');
+  btn.disabled = true;
+  const before = btn.textContent;
+  btn.textContent = 'Creating…';
+  keyMsg('');
+  try{
+    const result = await apiFetch('/tenant/api-keys', { method: 'POST', body: JSON.stringify({ name }) });
+    // textContent, not innerHTML: this is a credential, and it goes in as
+    // text or not at all.
+    document.getElementById('newKeyValue').textContent = result.key;
+    document.getElementById('newKeyBox').classList.add('show');
+    nameInput.value = '';
+    await loadApiKeys();
+    // Scrolled to, because the one thing that must not happen is a dealer
+    // closing the page without seeing the key they cannot get again.
+    document.getElementById('newKeyBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }catch(err){
+    if(err.status === 401){ signOut(); return; }
+    if(err.code === 'activation_required') return;
+    keyMsg(err.message || 'Could not create a key. Try again.', true);
+  }finally{
+    btn.disabled = false;
+    btn.textContent = before;
+  }
+});
+
+document.getElementById('copyKeyBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('copyKeyBtn');
+  try{
+    await copyText(document.getElementById('newKeyValue').textContent);
+    flashButton(btn, 'Copied', 'done');
+  }catch(err){
+    flashButton(btn, 'Select it', 'failed');
+    window.prompt('Copy this key:', document.getElementById('newKeyValue').textContent);
+  }
+});
+
+// Revoking is deliberately a confirm: it cannot be undone, and a dealer who
+// revokes the wrong key has silently broken their own integration until
+// somebody notices orders are not being invited.
+document.getElementById('apiKeyList').addEventListener('click', async (e) => {
+  const target = e.target.closest('[data-revoke-key]');
+  if(!target || target.disabled) return;
+
+  const row = target.closest('[data-key-row]');
+  const name = row ? (row.querySelector('.kname')?.textContent || 'this key') : 'this key';
+  if(!window.confirm(`Revoke ${name}? Any CRM using it stops working immediately, and it cannot be un-revoked.`)) return;
+
+  target.disabled = true;
+  const before = target.textContent;
+  target.textContent = 'Revoking…';
+  try{
+    await apiFetch('/tenant/api-keys/' + encodeURIComponent(target.dataset.revokeKey), { method: 'DELETE' });
+    keyMsg(`${name} is revoked. Anything using it now gets turned away.`, false);
+    // Hidden as soon as a key is revoked: it has nothing to do with whatever
+    // key the dealer creates next, and leaving a credential on screen after
+    // the list beneath it changed is how the wrong one gets pasted.
+    document.getElementById('newKeyBox').classList.remove('show');
+    await loadApiKeys();
+  }catch(err){
+    target.disabled = false;
+    target.textContent = before;
+    if(err.status === 401){ signOut(); return; }
+    keyMsg(err.message || 'Could not revoke that key. Try again.', true);
+  }
+});
 
 // ---------------------------------------------------------------------
 // Activation gate. A business that pays 50. (billing-required) can't use

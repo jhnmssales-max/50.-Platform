@@ -1,8 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const { z } = require('zod');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireAuthOrApiKey } = require('../middleware/auth');
 const { withUserTransaction, getCallerContext } = require('../db');
+const { MAX_KEY_LENGTH, claimKey, completeKey, releaseKey } = require('../lib/idempotency');
 const { buildInviteUrl, ensureInviteLink, sendInviteEmail } = require('../lib/customerInvite');
 const { noteDeliveryOutcome } = require('../lib/deliveryOutcome');
 const { tokenForSending } = require('../lib/unsubscribe');
@@ -141,12 +142,65 @@ const createCustomerSchema = z.object({
   phone: z.string().trim().max(40).optional().nullable(),
 });
 
-router.post('/customers', requireAuth, async (req, res, next) => {
+router.post('/customers', requireAuthOrApiKey, async (req, res, next) => {
   const parsed = createCustomerSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid request', details: parsed.error.flatten() });
   }
   const { name, email, phone } = parsed.data;
+
+  // An automated caller must say which event it is acting on, so a retry is
+  // recognisable as the same one. Required rather than optional: a CRM that
+  // forgets gets a 400 it will notice on the first call, instead of silently
+  // emailing somebody's customers twice a month later. A person pressing Add
+  // sends no key and needs none -- they can see what they did.
+  let claim = null;
+  if (req.apiKeyId) {
+    const key = (req.headers['idempotency-key'] || '').trim();
+    if (!key) {
+      return res.status(400).json({
+        error:
+          'An Idempotency-Key header is required when calling with an API key. Send the id of the order or deal this is for, so a retry does not invite the same customer twice.',
+      });
+    }
+    if (key.length > MAX_KEY_LENGTH) {
+      return res.status(400).json({ error: `Idempotency-Key must be ${MAX_KEY_LENGTH} characters or fewer` });
+    }
+
+    const outcome = await claimKey({
+      tenantId: req.apiKeyTenantId,
+      apiKeyId: req.apiKeyId,
+      key,
+      endpoint: 'POST /customers',
+    });
+
+    // The original finished. Hand back exactly what it answered, so a caller
+    // that lost the first response still learns the customer and their link.
+    if (outcome.replay) return res.status(outcome.replay.status).json(outcome.replay.body);
+
+    // 409 rather than 429: nothing is rate-limited, an identical request is
+    // simply still running. Retrying shortly is the right response, and a
+    // CRM that treats 409 as fatal will surface it rather than loop.
+    if (outcome.inFlight) {
+      return res.status(409).json({
+        error: 'A request with this Idempotency-Key is still being processed. Retry in a moment.',
+      });
+    }
+    if (outcome.conflict) {
+      return res.status(409).json({
+        error: `This Idempotency-Key was already used for ${outcome.conflict}. Use a different key per request.`,
+      });
+    }
+    claim = outcome;
+  }
+
+  // Records the answer against the claim before sending it, so every later
+  // retry of this key replays it. Nothing after a successful send is allowed
+  // to fail the request -- see completeKey.
+  const respond = async (status, body) => {
+    if (claim) await completeKey(claim.id, status, body);
+    res.status(status).json(body);
+  };
 
   try {
     const result = await withUserTransaction(req.userId, async (client) => {
@@ -229,6 +283,31 @@ router.post('/customers', requireAuth, async (req, res, next) => {
       },
     };
 
+    // An automated caller never resends to somebody already on the list.
+    //
+    // The idempotency key stops a RETRY of one event from inviting twice. It
+    // cannot stop two different events about the same person: a CRM set to
+    // fire on both "won" and "delivered" sends two requests with two honest,
+    // different keys, and without this the customer gets the invite twice.
+    // Stage names vary per dealer and some fire on three, so telling dealers
+    // to pick one stage would be a rule somebody breaks quietly.
+    //
+    // Resending is simply never what a machine means. A person pressing Add
+    // on a known address is saying "they can't find their invite, send it
+    // again"; a CRM reporting a closed order is saying "make sure they are in
+    // the program", and they already are. So this answers 200 with what the
+    // caller wanted to know -- the customer and their link -- and sends
+    // nothing. A dealer who does want it sent again presses Resend, where a
+    // human has decided.
+    if (req.apiKeyId && result.reused) {
+      responseBody.email = {
+        sent: false,
+        reason: 'already_invited',
+        error: `${result.customer.name || 'This customer'} is already on the list and was invited on ${new Date(result.customer.created_at).toISOString().slice(0, 10)}, so nothing was sent. Use the dealer dashboard to send their link again.`,
+      };
+      return respond(200, responseBody);
+    }
+
     // Sending is a best-effort side effect, attempted only after the
     // customer and link are safely committed: a slow or failed send must
     // never roll back data that already exists, and shouldn't hold the DB
@@ -243,7 +322,10 @@ router.post('/customers', requireAuth, async (req, res, next) => {
         reason: 'unsubscribed',
         error: `${result.customer.name || 'This customer'} asked to stop receiving referral emails, so nothing was sent. Their link still works if you want to pass it on another way.`,
       };
-      return res.status(result.reused ? 200 : 201).json(responseBody);
+      // Through respond(), not res directly: the customer row exists now, so
+      // this is a completed request and a retry of the same key must replay
+      // it rather than run again.
+      return respond(result.reused ? 200 : 201, responseBody);
     }
 
     try {
@@ -267,8 +349,14 @@ router.post('/customers', requireAuth, async (req, res, next) => {
       await noteDeliveryOutcome(result.customer.id, emailErr);
     }
 
-    res.status(result.reused ? 200 : 201).json(responseBody);
+    await respond(result.reused ? 200 : 201, responseBody);
   } catch (err) {
+    // The claim is released only here, where the throw means the transaction
+    // rolled back and no customer was created and no invite sent -- so the
+    // CRM's retry should be allowed through rather than meeting a permanent
+    // "still in flight". A failure after the send does not reach this: the
+    // email block above catches its own errors and still answers.
+    if (claim) await releaseKey(claim.id);
     next(err);
   }
 });
