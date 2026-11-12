@@ -108,10 +108,27 @@ async function withPublicTransaction(fn) {
 // including any added later, refuses a not-yet-activated tenant by
 // default, since resolving the caller is the first thing each one does.
 // Only the routes an unactivated tenant genuinely needs pass
-// { allowUnactivatedTenant: true }: GET /api/me (to learn that it's
-// gated, and show its own name/branding while it is) and
-// POST /api/billing/checkout-session (to pay). ctx.activation carries the
-// gate's verdict either way.
+// { allowUnactivatedTenant: true }:
+//   GET  /api/me                       to learn that it's gated, and to
+//                                      show its own name and branding
+//   POST /api/billing/checkout-session  to pay
+//   GET  /api/customers                 }  to READ the dashboard before
+//   GET  /api/referrals                 }  paying -- see below
+// ctx.activation carries the gate's verdict either way.
+//
+// Those last two are why the fee is now asked for at the first send rather
+// than at the first sign-in. A new dealer could previously see nothing but
+// a payment screen, which is a poor way to sell a product whose whole
+// appeal is what the thing looks like with their own branding on it. So
+// they get the real dashboard, and the wall sits on the one action that
+// costs us anything: POST /api/customers, which creates a customer and
+// emails them.
+//
+// Note which way round this is. Reads opt OUT, writes stay gated by
+// default, so a route added later is refused for an unpaid tenant unless
+// somebody deliberately allows it. Inverting that -- opening everything
+// and gating the sends -- would read the same on the day it shipped and
+// quietly let the next send-shaped endpoint through.
 async function getCallerContext(client, userId, { allowUnactivatedTenant = false } = {}) {
   const { rows } = await client.query(
     `select

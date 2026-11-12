@@ -603,12 +603,27 @@ async function main() {
       eq(me.body.activation.fee_cents, 50000, 'activation.fee_cents');
       return `activation=${JSON.stringify(me.body.activation)} referral_fee=${JSON.stringify(me.body.referral_fee)}`;
     });
-    await check('New dealer admin AND staff: every other staff endpoint answers 402 activation_required', async () => {
+    // The fee is asked for at a dealer's first SEND, not at their first
+    // sign-in, so the two list reads are open before payment and everything
+    // that costs something is not. See getCallerContext's own comment for
+    // why it is the reads that opt out rather than the writes that opt in.
+    await check('New dealer admin AND staff: can READ their dashboard before paying', async () => {
+      const out = [];
+      for (const user of [USERS.newAdmin, USERS.newStaff]) {
+        for (const p of ['/api/customers', '/api/referrals']) {
+          const r = await api('GET', p, { token: tokenFor(user) });
+          eq(r.status, 200, `${user.role} GET ${p}`);
+          out.push(`${user.role} GET ${p} -> 200`);
+        }
+      }
+      return out.join('; ');
+    });
+    await check('New dealer admin AND staff: every endpoint that SENDS or costs still answers 402', async () => {
       const out = [];
       for (const user of [USERS.newAdmin, USERS.newStaff]) {
         for (const [method, p, body] of [
-          ['GET', '/api/referrals'],
           ['POST', '/api/customers', { name: 'Blocked', email: 'blocked@example.test' }],
+          ['POST', '/api/customers/00000000-0000-4000-8000-000000000000/resend'],
           ['GET', '/api/tenant/tremendous-credentials'],
           ['PATCH', '/api/referrals/00000000-0000-4000-8000-000000000000/status', { status: 'rewarded' }],
           ['POST', '/api/referrals/00000000-0000-4000-8000-000000000000/close'],
@@ -628,10 +643,28 @@ async function main() {
       eq(r.status, 402, 'acme POST /api/customers');
       return 'acme-sheds: /me required=true, POST /api/customers -> 402';
     });
-    await check('Staff (non-admin) cannot start the activation checkout (403)', async () => {
-      const r = await api('POST', '/api/billing/checkout-session', { token: tokenFor(USERS.newStaff), body: {} });
-      eq(r.status, 403, 'status');
-      return `403 ${r.body.error}`;
+    // Any staff member may pay the activation, because of when they now
+    // reach it: at their own first send, with a customer already typed in.
+    // Sending them away to find an admin at that moment is the friction this
+    // whole change was meant to remove. Every other billing route still
+    // requires an admin -- the next check is what holds that line.
+    // That staff CAN reach checkout is proved in the browser section below,
+    // end to end, by a salesperson pressing send. It is not also asserted
+    // here: calling the endpoint would open a Checkout Session for this
+    // tenant, and the browser checks that follow count on there being none
+    // yet. What is worth asserting here is the other half -- that opening
+    // the activation is the only billing thing a non-admin gained.
+    await check('Staff still cannot touch any other billing route', async () => {
+      const out = [];
+      for (const [method, p, body] of [
+        ['GET', '/api/billing/summary'],
+        ['POST', '/api/billing/payment-method', { payment_method_id: 'pm_x' }],
+      ]) {
+        const r = await api(method, p, { token: tokenFor(USERS.newStaff), body });
+        assert(r.status === 403 || r.status === 404, `${method} ${p} -> ${r.status} (expected 403, or 404 if the route does not exist)`);
+        out.push(`${method} ${p} -> ${r.status}`);
+      }
+      return out.join('; ');
     });
 
     // ----- Exempt tenants ---------------------------------------------------
@@ -666,18 +699,60 @@ async function main() {
       });
     }
 
-    // ----- Browser: login -> Checkout ----------------------------------------
-    section('Dealer page — new dealer admin signs in and is sent to Stripe Checkout');
+    // ----- Browser: login -> dashboard -> first send -> Checkout -------------
+    section('Dealer page — a new dealer looks around, then pays at their first send');
     const admin = await openPage();
     let sessionId;
     await signInOnPage(admin.page, USERS.newAdmin);
-    await check('Signing in redirects the admin to a Checkout Session (mode: payment, $500)', async () => {
+
+    // Signing in no longer goes to Stripe. The dashboard is what a dealer is
+    // deciding whether to pay for, so they see it first; the fee is asked for
+    // at the first send. This check is the hinge of that change -- if signing
+    // in ever starts redirecting again, this is what notices.
+    // Counted from here, not from zero: the API-level checks above already
+    // started a session of their own, deliberately.
+    const sessionsBeforeBrowser = STAND_IN
+      ? (await stripeRequestLog()).filter((r) => r.method === 'POST' && r.path === '/checkout/sessions').length
+      : 0;
+
+    await check('Signing in lands on the dashboard, not on a payment screen', async () => {
+      await admin.page.waitForSelector('#sendForm', { state: 'visible', timeout: 15000 });
+      assert(!(await admin.page.locator('#gateBox').isVisible()), 'the payment gate took over on sign-in');
+      const url = admin.page.url();
+      assert(!/checkout|\/pay\//.test(url), `redirected to a payment page on sign-in: ${url}`);
+      if (STAND_IN) {
+        const now = (await stripeRequestLog()).filter((r) => r.method === 'POST' && r.path === '/checkout/sessions').length;
+        eq(now, sessionsBeforeBrowser, 'Checkout Sessions created by signing in');
+      }
+      return 'dashboard visible, send form ready, signing in started no Checkout Session';
+    });
+
+    // Pressing send is now what asks for the money -- and it explains itself
+    // before taking anyone to Stripe, rather than redirecting out of the
+    // product unannounced.
+    await check('The first send puts up the activation screen, explained, before any redirect', async () => {
+      await admin.page.fill('#custName', 'First Customer');
+      await admin.page.fill('#custEmail', 'first.customer@example.test');
+      await admin.page.click('#sendBtn');
+      await admin.page.waitForSelector('#gateBox', { state: 'visible', timeout: 15000 });
+      await sleep(800);
+      const title = (await admin.page.textContent('#gateTitle')).trim();
+      const lede = (await admin.page.textContent('#gateLede')).trim();
+      eq(title, 'Activate your account', 'gate title');
+      assert(/\$500/.test(lede), `the fee is not named: "${lede}"`);
+      assert(admin.page.url().startsWith(DEALER_URL), `redirected before the dealer agreed: ${admin.page.url()}`);
+      return `"${lede.slice(0, 90)}"`;
+    });
+
+    await admin.page.click('#gateBtn');
+
+    await check('Continuing from there opens a Checkout Session (mode: payment, $500)', async () => {
       if (STAND_IN) {
         await admin.page.waitForURL(/\/pay\/cs_test_/, { timeout: 15000 });
         sessionId = admin.page.url().split('/pay/')[1];
         const creates = (await stripeRequestLog()).filter((r) => r.method === 'POST' && r.path === '/checkout/sessions');
-        eq(creates.length, 1, 'Checkout Sessions created');
-        const b = creates[0].body;
+        eq(creates.length - sessionsBeforeBrowser, 1, 'Checkout Sessions created by this dealer in the browser');
+        const b = creates[creates.length - 1].body;  // the one this browser just opened
         eq(b.mode, 'payment', 'mode');
         eq(b.line_items[0].price_data.unit_amount, '50000', 'unit_amount');
         eq(b.payment_intent_data.setup_future_usage, 'off_session', 'setup_future_usage');
@@ -703,19 +778,27 @@ async function main() {
     });
 
     if (STAND_IN) {
-      await check('Backing out of Checkout ("Back") returns to the gate, nothing charged, still locked', async () => {
+      // Backing out now returns to the dashboard, not to a wall. Somebody
+      // who decided not to pay this minute has not stopped being a dealer,
+      // and dropping them back onto a payment screen they just declined is
+      // the behaviour this change exists to get rid of. Nothing is charged
+      // and nothing is unlocked -- the next send asks again.
+      await check('Backing out of Checkout returns to the dashboard, nothing charged, still locked', async () => {
         await admin.page.click('#cancelLink');
-        await admin.page.waitForSelector('#gateBox', { state: 'visible' });
-        const msg = await admin.page.textContent('#gateMsg');
-        assert(/cancelled/i.test(msg), `gate message: ${msg}`);
-        assert(!(await visible(admin.page, '#appArea')), 'app area visible after cancel');
+        await admin.page.waitForSelector('#sendForm', { state: 'visible', timeout: 15000 });
+        assert(!(await visible(admin.page, '#gateBox')), 'the payment screen came back after they declined it');
+        const msg = await admin.page.textContent('#formMsg');
+        assert(/cancelled/i.test(msg || ''), `dashboard message after cancelling: ${msg}`);
         assert(!admin.page.url().includes('activation='), `query param not stripped: ${admin.page.url()}`);
         const t = await tenantRow('e2e-new-dealer');
         eq(t.activation_paid_at, null, 'activation_paid_at');
-        return `gate shows "${msg.trim()}"; activation_paid_at still null`;
+        const blocked = await api('POST', '/api/customers', {
+          token: tokenFor(USERS.newAdmin), body: { name: 'Still Locked', email: 'still.locked@example.test' } });
+        eq(blocked.status, 402, 'POST /api/customers after cancelling');
+        return `dashboard shows "${(msg || '').trim()}"; activation_paid_at still null; sending still 402`;
       });
     } else {
-      skip('Backing out of Checkout ("Back") returns to the gate', 'needs a click on Stripe\'s own page; covered in --stripe=stand-in');
+      skip('Backing out of Checkout returns to the dashboard', 'needs a click on Stripe\'s own page; covered in --stripe=stand-in');
     }
 
     {
@@ -742,12 +825,22 @@ async function main() {
         await admin.page.fill('#loginEmail', USERS.newAdmin.email);
         await admin.page.fill('#loginPassword', PASSWORD);
         await admin.page.click('#loginBtn');
+        // Signing back in lands on the dashboard now, so the way back to
+        // Checkout is the same as the way there was: press send, then
+        // continue. What is under test is that this reaches the session that
+        // is already open rather than opening a second $500 one.
+        await admin.page.waitForSelector('#sendForm', { state: 'visible', timeout: 15000 });
+        await admin.page.fill('#custName', 'Second Attempt');
+        await admin.page.fill('#custEmail', 'second.attempt@example.test');
+        await admin.page.click('#sendBtn');
+        await admin.page.waitForSelector('#gateBox', { state: 'visible', timeout: 15000 });
+        await admin.page.click('#gateBtn');
         if (STAND_IN) {
           await admin.page.waitForURL(/\/pay\/cs_test_/, { timeout: 15000 });
           eq(admin.page.url().split('/pay/')[1], sessionId, 'session id');
           const creates = (await stripeRequestLog()).filter((r) => r.method === 'POST' && r.path === '/checkout/sessions');
-          eq(creates.length, 1, 'Checkout Sessions created');
-          return `same session ${sessionId}; 1 session created in total`;
+          eq(creates.length - sessionsBeforeBrowser, 1, 'Checkout Sessions created for this dealer in the browser');
+          return `same session ${sessionId}; still only 1 session for this dealer`;
         }
         await admin.page.waitForURL(/checkout\.stripe\.com/, { timeout: 30000 });
         eq((await tenantRow('e2e-new-dealer')).activation_checkout_session_id, sessionId, 'stored session id');
@@ -770,18 +863,33 @@ async function main() {
 
     section('Dealer page — staff of the unactivated dealer');
     const staff = await openPage();
-    await check('Staff sign-in shows "ask your admin" — no redirect to Checkout, no session created', async () => {
+    // A salesperson gets the same dashboard and the same offer to pay. They
+    // used to be told to go and find an admin -- at the moment they had a
+    // customer typed in and were trying to use the thing.
+    await check('Staff sign-in also lands on the dashboard, and creates no Checkout Session', async () => {
       const before = STAND_IN ? (await stripeRequestLog()).filter((r) => r.path === '/checkout/sessions').length : 0;
       await signInOnPage(staff.page, USERS.newStaff);
-      await staff.page.waitForSelector('#gateBox', { state: 'visible' });
-      await sleep(1500);
-      eq((await staff.page.textContent('#gateTitle')).trim(), 'Account not activated yet', 'gate title');
+      await staff.page.waitForSelector('#sendForm', { state: 'visible', timeout: 15000 });
+      await sleep(1000);
+      assert(!(await staff.page.locator('#gateBox').isVisible()), 'the payment gate took over for staff on sign-in');
       assert(staff.page.url().startsWith(DEALER_URL), `staff was navigated away: ${staff.page.url()}`);
       if (STAND_IN) {
         const after = (await stripeRequestLog()).filter((r) => r.path === '/checkout/sessions').length;
         eq(after, before, 'Checkout Sessions created by the staff sign-in');
       }
-      return `"${(await staff.page.textContent('#gateLede')).trim()}"`;
+      return 'dashboard visible for a non-admin, no Checkout Session created';
+    });
+    await check('A salesperson pressing send is offered checkout, not "ask your admin"', async () => {
+      await staff.page.fill('#custName', 'Staff Customer');
+      await staff.page.fill('#custEmail', 'staff.customer@example.test');
+      await staff.page.click('#sendBtn');
+      await staff.page.waitForSelector('#gateBox', { state: 'visible', timeout: 15000 });
+      await sleep(1000);
+      const title = (await staff.page.textContent('#gateTitle')).trim();
+      const lede = (await staff.page.textContent('#gateLede')).trim();
+      eq(title, 'Activate your account', 'gate title');
+      assert(!/admin/i.test(lede), `staff was still told to find an admin: "${lede}"`);
+      return `"${lede.slice(0, 90)}"`;
     });
 
     // ----- Pay, webhook, unlock ----------------------------------------------
@@ -1645,8 +1753,13 @@ async function main() {
         const line = proc.lines.find((l) => l.includes('Stripe billing:'));
         const testActivated = await api('GET', '/api/me', { base, token: tokenFor(USERS.newAdmin) });
         eq(testActivated.body.activation.required, true, 'test-activated tenant on a live key');
-        const blocked = await api('GET', '/api/referrals', { base, token: tokenFor(USERS.newAdmin) });
-        eq(blocked.status, 402, 'test-activated tenant GET /api/referrals on a live key');
+        // A send, not a read: reads are open to any unactivated tenant now,
+        // so they would not show this gate working. What must still be true
+        // is that a tenant unlocked only by a test-mode payment cannot send
+        // real email on a live key.
+        const blocked = await api('POST', '/api/customers', {
+          base, token: tokenFor(USERS.newAdmin), body: { name: 'Blocked', email: 'blocked.livekey@example.test' } });
+        eq(blocked.status, 402, 'test-activated tenant POST /api/customers on a live key');
         const exempt = await api('GET', '/api/me', { base, token: tokenFor(USERS.gssAdmin) });
         eq(exempt.body.activation.required, false, 'GSS on a live key');
         let liveNote = '';
