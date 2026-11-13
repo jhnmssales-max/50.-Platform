@@ -96,9 +96,6 @@
     border-radius:6px;background:none;cursor:pointer;}
   .wask{margin:0 0 4px;font-size:14px;font-weight:600;line-height:1.4;}
   .wbox label{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);}
-  .copygroup{border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:10px 0;}
-  .copygroup > summary{cursor:pointer;font-weight:600;font-size:13px;padding:4px 0;}
-  .copygroup[open] > summary{margin-bottom:6px;border-bottom:1px solid var(--line);padding-bottom:8px;}
   .nologo{font-size:12px;color:#A33;margin-top:2px;}
   .linkbtn{border:0;background:none;padding:0;font:inherit;font-size:11px;
     color:var(--muted);text-decoration:underline;cursor:pointer;}
@@ -278,69 +275,278 @@
   details.wording{border:1px dashed var(--line);border-radius:10px;padding:10px 14px;margin:14px 0 4px;}
   details.wording summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--primary);}
 
-  /* The wording wizard. Three steps, because nine boxes at once is what reps
-     found overwhelming, and a picture of the real page beside each box,
-     because the hard part was never the typing -- it was not knowing where
-     the words come out. See api/scripts/build-wording-shots.js for where the
-     pictures and the pin coordinates come from. */
-  .wiz{border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden;margin:10px 0 2px;}
-  .wizsteps{display:flex;border-bottom:1px solid var(--line);background:var(--bg);}
-  .wstep{flex:1;min-width:0;border:0;background:none;cursor:pointer;font:inherit;font-size:12px;
-         padding:9px 8px;color:var(--muted);border-bottom:2px solid transparent;text-align:center;}
-  .wstep .n{display:inline-flex;width:17px;height:17px;border-radius:50%;background:var(--line);color:var(--primary);
-            align-items:center;justify-content:center;font-size:10px;font-weight:700;margin-right:5px;vertical-align:-3px;}
-  .wstep.on{color:var(--primary);font-weight:600;border-bottom-color:var(--accent);background:var(--card);}
-  .wstep.on .n{background:var(--accent);color:#fff;}
-  .wstep.done .n{background:var(--ok);color:#fff;}
-  .wpane{display:none;padding:14px;gap:16px;}
-  .wpane.on{display:flex;align-items:flex-start;}
-  /* A FIXED height, not max-height: the picture arrives after the boxes are
-     already on screen, and in the stacked phone layout it sits above them.
-     Sized only by its content, the panel is ~60px of "Loading..." until the
-     image lands and then jumps to full height, shoving every box below it
-     down by about 200px -- which lands a rep's tap on the wrong control.
-     Holding the space from the first paint costs nothing and stops that.
-     position:relative is what the pin below is absolutely placed against. */
-  .wshot{flex:0 0 42%;border:1px solid var(--line);border-radius:9px;background:var(--bg);
-         height:340px;display:flex;flex-direction:column;overflow:hidden;}
-  /* The scrolling half, and what the pin is absolutely placed against. Kept
-     separate from .wshot so the caption below can stay a fixed row rather
-     than floating wherever a short picture happens to end. */
-  .wscroll{flex:1;min-height:0;overflow:auto;position:relative;}
-  .wscroll img{display:block;width:100%;}
-  .wshot.zoom .wscroll img{width:auto;max-width:none;}
-  .wshotmsg{margin:0;padding:22px 14px;text-align:center;font-size:12px;color:var(--muted);}
-  .wshotcap{flex:0 0 auto;font-size:11px;color:var(--muted);padding:6px 9px;border-top:1px solid var(--line);
-            background:var(--card);display:flex;justify-content:space-between;gap:8px;}
-  .wpin{position:absolute;outline:2px solid var(--accent);background:rgba(201,151,75,.22);border-radius:3px;
-        box-shadow:0 0 0 3000px rgba(27,43,51,.26);pointer-events:none;}
-  .wfields{flex:1;min-width:0;}
-  .wbox{padding:0 0 14px;}
-  .wbox + .wbox{border-top:1px dashed var(--line);padding-top:14px;}
-  .wbox.act label{color:var(--accent-dark);}
-  .wrow{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:5px 0 0;}
-  .wcount{font-size:11px;color:var(--muted);margin-left:auto;font-variant-numeric:tabular-nums;}
-  /* The whole point of the rebuild: six of the nine boxes are fragments that
-     finish a sentence the rep could not see. This shows that sentence. */
-  .wprev{margin:7px 0 0;padding:8px 10px;border-left:3px solid var(--accent);background:var(--bg);
-         border-radius:0 7px 7px 0;font-size:12.5px;line-height:1.55;color:var(--primary-dark);}
-  .wprev b{background:#FFF4D6;padding:0 3px;border-radius:3px;font-weight:600;color:var(--charcoal);}
-  .wprev.gen{color:var(--muted);}
-  .wprev.gen b{background:var(--line);color:var(--muted);font-weight:500;}
-  .wnav{display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--line);background:var(--bg);}
-  .wpos{font-size:12px;color:var(--muted);margin:0 auto;}
-  /* On a phone the tab labels do not fit, so the tabs become numbered dots
-     and the step name moves into the pane -- a rep must never be looking at
-     three bare numbers wondering which page they are wording. */
-  .wtitle{display:none;}
-  @media(max-width:560px){
-    .wpane.on{display:block;}
-    .wshot{height:230px;margin:0 0 12px;}
-    .wstep{font-size:0;padding:11px 4px;}
-    .wstep .n{font-size:11px;margin:0;width:20px;height:20px;}
-    .wstep.on{border-bottom-width:3px;}
-    .wtitle{display:block;margin:0 0 10px;font-weight:600;font-size:13px;color:var(--primary);}
+  /* The wording wizard.
+     One step per PAGE the words actually come out on, and each step is a
+     drawing of that page with the wording editable exactly where it sits.
+     The old version showed a column of labelled boxes beside a thumbnail
+     with a pin on it; reps still could not tell which sentence went where,
+     and the labels ("The same thing, past tense") only make sense next to
+     the sentence they finish.
+     The drawings are CSS, not pictures. That keeps the wizard working with
+     no network, and it replaced a screenshot pipeline that had to be re-run
+     by hand after any layout change and had been unrunnable since the
+     follow-up fields went in. */
+  .wiz{margin:10px 0 2px;}
+  /* .btn sets display, which beats the bare [hidden] attribute. */
+  .wiz [hidden]{display:none !important;}
+  .wiz .wbar{display:flex;gap:5px;margin:0 0 10px;}
+  .wiz .wstep{flex:1;height:5px;min-width:0;border:0;border-radius:3px;background:var(--line);
+         padding:0;font-size:0;cursor:pointer;-webkit-appearance:none;appearance:none;}
+  .wiz .wstep.done{background:var(--secondary);}
+  .wiz .wstep.on{background:var(--accent);}
+  .wiz .wstep:focus-visible{outline:2px solid var(--secondary);outline-offset:2px;}
+  .wiz .wpos{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
+  .wiz .wh{font-family:'Fraunces',serif;font-size:20px;font-weight:600;color:var(--primary);
+      margin:3px 0 3px;line-height:1.25;text-wrap:balance;}
+  .wiz .wsub{font-size:12.5px;color:var(--muted);margin:0 0 13px;line-height:1.5;}
+  .wiz .wpane{display:none;}
+  .wiz .wpane.on{display:block;}
+
+  /* The surface the drawing sits on. overflow-x on the stage, never on the
+     page: the Gmail drawing has a minimum width and a rep on a phone scrolls
+     the drawing sideways rather than the whole dialog. */
+  .wiz .wstage{background:#EDE8DF;border:1px solid var(--line);border-radius:14px;
+          padding:16px;display:flex;overflow-x:auto;
+  /* `safe` centre, and flush-left for anything that does not understand it.
+     A plainly centred flex child WIDER than the scroll box has its leading
+     edge cut off and cannot be scrolled back to -- on a phone that sliced
+     the first character off every line of the email. Auto margins do the
+     same thing, so they are not the way out either. */
+          justify-content:flex-start;justify-content:safe center;}
+  .wiz .wstage > *{flex:0 0 auto;}
+
+  /* Vocabulary that appears in several places at once rather than in one
+     sentence on the drawing above it. */
+  .wiz .wvocab{margin:12px 2px 0;font-size:12.5px;line-height:2;color:var(--primary-dark);}
+  .wiz .wvocab b{font-weight:600;}
+
+  /* One strip for the field that has focus, instead of a count and a button
+     under every box. Holds its height so nothing shifts as focus moves. */
+  .wiz .wstrip{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-height:34px;
+          margin-top:12px;font-size:12px;color:var(--muted);}
+  .wiz .wstrip .wlab{font-weight:600;color:var(--primary);}
+  .wiz .wstrip .wcount{margin-left:auto;font-variant-numeric:tabular-nums;}
+  .wiz .wnav{display:flex;align-items:center;gap:10px;margin-top:10px;
+        border-top:1px solid var(--line);padding-top:12px;}
+  .wiz .wnav .wmid{margin:0 auto;font-size:12px;color:var(--muted);}
+
+  /* ---- the editable text itself ---------------------------------------
+     Invisible until hovered, so the drawing reads as the finished page and
+     not as a form. Every control keeps name="copy_<key>", which is what
+     readCopyFields() saves by. */
+  .wiz .e{font:inherit;color:inherit;letter-spacing:inherit;line-height:inherit;text-align:inherit;
+          background:transparent;border:0;border-bottom:1.5px dashed transparent;border-radius:2px;
+          padding:0 2px;margin:0;width:100%;display:block;resize:none;overflow:hidden;}
+  .wiz .e:hover{border-bottom-color:var(--accent);background:#FFF8E8;cursor:text;}
+  .wiz .e:focus{outline:0;border-bottom-color:var(--accent);background:#FFF4D6;
+                box-shadow:0 0 0 3px rgba(201,151,75,.22);}
+  .wiz .e::placeholder{color:inherit;opacity:.6;}
+  /* An optional slot with no default wording: a prompt, not a sentence. */
+  .wiz .e.opt:placeholder-shown::placeholder{font-style:italic;opacity:.45;}
+  /* A word sitting inside a sentence rather than owning its own line. Width
+     is set in script from the text, so the sentence closes up around it. */
+  .wiz .e.inl{display:inline-block;width:auto;max-width:100%;vertical-align:baseline;}
+  .wiz .wsizer{position:absolute;left:-9999px;top:0;white-space:pre;visibility:hidden;}
+
+  /* ---- Gmail ----------------------------------------------------------- */
+  .wiz .gmail{width:100%;min-width:560px;max-width:860px;background:#fff;border-radius:11px;
+         box-shadow:0 3px 18px rgba(28,43,51,.16);overflow:hidden;
+         font-family:'Google Sans',Roboto,Arial,sans-serif;text-align:left;}
+  .wiz .g-top{height:52px;background:#F6F8FC;display:flex;align-items:center;padding:0 13px;gap:13px;}
+  .wiz .g-burger{width:17px;display:flex;flex-direction:column;gap:3px;flex-shrink:0;}
+  .wiz .g-burger i{height:2px;background:#5f6368;border-radius:1px;}
+  .wiz .g-logo{display:flex;align-items:center;gap:7px;flex-shrink:0;}
+  .wiz .g-logo .m{width:28px;height:21px;background:#fff;border:1px solid #E0E0E0;border-radius:3px;position:relative;overflow:hidden;}
+  .wiz .g-logo .m:before{content:'';position:absolute;inset:0;background:
+    linear-gradient(135deg,#EA4335 0 32%,transparent 32%),
+    linear-gradient(225deg,#4285F4 0 32%,transparent 32%);}
+  .wiz .g-logo .m:after{content:'';position:absolute;left:32%;right:32%;top:0;bottom:0;background:#FBBC04;opacity:.9;}
+  .wiz .g-logo span{font-size:19px;color:#5f6368;letter-spacing:-.3px;}
+  .wiz .g-search{flex:1;min-width:0;height:38px;background:#EAF1FB;border-radius:8px;display:flex;
+            align-items:center;padding:0 14px;gap:11px;color:#5f6368;font-size:13px;}
+  .wiz .g-search .mag{width:14px;height:14px;border:2px solid #5f6368;border-radius:50%;position:relative;flex-shrink:0;}
+  .wiz .g-search .mag:after{content:'';position:absolute;right:-5px;bottom:-3px;width:7px;height:2px;background:#5f6368;transform:rotate(45deg);}
+  .wiz .g-av{width:29px;height:29px;border-radius:50%;background:var(--primary);color:#fff;display:flex;
+        align-items:center;justify-content:center;font-size:12px;font-weight:600;flex-shrink:0;}
+  .wiz .g-body{display:flex;}
+  .wiz .g-rail{width:186px;padding:8px 0 14px 8px;flex-shrink:0;background:#F6F8FC;}
+  .wiz .g-compose{display:inline-flex;align-items:center;gap:9px;background:#C2E7FF;border-radius:16px;
+             padding:12px 20px 12px 14px;font-size:13px;color:#001D35;font-weight:500;margin-bottom:12px;}
+  .wiz .g-nav div{display:flex;align-items:center;gap:14px;padding:6px 10px 6px 18px;font-size:13px;color:#202124;
+             border-radius:0 16px 16px 0;margin-right:9px;}
+  .wiz .g-nav div.on{background:#D3E3FD;font-weight:700;}
+  .wiz .g-nav .ic{width:17px;text-align:center;font-size:14px;color:#5f6368;flex-shrink:0;line-height:1;}
+  .wiz .g-nav .ct{margin-left:auto;font-size:11px;color:#5f6368;font-weight:400;}
+  .wiz .g-pane{flex:1;background:#fff;min-width:0;}
+  .wiz .g-tools{height:42px;display:flex;align-items:center;gap:18px;padding:0 20px;border-bottom:1px solid #F1F3F4;}
+  .wiz .g-tools .t{width:16px;height:16px;border:2px solid #5f6368;border-radius:3px;opacity:.55;flex-shrink:0;}
+  .wiz .gm-subject{padding:17px 22px 9px;font-size:19px;color:#202124;line-height:1.3;
+              display:flex;align-items:center;gap:10px;}
+  .wiz .gm-subject .e{flex:1;min-width:0;}
+  .wiz .gm-chip{font-size:10.5px;background:#DDD;color:#3c4043;border-radius:4px;padding:2px 7px;font-weight:500;flex-shrink:0;}
+  .wiz .gm-from{padding:0 22px 14px;display:flex;align-items:center;gap:11px;}
+  .wiz .gm-av{width:35px;height:35px;border-radius:50%;background:#2F5D3A;color:#fff;display:flex;align-items:center;
+         justify-content:center;font-size:14px;font-weight:600;flex-shrink:0;}
+  .wiz .gm-who{font-size:13px;color:#202124;font-family:Roboto,Arial,sans-serif;min-width:0;}
+  .wiz .gm-who b{font-weight:700;}
+  .wiz .gm-who span{color:#5f6368;font-size:12px;}
+  .wiz .gm-when{margin-left:auto;font-size:12px;color:#5f6368;text-align:right;flex-shrink:0;}
+  .wiz .gm-body{padding:4px 22px 22px 68px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.62;color:#1B1B1B;}
+  .wiz .gm-body p{margin:0 0 13px;}
+  .wiz .gm-logo{font-family:'Fraunces',Georgia,serif;font-size:18px;color:#2F5D3A;font-weight:700;margin-bottom:16px;}
+  .wiz .gm-cta{display:inline-block;background:#2F5D3A;color:#fff;padding:12px 20px;border-radius:8px;
+          font-weight:700;font-size:14px;margin:8px 0 12px;}
+  .wiz .gm-link{color:#1a73e8;word-break:break-all;font-size:12.5px;}
+  .wiz .gm-fine{font-size:11.5px;color:#70757a;line-height:1.5;margin-top:16px;border-top:1px solid #F1F3F4;padding-top:12px;}
+  .wiz .g-reply{padding:0 22px 20px 68px;display:flex;gap:10px;}
+  .wiz .g-reply div{border:1px solid #DADCE0;border-radius:18px;padding:7px 20px;font-size:13px;color:#3c4043;
+               font-family:Roboto,Arial,sans-serif;}
+
+  /* ---- iPhone ---------------------------------------------------------- */
+  .wiz .iphone{width:336px;padding:10px;border-radius:50px;position:relative;
+          background:linear-gradient(150deg,#D7D5D1 0%,#8E8C88 22%,#E6E4E0 48%,#7E7C78 76%,#CFCDC9 100%);
+          box-shadow:0 10px 30px rgba(28,43,51,.26);}
+  .wiz .iphone .glass{background:#000;border-radius:41px;padding:3px;overflow:hidden;}
+  .wiz .screen{background:#fff;border-radius:38px;overflow:hidden;position:relative;min-height:520px;text-align:left;}
+  .wiz .statusbar{height:46px;display:flex;align-items:flex-end;padding:0 26px 6px;position:relative;z-index:3;}
+  .wiz .statusbar .time{font-family:-apple-system,'Segoe UI',sans-serif;font-size:14px;font-weight:600;color:#000;letter-spacing:-.2px;}
+  .wiz .statusbar .right{margin-left:auto;display:flex;align-items:center;gap:6px;}
+  .wiz .bars{display:flex;align-items:flex-end;gap:2px;height:11px;}
+  .wiz .bars i{width:3px;background:#000;border-radius:1px;}
+  .wiz .bars i:nth-child(1){height:4px;}.bars i:nth-child(2){height:6px;}
+  .wiz .bars i:nth-child(3){height:8.5px;}.bars i:nth-child(4){height:11px;}
+  .wiz .batt{width:24px;height:12px;border:1.6px solid rgba(0,0,0,.4);border-radius:3.5px;padding:1.6px;position:relative;}
+  .wiz .batt i{display:block;height:100%;width:78%;background:#000;border-radius:1.6px;}
+  .wiz .batt:after{content:'';position:absolute;right:-3.4px;top:3.6px;width:2px;height:4px;background:rgba(0,0,0,.4);border-radius:0 1px 1px 0;}
+  .wiz .island{position:absolute;top:10px;left:50%;transform:translateX(-50%);width:100px;height:29px;background:#000;border-radius:18px;z-index:4;}
+  .wiz .homebar{height:24px;display:flex;align-items:center;justify-content:center;position:relative;z-index:3;}
+  .wiz .homebar i{width:120px;height:5px;background:#000;border-radius:3px;opacity:.9;}
+  .wiz .safari{background:#F7F7F7;padding:7px 14px;display:flex;align-items:center;justify-content:center;gap:6px;
+          font-family:-apple-system,'Segoe UI',sans-serif;font-size:12.5px;color:#1B1B1B;border-bottom:1px solid #DCDCDC;}
+  .wiz .sp{padding:24px 22px 28px;text-align:center;font-family:-apple-system,'Segoe UI',Arial,sans-serif;}
+  .wiz .sp .logo{font-family:'Fraunces',Georgia,serif;font-size:19px;color:#2F5D3A;font-weight:700;margin-bottom:18px;}
+  .wiz .sp h2{font-size:21px;color:#1B1B1B;line-height:1.28;margin:0 0 11px;font-weight:700;letter-spacing:-.3px;}
+  .wiz .sp p{font-size:14px;line-height:1.58;color:#44433E;margin:0 0 16px;}
+  .wiz .sp .big{background:#2F5D3A;color:#fff;padding:15px 10px;border-radius:12px;font-weight:700;font-size:15.5px;margin-bottom:13px;}
+  .wiz .sp .lnk{background:#F3F1EB;border:1px dashed #D6D0C4;border-radius:10px;padding:11px;font-size:11.5px;
+           color:#6B6A63;word-break:break-all;margin-bottom:16px;}
+  .wiz .sp .fine{font-size:12px;color:#8A887F;line-height:1.5;}
+  .wiz .tabbar{border-top:1px solid #DCDCDC;background:#F7F7F7;padding:10px 24px 5px;display:flex;justify-content:space-between;opacity:.45;}
+  .wiz .tabbar div{width:16px;height:16px;border:2px solid #333;border-radius:3px;}
+
+  /* ---- the iOS share sheet --------------------------------------------- */
+  .wiz .behind{background:#fff;padding:18px 22px;text-align:center;filter:blur(1.6px);opacity:.5;
+          font-family:-apple-system,'Segoe UI',Arial,sans-serif;}
+  .wiz .behind .logo{font-family:'Fraunces',Georgia,serif;font-size:18px;color:#2F5D3A;font-weight:700;margin-bottom:14px;}
+  .wiz .behind .big{background:#2F5D3A;color:#fff;padding:14px;border-radius:11px;font-weight:700;font-size:14px;}
+  .wiz .scrim{position:absolute;inset:0;background:rgba(0,0,0,.26);z-index:2;border-radius:38px;}
+  .wiz .sheet{position:absolute;left:0;right:0;bottom:0;z-index:5;background:#F2F2F7;border-radius:14px 14px 38px 38px;
+         padding:11px 10px 4px;font-family:-apple-system,'Segoe UI',sans-serif;}
+  .wiz .grab{width:34px;height:5px;background:#C7C7CC;border-radius:3px;margin:0 auto 12px;}
+  .wiz .shcard{background:#fff;border-radius:13px;padding:12px;display:flex;gap:11px;align-items:flex-start;margin-bottom:14px;}
+  .wiz .shcard .ico{width:42px;height:42px;border-radius:10px;background:#2F5D3A;color:#fff;display:flex;align-items:center;
+               justify-content:center;font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:16px;flex-shrink:0;}
+  .wiz .shcard .bd{min-width:0;flex:1;}
+  .wiz .shcard .t{font-size:14px;font-weight:600;color:#000;line-height:1.3;margin-bottom:3px;letter-spacing:-.2px;}
+  .wiz .shcard .d{font-size:12.5px;color:#8A8A8E;line-height:1.38;}
+  .wiz .apps{display:flex;gap:12px;margin-bottom:14px;padding:0 2px;}
+  .wiz .app{text-align:center;flex:1;}
+  .wiz .app .b{width:50px;height:50px;border-radius:12px;margin:0 auto 5px;display:flex;align-items:center;
+          justify-content:center;color:#fff;font-size:19px;}
+  .wiz .app .n{font-size:10.5px;color:#3C3C43;}
+  .wiz .rows{background:#fff;border-radius:13px;overflow:hidden;margin-bottom:9px;}
+  .wiz .rows .srow{padding:12px 14px;font-size:15px;color:#000;border-bottom:1px solid #E5E5EA;
+             display:flex;justify-content:space-between;align-items:center;letter-spacing:-.2px;}
+  .wiz .rows .srow:last-child{border-bottom:none;}
+
+  /* ---- a desktop browser window ---------------------------------------- */
+  .wiz .browser{width:100%;min-width:420px;max-width:660px;background:#fff;border-radius:10px;
+           box-shadow:0 2px 14px rgba(28,43,51,.13);overflow:hidden;text-align:left;}
+  .wiz .bz{height:36px;background:#E8EAED;display:flex;align-items:center;padding:0 12px;gap:7px;}
+  .wiz .bz .d{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+  .wiz .bz .u{flex:1;min-width:0;background:#fff;border-radius:13px;height:22px;margin-left:9px;font-size:11px;
+         color:#5f6368;display:flex;align-items:center;padding:0 11px;overflow:hidden;white-space:nowrap;}
+  .wiz .lp{padding:26px 36px 32px;font-family:Arial,Helvetica,sans-serif;text-align:center;}
+  .wiz .lp .logo{font-family:'Fraunces',Georgia,serif;font-size:18px;color:#2F5D3A;font-weight:700;margin-bottom:18px;}
+  .wiz .lp h2{font-size:23px;color:#1B1B1B;margin:0 0 10px;font-weight:700;}
+  .wiz .lp .pitch{font-size:14px;line-height:1.6;color:#44433E;margin:0 0 20px;}
+  .wiz .fm{text-align:left;max-width:400px;margin:0 auto;}
+  .wiz .fm label{display:block;font-size:12.5px;font-weight:600;color:var(--primary);margin:0 0 5px;}
+  .wiz .fm .fld{border:1px solid #D6D0C4;border-radius:8px;padding:9px 11px;font-size:13px;color:#A9A69C;margin-bottom:12px;background:#fff;}
+  .wiz .fm .fld.ta{min-height:54px;}
+  .wiz .fm .go{background:#2F5D3A;color:#fff;border-radius:9px;padding:13px;text-align:center;font-weight:700;font-size:14.5px;margin:4px 0 11px;}
+  .wiz .fm .fine{font-size:11.5px;color:#8A887F;line-height:1.5;text-align:center;}
+  /* the confirmation the friend reads after sending the form */
+  .wiz .conf{margin:16px auto 0;max-width:400px;background:#F3F7F4;border:1px solid #D7E3DA;border-radius:9px;
+        padding:12px 14px;font-size:12.5px;line-height:1.6;color:#2F5D3A;text-align:left;}
+  /* the terms page */
+  .wiz .terms{padding:24px 32px 30px;font-family:Arial,Helvetica,sans-serif;text-align:left;}
+  .wiz .terms h2{font-size:19px;color:#1B1B1B;margin:0 0 4px;}
+  .wiz .terms .asof{font-size:11.5px;color:#8A887F;margin:0 0 18px;}
+  .wiz .terms h3{font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#6B6A63;margin:16px 0 5px;}
+  .wiz .terms p{font-size:13.5px;line-height:1.62;color:#1B1B1B;margin:0;}
+
+  /* ---- the dealer's own dashboard -------------------------------------- */
+  .wiz .dash{width:100%;min-width:420px;max-width:660px;background:#fff;border-radius:10px;
+        box-shadow:0 2px 14px rgba(28,43,51,.13);overflow:hidden;text-align:left;}
+  .wiz .dh{background:var(--primary);color:#fff;padding:13px 20px;display:flex;align-items:center;justify-content:space-between;gap:10px;}
+  .wiz .dh .n{font-family:'Fraunces',Georgia,serif;font-size:16px;font-weight:700;}
+  .wiz .dh .w{font-size:11px;opacity:.65;}
+  .wiz .alert{margin:18px;border:2px solid var(--accent);background:#FFFBF2;border-radius:12px;padding:18px 20px;}
+  .wiz .alert .wtag{font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--accent-dark);margin-bottom:8px;}
+  .wiz .alert h3{font-size:16px;color:var(--primary);margin:0 0 4px;}
+  .wiz .alert .wwho{font-size:12.5px;color:var(--muted);margin-bottom:15px;}
+  .wiz .pair{display:flex;gap:12px;margin-bottom:15px;flex-wrap:wrap;}
+  .wiz .half{flex:1 1 220px;min-width:0;background:#fff;border:1px solid var(--line);border-radius:9px;padding:12px 13px;}
+  .wiz .half .lab{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#8A887F;margin-bottom:6px;}
+  .wiz .half .wnote{font-size:13px;line-height:1.55;color:var(--charcoal);}
+  .wiz .acts{display:flex;gap:9px;flex-wrap:wrap;}
+  .wiz .acts .go{background:var(--primary);color:#fff;border-radius:8px;padding:10px 18px;font-size:13px;font-weight:600;}
+  .wiz .acts .sk{border:1px solid var(--line);border-radius:8px;padding:10px 18px;font-size:13px;font-weight:600;color:var(--muted);}
+
+  @media(max-width:620px){
+    /* The rail is Gmail furniture, not the email. First thing to go. */
+    .wiz .g-rail{display:none;}
+    .wiz .gmail{min-width:420px;}
+    .wiz .gm-body, .wiz .g-reply{padding-left:22px;}
+    .wiz .wh{font-size:18px;}
   }
+  @media(max-width:480px){
+    /* A rep on a phone: the windows shrink to fit rather than being scrolled
+       sideways. Narrower than a real inbox, but it is the wording being read
+       here, not the layout. */
+    .wiz .gmail, .wiz .browser, .wiz .dash{min-width:0;}
+    .wiz .wstage{padding:10px;}
+    .wiz .gm-subject, .wiz .gm-from, .wiz .gm-snip{padding-left:16px;padding-right:16px;}
+    .wiz .gm-body, .wiz .g-reply{padding-left:16px;padding-right:16px;}
+    .wiz .lp{padding:20px 18px 24px;}
+    .wiz .terms{padding:18px 18px 22px;}
+    .wiz .alert{margin:12px;padding:14px;}
+    .wiz .iphone{width:300px;padding:8px;border-radius:44px;}
+    .wiz .iphone .glass{border-radius:36px;}
+    .wiz .screen{border-radius:33px;}
+    .wiz .sheet{border-radius:14px 14px 33px 33px;}
+    .wiz .scrim{border-radius:33px;}
+  }
+
+  /* The inbox-list snippet, which has nowhere to live in an opened message. */
+  .wiz .gm-snip{padding:0 22px 12px;font-size:12px;color:#5f6368;display:flex;align-items:baseline;gap:6px;}
+  .wiz .gm-snip .e{flex:1;min-width:0;}
+  /* Shown only on steps where a token is actually on screen. */
+  .wiz .wtokens{margin:10px 2px 0;font-size:11.5px;color:var(--muted);line-height:1.6;}
+  .wiz .wtokens b{font-weight:600;color:var(--primary-dark);font-family:ui-monospace,Menlo,Consolas,monospace;}
+  /* Fields the drawings do not place -- a field added to the API before a
+     drawing catches up still gets a box rather than disappearing. */
+  .wiz .wplain{width:100%;max-width:620px;text-align:left;}
+  .wiz .wpbox + .wpbox{margin-top:14px;}
+  .wiz .wpbox label{display:block;font-size:12.5px;font-weight:600;color:var(--primary);margin:0 0 5px;}
+  .wiz .e.pl{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--card);
+             font-family:inherit;font-size:13.5px;}
+  .wiz .e.pl:hover, .wiz .e.pl:focus{background:#FFFDF7;}
+  /* Controls drawn on a dark button, where the hover tint would be unreadable. */
+  .wiz .e.ondk:hover{background:rgba(255,255,255,.18);border-bottom-color:#fff;}
+  .wiz .e.ondk:focus{background:rgba(255,255,255,.26);border-bottom-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.3);}
+  .wiz .e.ondk::placeholder{color:#fff;opacity:.75;}
   .stagehead{font-family:'Fraunces',serif;font-weight:600;color:var(--primary);font-size:14px;
     margin:16px 0 0;padding-top:10px;border-top:1px solid var(--line);}
   .stagehead:first-of-type{border-top:0;padding-top:0;margin-top:8px;}
@@ -1008,17 +1214,14 @@ function readPricingFields(form, { onlyChanges = false } = {}){
 // set the invite email, the landing page voice or the gift-card notes -- they
 // were not on the screen at all. One list, on the server, is the fix.
 let COPY_FIELDS = [];
-let WORDING_STEPS = [];
 
+// The server groups the fields by `stage`, but the wizard no longer walks
+// stages -- it walks the pages a customer actually sees, which is not the
+// same split (two stages were never pages, and one field appears on two).
+// See WPAGES below. All this keeps is the list itself.
 function buildWordingSteps(fields){
   COPY_FIELDS = fields || [];
-  const steps = [];
-  COPY_FIELDS.forEach((f) => {
-    const st = steps.find((x) => x.title === f.stage);
-    (st ? st.keys : (steps[steps.push({ title: f.stage || 'Wording', keys: [] }) - 1]).keys).push(f.key);
-  });
-  WORDING_STEPS = steps;
-  return steps;
+  return COPY_FIELDS;
 }
 
 // Loaded once per session, before the build screen needs it. A failure here
@@ -1030,43 +1233,16 @@ function loadCopyFields(){
   if(!copyFieldsPromise){
     copyFieldsPromise = api('/copy-fields')
       .then((r) => { buildWordingSteps(r.fields); return COPY_FIELDS; })
-      .catch((err) => { console.error('copy fields unavailable: ' + err.message); return COPY_FIELDS; });
+      .catch((err) => {
+        // A dealer's own login reaches start() and gets a 403 from this
+        // staff-only endpoint every time. That is the expected answer, not a
+        // fault, and logging it put a red error in the console of every
+        // dealer who signed in.
+        if(err.status !== 403) console.error('copy fields unavailable: ' + err.message);
+        return COPY_FIELDS;
+      });
   }
   return copyFieldsPromise;
-}
-
-// The pictures and pin coordinates, built by api/scripts/build-wording-shots.js
-// from the real pages. Fetched once, lazily, and never load-bearing: a rep in
-// a bad signal area still gets every box and can still save.
-let WSHOTS = null;
-let wshotsPromise = null;
-function loadWordingShots(){
-  if(WSHOTS) return Promise.resolve(WSHOTS);
-  if(!wshotsPromise){
-    // no-cache, NOT force-cache. force-cache serves whatever the browser
-    // already has without ever asking whether it changed, so adding a tenth
-    // field shipped a manifest nobody received: the page kept the nine-field
-    // copy, found no entry for the new box, and showed "No picture for this
-    // one yet" with no sentence under it. Every future change to the
-    // pictures would have been invisible the same way.
-    // no-cache still sends the ETag and still gets a 304 when nothing has
-    // changed, so this costs a round trip, not a download.
-    wshotsPromise = fetch('assets/wording/manifest.json', { cache:'no-cache' })
-      .then((r) => r.ok ? r.json() : Promise.reject(new Error('no manifest')))
-      .then((m) => { WSHOTS = m; return m; })
-      .catch(() => null);
-  }
-  return wshotsPromise;
-}
-
-// Which picture pins a given field, and where on it.
-function wmarkFor(key){
-  if(!WSHOTS) return null;
-  for(const shot of WSHOTS.shots){
-    const mark = shot.marks.find((m) => m.key === key);
-    if(mark) return { shot, mark };
-  }
-  return null;
 }
 
 // {name} is substituted because the page knows the business being set up, so
@@ -1077,10 +1253,16 @@ function wmarkFor(key){
 // `card` is whatever is currently typed in the gift-card box, so the offer
 // line's preview follows it as the rep types rather than promising an
 // emailed card to a business that posts them.
-function wfill(text, name, card){
+// `person` is set only for the two gift-card notes, where {name} is the
+// first name of whoever is reading the note and the business arrives as
+// {business} instead. Everywhere else {name} is the business. Substituting
+// the business into those two was quietly wrong before: the box previewed
+// "Hi Hilltop Builders -- thank you for recommending {business}".
+function wfill(text, name, card, person){
   return String(text == null ? '' : text)
     .replace(/\*\*/g, '')
-    .replace(/\{name\}/g, name || 'their business')
+    .replace(/\{business\}/g, name || 'their business')
+    .replace(/\{name\}/g, person || name || 'their business')
     .replace(/\{card\}/g, card || 'electronic gift card');
 }
 
@@ -1093,67 +1275,386 @@ function currentCardNoun(scope){
   return (f && f.generic) || 'electronic gift card';
 }
 
+// ---------------------------------------------------------------------------
+// The wording wizard.
+//
+// One step per PAGE the words come out on -- not per "stage" bucket, which is
+// how the server groups the fields. Two of those buckets were never pages:
+// "The invite email, and their share page" put five fields that appear in two
+// different places behind one heading, and reps reading a label like "The
+// same thing, past tense" had no way to tell what sentence it finished.
+//
+// So each step draws the real page and the rep types into it where the words
+// actually sit. The drawings are CSS, not screenshots: nothing is fetched and
+// the wizard works with no signal. It replaced a pipeline that shipped ~630KB
+// of screenshots with pinned coordinates, which had to be regenerated by hand
+// and had been unrunnable since the follow-up fields went in.
+//
+// Every control keeps name="copy_<key>", which is the only thing
+// readCopyFields() needs, so saving is unchanged.
+// ---------------------------------------------------------------------------
+
+// The sample customer and friend used throughout. Named once so the invite,
+// the share page, the share sheet and the friend's page all tell one story --
+// a rep clicking Next watches the same referral move through.
+const WHO = { first:'Dana', full:'Dana Whitfield', friend:'Mike Torres', friendFirst:'Mike' };
+
+function winitial(name){
+  const s = String(name || '').trim();
+  return s ? s.charAt(0).toUpperCase() : '50.'.charAt(0);
+}
+
+// A Gmail window with the message already open.
+function wGmail(n, subject, extra, when, body){
+  return '<div class="gmail">' +
+    '<div class="g-top">' +
+      '<div class="g-burger"><i></i><i></i><i></i></div>' +
+      '<div class="g-logo"><div class="m"></div><span>Gmail</span></div>' +
+      '<div class="g-search"><div class="mag"></div>Search mail</div>' +
+      '<div class="g-av">' + esc(WHO.first.charAt(0)) + '</div>' +
+    '</div>' +
+    '<div class="g-body">' +
+      '<div class="g-rail">' +
+        '<div class="g-compose">&#9998; Compose</div>' +
+        '<div class="g-nav">' +
+          '<div class="on"><div class="ic">&#9993;</div>Inbox<span class="ct">1</span></div>' +
+          '<div><div class="ic">&#9734;</div>Starred</div>' +
+          '<div><div class="ic">&#9201;</div>Snoozed</div>' +
+          '<div><div class="ic">&#10148;</div>Sent</div>' +
+          '<div><div class="ic">&#9707;</div>Drafts</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="g-pane">' +
+        '<div class="g-tools"><div class="t"></div><div class="t"></div><div class="t"></div><div class="t"></div></div>' +
+        '<div class="gm-subject">' + subject + '<span class="gm-chip">Inbox</span></div>' +
+        (extra || '') +
+        '<div class="gm-from">' +
+          '<div class="gm-av">' + esc(winitial(n)) + '</div>' +
+          '<div class="gm-who"><b>' + esc(n) + '</b> <span>&lt;hello@' + esc(wdomain(n)) + '&gt;</span><br><span>to me</span></div>' +
+          '<div class="gm-when">' + esc(when) + '</div>' +
+        '</div>' +
+        '<div class="gm-body">' + body + '</div>' +
+        '<div class="g-reply"><div>&#8617; Reply</div><div>&#8618; Forward</div></div>' +
+      '</div>' +
+    '</div></div>';
+}
+
+// Only ever shown inside a drawing of an inbox; never used to send anything.
+function wdomain(n){
+  const slug = String(n || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return (slug || 'yourbusiness') + '.com';
+}
+
+// An iPhone with whatever is passed on its screen.
+function wPhone(inner){
+  return '<div class="iphone"><div class="glass"><div class="screen">' +
+    '<div class="island"></div>' +
+    '<div class="statusbar"><div class="time">9:41</div><div class="right">' +
+      '<div class="bars"><i></i><i></i><i></i><i></i></div>' +
+      '<svg viewBox="0 0 16 12" width="16" height="12"><path d="M8 11.2 5.6 8.5a3.6 3.6 0 0 1 4.8 0L8 11.2z" fill="#000"/>' +
+      '<path d="M2.9 6.1a7.6 7.6 0 0 1 10.2 0" stroke="#000" stroke-width="1.7" fill="none" stroke-linecap="round"/>' +
+      '<path d="M.6 3.5a11 11 0 0 1 14.8 0" stroke="#000" stroke-width="1.7" fill="none" stroke-linecap="round"/></svg>' +
+      '<div class="batt"><i></i></div></div></div>' +
+    inner + '</div></div></div>';
+}
+
+function wBrowser(url, inner){
+  return '<div class="browser"><div class="bz">' +
+    '<div class="d" style="background:#FF5F57"></div><div class="d" style="background:#FEBC2E"></div>' +
+    '<div class="d" style="background:#28C840"></div><div class="u">&#128274; ' + esc(url) + '</div></div>' +
+    inner + '</div>';
+}
+
+const WTOKENS = {
+  '{name}': '<b>{name}</b> is the business\u2019s name',
+  '{reward}': '<b>{reward}</b> is their gift-card amount',
+  '{card}': '<b>{card}</b> is whatever they call the card',
+  '{first}': '<b>{first}</b> is the customer\u2019s first name',
+  '{referrer}': '<b>{referrer}</b> is the customer who shared the link',
+  '{business}': '<b>{business}</b> is the business\u2019s name'
+};
+
+// What an empty box shows. Most fields have generic wording that runs when
+// the box is left blank, and showing it as the placeholder is the whole point
+// -- a rep sees what a business gets for free. Ten fields are optional and
+// have no default at all (the extra invite paragraphs, most of the reminder);
+// those would draw as a blank line in the middle of an email, which reads as
+// a bug. They get a prompt instead, so the slot is visible and clickable.
+// The two fields where {name} is a person, not the business.
+const WPERSON = { rewardNoteReferrer: 'Dana', rewardNoteFriend: 'Mike' };
+
+function wplaceholder(f, name, card){
+  if(f.generic) return wfill(f.generic, name, card, WPERSON[f.key]);
+  return '+ ' + String(f.label || '').replace(/\s*\(optional\)\s*$/i, '').toLowerCase();
+}
+
+// The pages, in the order a referral actually travels through them.
+const WPAGES = [
+  {
+    id: 'invite',
+    title: 'The email their customer gets',
+    sub: 'Sent once their order is marked done. Hover any line to change it — everything here already works as written.',
+    keys: ['inviteSubject','inviteOpening','inviteHowItWorks','inviteAfterLink','inviteClosing','inviteSignature','inviteDisclaimer'],
+    draw: (c, n) => wGmail(n, c('inviteSubject'), '', '11:02 AM (2 hours ago)',
+      '<div class="gm-logo">' + esc(n) + '</div>' +
+      '<p>Hi ' + esc(WHO.first) + ',</p>' +
+      '<p>' + c('inviteOpening') + '</p>' +
+      '<p>' + c('inviteHowItWorks') + '</p>' +
+      '<div class="gm-cta">Get my referral link</div>' +
+      '<p class="gm-link">go.referwith50.com/r/dana-8T4kW2</p>' +
+      '<p>' + c('inviteAfterLink') + '</p>' +
+      '<p>' + c('inviteClosing') + '</p>' +
+      '<p>' + c('inviteSignature') + '</p>' +
+      '<div class="gm-fine">' + c('inviteDisclaimer') + '</div>')
+  },
+  {
+    id: 'share',
+    title: 'Their share page',
+    sub: 'Where that button in the email lands. This is the page the customer reads before deciding to pass the link on.',
+    keys: ['shareGreeting','shareIntro','offerHow','shareButton','shareClosing'],
+    draw: (c, n) => wPhone(
+      '<div class="safari">&#128274; go.referwith50.com</div>' +
+      '<div class="sp">' +
+        '<div class="logo">' + esc(n) + '</div>' +
+        '<h2>' + c('shareGreeting') + '</h2>' +
+        '<p>' + c('shareIntro') + '</p>' +
+        '<p>' + c('offerHow') + '</p>' +
+        '<div class="big">' + c('shareButton', { cls:'ondk' }) + '</div>' +
+        '<div class="lnk">go.referwith50.com/r/dana-8T4kW2</div>' +
+        '<p class="fine">' + c('shareClosing') + '</p>' +
+      '</div>' +
+      '<div class="tabbar"><div></div><div></div><div></div><div></div><div></div></div>' +
+      '<div class="homebar"><i></i></div>')
+  },
+  {
+    id: 'sheet',
+    title: 'Sending it to a friend',
+    sub: 'What their phone fills in when they press that button — the message the friend actually receives.',
+    keys: ['shareTitle','shareText','cardNoun'],
+    draw: (c, n) => wPhone(
+      '<div class="behind">' +
+        '<div class="logo">' + esc(n) + '</div>' +
+        '<div class="big">Share my referral link</div>' +
+      '</div>' +
+      '<div class="scrim"></div>' +
+      '<div class="sheet">' +
+        '<div class="grab"></div>' +
+        '<div class="shcard"><div class="ico">' + esc(winitial(n)) + '</div><div class="bd">' +
+          '<div class="t">' + c('shareTitle') + '</div>' +
+          '<div class="d">' + c('shareText') + '</div>' +
+        '</div></div>' +
+        '<div class="apps">' +
+          '<div class="app"><div class="b" style="background:linear-gradient(#5BF675,#0ACB2F)">&#128172;</div><div class="n">Messages</div></div>' +
+          '<div class="app"><div class="b" style="background:linear-gradient(#60FC7C,#1FAF38)">&#9742;</div><div class="n">WhatsApp</div></div>' +
+          '<div class="app"><div class="b" style="background:#1877F2;font-family:Georgia,serif;font-weight:700">f</div><div class="n">Facebook</div></div>' +
+          '<div class="app"><div class="b" style="background:#fff;border:1px solid #E0E0E0;color:#EA4335">&#9993;</div><div class="n">Gmail</div></div>' +
+        '</div>' +
+        '<div class="rows"><div class="srow">Copy</div><div class="srow">Add to Reading List</div></div>' +
+      '</div>'),
+    after: (c) => '<p class="wvocab">Everywhere the reward is mentioned — here, the terms page, the thank-you note — ' +
+      'you call it a <b>' + c('cardNoun', { inline:true }) + '</b>.</p>'
+  },
+  {
+    id: 'friend',
+    title: 'The page their friend lands on',
+    sub: 'Written as the customer speaking, not the business. It is their recommendation doing the work.',
+    keys: ['friendGreeting','friendPitch','leadPrompt','leadPlaceholder','leadButton','responseNote','afterPurchase','inquiryNoun'],
+    draw: (c, n) => wBrowser('go.referwith50.com/r/dana-8T4kW2',
+      '<div class="lp">' +
+        '<div class="logo">' + esc(n) + '</div>' +
+        '<h2>' + c('friendGreeting') + '</h2>' +
+        '<p class="pitch">' + c('friendPitch') + '</p>' +
+        '<div class="fm">' +
+          '<label>' + c('leadPrompt') + '</label>' +
+          '<div class="fld ta">' + c('leadPlaceholder') + '</div>' +
+          '<label>Your name</label><div class="fld">' + esc(WHO.friend) + '</div>' +
+          '<label>Your email</label><div class="fld">mike@email.com</div>' +
+          '<label>Phone number</label><div class="fld">(402) 555-0134</div>' +
+          '<div class="go">' + c('leadButton', { cls:'ondk' }) + '</div>' +
+          '<p class="fine">' + c('responseNote') + '</p>' +
+        '</div>' +
+      '</div>'),
+    after: (c, n) =>
+      '<p class="wvocab">The moment they press it they read: &ldquo;Thanks, ' + esc(WHO.friendFirst) +
+        ' — we&rsquo;ve got your info. Once you&rsquo;ve <b>' + c('afterPurchase', { inline:true }) +
+        '</b>, you and ' + esc(WHO.first) + ' will each get your card.&rdquo;</p>' +
+      '<p class="wvocab">And it arrives in ' + esc(n) + '&rsquo;s inbox as a new <b>' +
+        c('inquiryNoun', { inline:true }) + '</b>.</p>'
+  },
+  {
+    id: 'reminder',
+    title: 'The reminder email',
+    sub: 'Goes out later to customers who have not shared their link yet. Same voice, shorter.',
+    keys: ['followupSubject','followupPreview','followupOpening','followupBeforeLink','followupAfterLink','followupClosing','followupSignature','followupDisclaimer'],
+    draw: (c, n) => wGmail(n, c('followupSubject'),
+      '<div class="gm-snip">In the inbox list, this shows next to the subject: ' + c('followupPreview') + '</div>',
+      '8:14 AM (1 hour ago)',
+      '<div class="gm-logo">' + esc(n) + '</div>' +
+      '<p>Hi ' + esc(WHO.first) + ',</p>' +
+      '<p>' + c('followupOpening') + '</p>' +
+      '<p>' + c('followupBeforeLink') + '</p>' +
+      '<div class="gm-cta">Share my link</div>' +
+      '<p class="gm-link">go.referwith50.com/r/dana-8T4kW2</p>' +
+      '<p>' + c('followupAfterLink') + '</p>' +
+      '<p>' + c('followupClosing') + '</p>' +
+      '<p>' + c('followupSignature') + '</p>' +
+      '<div class="gm-fine">' + c('followupDisclaimer') + '</div>')
+  },
+  {
+    id: 'cards',
+    title: 'The note on each gift card',
+    sub: 'When a referral closes, two cards go out. This is what each person reads with theirs.',
+    keys: ['rewardNoteReferrer','rewardNoteFriend'],
+    // These two notes are addressed to a person, so {name} means something
+    // different here than it does on every other page.
+    tokenWords: {
+      '{name}': '<b>{name}</b> is the first name of whoever is reading it',
+      '{business}': '<b>{business}</b> is the business\u2019s name'
+    },
+    draw: (c, n) => '<div class="dash">' +
+      '<div class="dh"><div class="n">' + esc(n) + '</div><div class="w">Referrals</div></div>' +
+      '<div class="alert">' +
+        '<div class="wtag">Ready to send</div>' +
+        '<h3>Two gift cards are owed</h3>' +
+        '<div class="wwho">' + esc(WHO.full) + ' referred ' + esc(WHO.friend) + '</div>' +
+        '<div class="pair">' +
+          '<div class="half"><div class="lab">To ' + esc(WHO.first) + ', who referred</div>' +
+            '<div class="wnote">' + c('rewardNoteReferrer') + '</div></div>' +
+          '<div class="half"><div class="lab">To ' + esc(WHO.friendFirst) + ', who bought</div>' +
+            '<div class="wnote">' + c('rewardNoteFriend') + '</div></div>' +
+        '</div>' +
+        '<div class="acts"><div class="go">Send both cards</div><div class="sk">Not yet</div></div>' +
+      '</div></div>'
+  },
+  {
+    id: 'terms',
+    title: 'Their terms page',
+    sub: 'Linked from the bottom of every page above. Three phrases make it theirs; the rest is the same for everyone.',
+    keys: ['eligibility','qualifyingEvent','rewardCondition'],
+    draw: (c, n) => wBrowser('go.referwith50.com/terms',
+      '<div class="terms">' +
+        '<h2>Referral program terms</h2>' +
+        '<p class="asof">' + esc(n) + ' &middot; in effect today</p>' +
+        '<h3>Eligibility</h3>' +
+        '<p>The &ldquo;50.&rdquo; referral program is open to customers of ' + esc(n) + ' who ' +
+          c('eligibility', { inline:true }) + '.</p>' +
+        '<h3>How rewards are earned</h3>' +
+        '<p>If the referred customer submits their details through that link and then ' +
+          c('qualifyingEvent', { inline:true }) + ', both of them each receive a gift card.</p>' +
+        '<p style="margin-top:10px;">A reward is issued only after ' + esc(n) + ' ' +
+          c('rewardCondition') + '</p>' +
+      '</div>')
+  }
+];
+
+// The pages this rep actually gets: anything the server does not send is
+// dropped, and any field the server sends that no drawing places lands in a
+// plain-boxes step at the end. A field added to the API must never become
+// uneditable because nobody updated a drawing here.
+function wpagesFor(){
+  const have = new Set(COPY_FIELDS.map((f) => f.key));
+  const pages = WPAGES
+    .map((p) => ({ id:p.id, title:p.title, sub:p.sub, draw:p.draw, after:p.after, tokenWords:p.tokenWords,
+                   keys: p.keys.filter((k) => have.has(k)) }))
+    .filter((p) => p.keys.length);
+  const placed = new Set();
+  pages.forEach((p) => p.keys.forEach((k) => placed.add(k)));
+  const extra = COPY_FIELDS.filter((f) => !placed.has(f.key)).map((f) => f.key);
+  if(extra.length){
+    pages.push({ id:'extra', title:'Anything else', keys:extra, draw:null,
+      sub:'These are set here as plain boxes — the line under each one says where it comes out.' });
+  }
+  return pages;
+}
+
 // Every box carries its generic wording as the placeholder, so an empty box
 // shows exactly what will run instead of looking like something is missing.
-// `name` is the business being set up, used only to make the preview read
+// `name` is the business being set up, used only to make the drawing read
 // naturally; it is never saved.
 function copyFieldsHtml(values, name){
   const v = values || {};
   const uid = 'w' + Math.random().toString(36).slice(2, 8);
-  const tabs = WORDING_STEPS.map((st, i) =>
-    '<button type="button" class="wstep' + (i ? '' : ' on') + '" data-wstep="' + i + '">' +
-      '<span class="n">' + (i + 1) + '</span>' + esc(st.title) + '</button>').join('');
+  const pages = wpagesFor();
 
-  const panes = WORDING_STEPS.map((st, i) => {
-    const boxes = st.keys.map((key) => {
-      const f = COPY_FIELDS.find((x) => x.key === key);
-      const val = esc(v[key] || '');
-      const common = 'name="copy_' + key + '" maxlength="' + f.max + '" data-wkey="' + esc(key) + '" ' +
-        'placeholder="' + esc(wfill(f.generic, name, null)) + '"';
-      return '<div class="wbox" data-wbox="' + esc(key) + '">' +
-        (f.ask ? '<p class="wask">' + esc(f.ask) + '</p>' : '') +
-        '<label>' + esc(f.label) + '</label>' +
-        (f.multiline
-          ? '<textarea ' + common + ' rows="3">' + val + '</textarea>'
-          : '<input ' + common + ' value="' + val + '">') +
-        '<div class="wrow">' +
-          '<button type="button" class="btn small secondary" data-wuse="' + esc(key) + '">Use this wording</button>' +
-          '<span class="wcount" data-wcount="' + esc(key) + '"></span>' +
-        '</div>' +
-        '<p class="wprev" data-wprev="' + esc(key) + '" hidden></p>' +
-        '<p class="hint">' + esc(f.where) + '</p>' +
-      '</div>';
-    }).join('');
-    return '<section class="wpane' + (i ? '' : ' on') + '" data-wpane="' + i + '">' +
-      '<p class="wtitle">' + esc(st.title) + '</p>' +
-      '<div class="wshot" data-wshot><p class="wshotmsg">Loading the page these words land on…</p></div>' +
-      '<div class="wfields">' + boxes + '</div></section>';
+  const ctl = (key, opts) => {
+    const f = COPY_FIELDS.find((x) => x.key === key);
+    if(!f) return '';
+    const o = opts || {};
+    const cls = 'e' + (o.inline ? ' inl' : '') + (o.plain ? ' pl' : '') +
+      (f.generic ? '' : ' opt') + (o.cls ? ' ' + o.cls : '');
+    const attrs = 'class="' + cls + '" name="copy_' + key + '" data-wkey="' + esc(key) + '" ' +
+      'maxlength="' + f.max + '" aria-label="' + esc(f.label) + '" ' +
+      'placeholder="' + esc(wplaceholder(f, name, null)) + '"';
+    // Everything that is not a word inside a sentence is a textarea, even
+    // the one-line fields: an <input> clips its text at the edge of the box,
+    // and the box here is a phone screen or a gift-card note. The one-line
+    // ones carry data-oneline and have their newlines stripped on the way in,
+    // so what gets saved is still a single line.
+    return o.inline
+      ? '<input ' + attrs + ' value="' + esc(v[key] || '') + '">'
+      : '<textarea ' + attrs + ' rows="1"' + (f.multiline ? '' : ' data-oneline="1"') + '>' +
+        esc(v[key] || '') + '</textarea>';
+  };
+
+  const plain = (keys) => '<div class="wplain">' + keys.map((k) => {
+    const f = COPY_FIELDS.find((x) => x.key === k);
+    return '<div class="wpbox"><label>' + esc(f.label) + '</label>' +
+      ctl(k, { plain:true }) + '<p class="hint">' + esc(f.where) + '</p></div>';
+  }).join('') + '</div>';
+
+  const bar = pages.map((p, i) =>
+    '<button type="button" class="wstep' + (i ? '' : ' on') + '" data-wstep="' + i + '" ' +
+      'aria-label="Step ' + (i + 1) + ': ' + esc(p.title) + '" title="' + esc(p.title) + '"></button>').join('');
+
+  const panes = pages.map((p, i) => {
+    // Shown only where a token is actually on screen, so no step carries an
+    // explanation of something the rep cannot see. {reward} is deliberately
+    // never substituted: the card amount is set per dealer and reps are not
+    // shown money figures anywhere on this page.
+    const seen = {};
+    p.keys.forEach((k) => {
+      const f = COPY_FIELDS.find((x) => x.key === k);
+      ((v[k] || (f && f.generic) || '').match(/\{[a-z]+\}/g) || []).forEach((t) => { seen[t] = 1; });
+    });
+    const tokens = Object.keys(seen).map((t) => (p.tokenWords && p.tokenWords[t]) || WTOKENS[t]).filter(Boolean);
+    return '<section class="wpane' + (i ? '' : ' on') + '" data-wpane="' + i + '" data-wpage="' + esc(p.id) + '">' +
+      '<p class="wpos">Step ' + (i + 1) + ' of ' + pages.length + '</p>' +
+      '<h3 class="wh">' + esc(p.title) + '</h3>' +
+      '<p class="wsub">' + esc(p.sub) + '</p>' +
+      '<div class="wstage">' + (p.draw ? p.draw(ctl, name || 'Their business') : plain(p.keys)) + '</div>' +
+      (p.after ? p.after(ctl, name || 'their business') : '') +
+      (tokens.length ? '<p class="wtokens">Words in braces fill themselves in \u2014 ' + tokens.join('; ') + '.</p>' : '') +
+    '</section>';
   }).join('');
 
   return '<div class="wiz" data-wiz="' + uid + '" data-wname="' + esc(name || '') + '">' +
-    '<div class="wizsteps">' + tabs + '</div>' + panes +
+    '<div class="wbar">' + bar + '</div>' + panes +
+    '<div class="wstrip" data-wstrip>' +
+      '<span class="wlab" data-wstriplab></span>' +
+      '<button type="button" class="btn small secondary" data-wuse hidden>Use the standard wording</button>' +
+      '<span class="wcount" data-wcount></span>' +
+    '</div>' +
     '<div class="wnav">' +
       '<button type="button" class="btn small secondary" data-wnav="back" disabled>Back</button>' +
-      '<span class="wpos">Step 1 of ' + WORDING_STEPS.length + '</span>' +
+      '<span class="wmid" data-wmid></span>' +
       '<button type="button" class="btn small" data-wnav="next">Next</button>' +
-    '</div></div>';
+    '</div>' +
+    '<span class="wsizer" data-wsizer aria-hidden="true"></span>' +
+  '</div>';
 }
 
-// Called after the markup is on the page. Safe to call twice on the same
-// scope: a wizard already wired is skipped.
 // The same questions as a plain list, for a rep to paste into an email. The
 // hard part of onboarding is not the boxes, it is telling a business what is
-// wanted from them before the call -- in their words, not ours.
+// wanted from them before the call -- in their words, not ours. Grouped by
+// the same pages the wizard walks, so the answers come back in the order the
+// rep will type them.
 function wordingQuestionsText(companyName){
   const name = companyName || 'your business';
   const lines = ['Hi — before we set up your referral program, a few questions.',
     'Short answers are fine, and anything you skip we will fill with sensible wording you can change later.', ''];
-  // Grouped properly rather than by run: the fields are not in contiguous
-  // stage order, so checking "did the stage change" splits one heading into
-  // several and scatters its questions.
-  WORDING_STEPS.forEach((st) => {
-    lines.push('— ' + st.title + ' —');
-    st.keys.forEach((k) => {
+  wpagesFor().forEach((p) => {
+    lines.push('— ' + p.title + ' —');
+    p.keys.forEach((k) => {
       const f = COPY_FIELDS.find((x) => x.key === k);
       if(f) lines.push('  ' + (f.ask || f.label));
     });
@@ -1164,154 +1665,107 @@ function wordingQuestionsText(companyName){
   return lines.join('\n').replace(/\{name\}/g, name);
 }
 
+// Called after the markup is on the page. Safe to call twice on the same
+// scope: a wizard already wired is skipped.
 function wireWording(scope){
-  // The field list is fetched now rather than hardcoded, so this can run
-  // before it has arrived. Nothing to wire then -- and it must not throw:
-  // this is called while the Leads tab renders, so an exception here takes
-  // the whole tab down, which is exactly what it did.
-  if(!WORDING_STEPS.length || !WORDING_STEPS[0].keys.length) return;
+  // The field list is fetched rather than hardcoded, so this can run before
+  // it has arrived. Nothing to wire then -- and it must not throw: this is
+  // called while the Leads tab renders, and an exception here takes the whole
+  // tab down, which is exactly what it once did.
+  if(!COPY_FIELDS.length) return;
 
   (scope || document).querySelectorAll('.wiz').forEach((wiz) => {
     if(wiz.dataset.wired) return;
     wiz.dataset.wired = '1';
     const name = wiz.dataset.wname || '';
+    const panes = Array.prototype.slice.call(wiz.querySelectorAll('[data-wpane]'));
+    const steps = Array.prototype.slice.call(wiz.querySelectorAll('[data-wstep]'));
+    const sizer = wiz.querySelector('[data-wsizer]');
+    const strip = wiz.querySelector('[data-wstrip]');
+    const striplab = wiz.querySelector('[data-wstriplab]');
+    const useBtn = wiz.querySelector('[data-wuse]');
+    const countEl = wiz.querySelector('[data-wcount]');
     let step = 0;
-    let active = WORDING_STEPS[0].keys[0];
-    let drawn = false;
+    let focused = null;
 
-    const paneOf = (i) => wiz.querySelector('[data-wpane="' + i + '"]');
-    // Declared here so the focus handler below can reach it before the
-    // observer that normally triggers the first draw has fired.
-    let firstDrawOnFocus = (key) => { active = key; };
+    const keysOf = (i) => Array.prototype.slice.call(panes[i].querySelectorAll('[data-wkey]'))
+      .map((el) => el.dataset.wkey);
 
-    // The picture for whichever box the rep is in. Scrolled so the pin is in
-    // view rather than leaving them to hunt for it on a long terms page.
-    function showShot(key){
-      active = key;
-      const found = wmarkFor(key);
-      const pane = paneOf(step);
-      const host = pane && pane.querySelector('[data-wshot]');
-      if(!host) return;
-      wiz.querySelectorAll('.wbox').forEach((b) => b.classList.toggle('act', b.dataset.wbox === key));
-      if(!found){
-        // No manifest (offline, or the pictures were never built). The boxes
-        // still work; only the illustration is missing.
-        host.innerHTML = '<p class="wshotmsg">' + (WSHOTS ? 'No picture for this one yet.' : 'Pictures unavailable offline — the boxes still work.') + '</p>';
+    // A textarea drawn into a paragraph has to be exactly as tall as its
+    // text or the drawing stops looking like the page. Measured only when
+    // the pane is visible -- inside display:none scrollHeight is 0 and the
+    // box would lock flat.
+    function grow(el){
+      if(el.tagName !== 'TEXTAREA' || !el.offsetParent) return;
+      el.style.height = 'auto';
+      el.style.height = (el.scrollHeight + 2) + 'px';
+    }
+
+    // A word sitting inside a sentence is sized to its own text so the
+    // sentence closes up around it rather than running to the margin.
+    function fit(el){
+      if(!el.classList.contains('inl') || !sizer) return;
+      const cs = window.getComputedStyle(el);
+      sizer.style.font = cs.font;
+      sizer.style.letterSpacing = cs.letterSpacing;
+      sizer.textContent = el.value || el.placeholder || '';
+      const w = sizer.offsetWidth;
+      if(w) el.style.width = (w + 10) + 'px';
+    }
+
+    function size(el){ grow(el); fit(el); }
+
+    function showStrip(el){
+      focused = el || null;
+      if(!el){
+        striplab.textContent = '';
+        useBtn.hidden = true;
+        countEl.textContent = '';
         return;
       }
-      const { shot, mark } = found;
-      host.innerHTML = '<div class="wscroll"><img alt="' + esc(shot.title) + '" src="' + esc(shot.img) + '">' +
-        '<div class="wpin"></div></div>' +
-        '<div class="wshotcap"><span>' + esc(shot.title) + '</span><span>tap to zoom</span></div>';
-      const scroll = host.querySelector('.wscroll');
-      const img = scroll.querySelector('img');
-      const pin = scroll.querySelector('.wpin');
-      const place = () => {
-        const scale = img.clientWidth / shot.page.w;
-        pin.style.left = (mark.box.x * scale) + 'px';
-        pin.style.top = (mark.box.y * scale) + 'px';
-        pin.style.width = Math.max(mark.box.w * scale, 6) + 'px';
-        pin.style.height = Math.max(mark.box.h * scale, 6) + 'px';
-        // Long pages (the terms page is 1500px) open scrolled to the pin
-        // rather than at the top, so the rep is not left hunting for it.
-        scroll.scrollTop = Math.max(0, (mark.box.y * scale) - (scroll.clientHeight / 2) + 20);
-        scroll.scrollLeft = Math.max(0, (mark.box.x * scale) - (scroll.clientWidth / 2));
-      };
-      if(img.complete) place(); else img.addEventListener('load', place, { once:true });
-      // onclick, not addEventListener: the host element survives every
-      // showShot while its contents are replaced, so adding a listener would
-      // stack one per picture change and a single tap would toggle zoom
-      // several times over.
-      host.onclick = () => {
-        host.classList.toggle('zoom');
-        img.style.width = host.classList.contains('zoom') ? shot.page.w + 'px' : '';
-        requestAnimationFrame(place);
-      };
+      const f = COPY_FIELDS.find((x) => x.key === el.dataset.wkey);
+      striplab.textContent = f ? f.where : '';
+      // Nothing to put back for the ten optional fields that have no default.
+      useBtn.hidden = !(f && f.generic);
+      useBtn.textContent = el.value.trim() ? 'Clear it' : 'Use the standard wording';
+      countEl.textContent = el.value.length + ' / ' + (f ? f.max : '');
     }
 
-    // The sentence the rep's words land inside. Blank for the three fields
-    // that are whole sentences on their own -- there is nothing to wrap.
-    function showPreview(key){
-      const el = wiz.querySelector('[data-wprev="' + key + '"]');
-      const input = wiz.querySelector('[data-wkey="' + key + '"]');
-      const found = wmarkFor(key);
-      if(!el || !input) return;
-      const f = COPY_FIELDS.find((x) => x.key === key);
-      const typed = input.value.trim();
-      if(!found || (!found.mark.before && !found.mark.after)){ el.hidden = true; return; }
-      const card = currentCardNoun(wiz);
-      const words = wfill(typed || f.generic, name, card);
-      el.hidden = false;
-      el.classList.toggle('gen', !typed);
-      el.innerHTML = (typed ? '' : '<span class="muted">If left empty: </span>') +
-        esc(wfill(found.mark.before, name, card)) + '<b>' + esc(words) + '</b>' + esc(wfill(found.mark.after, name, card));
-      // The preview may grow but must never shrink. Typing removes the
-      // "If left empty:" prefix and changes the words, so the sentence can
-      // rewrap to one line SHORTER -- and everything below it, including the
-      // next box's button, slides UP under the rep's cursor mid-click.
-      // Whether it rewraps at all is luck of the wrap: it depends on the
-      // company name, what they typed and the column width, so it cannot be
-      // chased one string at a time. A high-water mark removes the whole
-      // class of it. Measured only once it has a box -- inside a shut
-      // <details> offsetHeight is 0 and would lock it flat.
-      const seen = Number(el.dataset.tall || 0);
-      const now = el.offsetHeight;
-      if(now > 0){
-        const tall = Math.max(seen, now);
-        el.dataset.tall = String(tall);
-        el.style.minHeight = tall + 'px';
-      }
-    }
-
-    // Every box's fallback is shown as its placeholder, and the offer line's
-    // fallback contains {card}. Re-render them when the card's name changes,
-    // so a rep who types "gift card in the mail" sees the offer line say it
+    // Every box's fallback is shown as its placeholder, and several of those
+    // fallbacks contain {card}. Re-render them when the card's name changes,
+    // so a rep who types "gift card in the mail" sees the other lines say it
     // too rather than still reading "electronic gift card".
     function refreshPlaceholders(){
       const card = currentCardNoun(wiz);
       wiz.querySelectorAll('[data-wkey]').forEach((el) => {
         const f = COPY_FIELDS.find((x) => x.key === el.dataset.wkey);
-        if(f) el.placeholder = wfill(f.generic, name, card);
+        if(f) el.placeholder = wplaceholder(f, name, card);
+        if(!el.value) size(el);
       });
-    }
-
-    function count(key){
-      const input = wiz.querySelector('[data-wkey="' + key + '"]');
-      const out = wiz.querySelector('[data-wcount="' + key + '"]');
-      const f = COPY_FIELDS.find((x) => x.key === key);
-      if(input && out) out.textContent = input.value.length + ' / ' + f.max;
     }
 
     function goto(i){
-      step = Math.max(0, Math.min(WORDING_STEPS.length - 1, i));
-      wiz.querySelectorAll('[data-wpane]').forEach((p) => p.classList.toggle('on', +p.dataset.wpane === step));
-      wiz.querySelectorAll('[data-wstep]').forEach((b) => {
-        b.classList.toggle('on', +b.dataset.wstep === step);
+      step = Math.max(0, Math.min(panes.length - 1, i));
+      panes.forEach((p, k) => p.classList.toggle('on', k === step));
+      steps.forEach((b, k) => {
+        b.classList.toggle('on', k === step);
         // A step counts as done once any of its boxes has the rep's own words.
-        const filled = WORDING_STEPS[+b.dataset.wstep].keys
-          .some((k) => { const el = wiz.querySelector('[data-wkey="' + k + '"]'); return el && el.value.trim(); });
-        b.classList.toggle('done', filled && +b.dataset.wstep !== step);
+        b.classList.toggle('done', k !== step &&
+          keysOf(k).some((key) => { const el = wiz.querySelector('[data-wkey="' + key + '"]'); return el && el.value.trim(); }));
       });
-      wiz.querySelector('.wpos').textContent = 'Step ' + (step + 1) + ' of ' + WORDING_STEPS.length;
       wiz.querySelector('[data-wnav="back"]').disabled = step === 0;
       const next = wiz.querySelector('[data-wnav="next"]');
-      next.textContent = step === WORDING_STEPS.length - 1 ? 'Done' : 'Next';
-      active = WORDING_STEPS[step].keys[0];
-      // Re-measure this step's previews now that its pane is visible. Panes
-      // start display:none, where offsetHeight is 0, so a preview rendered at
-      // wire time never recorded how tall it is. Without this the first real
-      // measurement happens on the rep's first keystroke -- after the
-      // sentence has already rewrapped shorter -- and the floor locks in at
-      // the shrunk height, which is the bug it is meant to prevent.
-      WORDING_STEPS[step].keys.forEach(showPreview);
-      if(drawn) showShot(active);
+      next.textContent = step === panes.length - 1 ? 'Done' : 'Next';
+      wiz.querySelector('[data-wmid]').textContent = (step + 1) + ' of ' + panes.length;
+      // Now that this pane has a box, its textareas can finally be measured.
+      panes[step].querySelectorAll('[data-wkey]').forEach(size);
+      showStrip(null);
     }
 
-    wiz.querySelectorAll('[data-wstep]').forEach((b) =>
-      b.addEventListener('click', () => goto(+b.dataset.wstep)));
+    steps.forEach((b, k) => b.addEventListener('click', () => goto(k)));
     wiz.querySelector('[data-wnav="back"]').addEventListener('click', () => goto(step - 1));
     wiz.querySelector('[data-wnav="next"]').addEventListener('click', () => {
-      if(step < WORDING_STEPS.length - 1) goto(step + 1);
+      if(step < panes.length - 1) goto(step + 1);
       else {
         // On the last step "Done" hands over to whatever is wrapping the
         // wizard -- the dialog's own Save button, or the add-lead form.
@@ -1320,69 +1774,50 @@ function wireWording(scope){
       }
     });
 
-    wiz.querySelectorAll('[data-wkey]').forEach((input) => {
-      const key = input.dataset.wkey;
-      count(key);
-      input.addEventListener('focus', () => { if(drawn) showShot(key); else firstDrawOnFocus(key); });
-      input.addEventListener('input', () => {
-        // The card's name appears inside other boxes' sentences, so changing
-        // it has to redraw them all, not only its own.
-        if(key === 'cardNoun'){
-          WORDING_STEPS.forEach((st) => st.keys.forEach(showPreview));
-          refreshPlaceholders();
-        } else {
-          showPreview(key);
-        }
-        count(key);
+    wiz.querySelectorAll('[data-wkey]').forEach((el) => {
+      el.addEventListener('focus', () => showStrip(el));
+      el.addEventListener('blur', () => { if(focused === el) showStrip(null); });
+      el.addEventListener('input', () => {
+        // A one-line field drawn as a textarea can still be pasted into.
+        if(el.dataset.oneline && /[\r\n]/.test(el.value)) el.value = el.value.replace(/[\r\n]+/g, ' ');
+        size(el);
+        if(el.dataset.wkey === 'cardNoun') refreshPlaceholders();
+        if(focused === el) showStrip(el);
+      });
+      // Enter in a one-line box should not submit the form the wizard sits in.
+      el.addEventListener('keydown', (ev) => {
+        if(ev.key === 'Enter' && (el.tagName === 'INPUT' || el.dataset.oneline)) ev.preventDefault();
       });
     });
 
-    wiz.querySelectorAll('[data-wuse]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const key = btn.dataset.wuse;
-        const input = wiz.querySelector('[data-wkey="' + key + '"]');
-        const f = COPY_FIELDS.find((x) => x.key === key);
-        if(!input) return;
-        // Dropped in raw, with {reward} and {name} intact: those are replaced
-        // per dealer at render time, so baking in "$50" here would freeze the
-        // amount for a dealer whose card is not $50.
-        input.value = f.generic;
-        input.focus();
-        showPreview(key); count(key);
-      });
+    // mousedown, not click: clicking the button blurs the box first, and by
+    // the time click fires there is no focused field left to fill.
+    useBtn.addEventListener('mousedown', (ev) => {
+      ev.preventDefault();
+      const el = focused;
+      if(!el) return;
+      const f = COPY_FIELDS.find((x) => x.key === el.dataset.wkey);
+      if(!f) return;
+      // Dropped in raw, with {reward} and {name} intact: those are replaced
+      // per dealer at render time, so baking in a figure here would freeze
+      // the amount for a dealer whose card is not $50.
+      el.value = el.value.trim() ? '' : f.generic;
+      el.focus();
+      size(el);
+      showStrip(el);
     });
 
-    WORDING_STEPS.forEach((st) => st.keys.forEach(showPreview));
     goto(0);
-
-    // No PICTURE is fetched until the wizard is actually on screen. On the
-    // add-a-lead form it sits inside a <details> that starts shut, and most
-    // leads are written down without ever opening it -- a rep on cellular in
-    // someone's driveway should not pay for an image they never look at.
-    // An element inside a closed <details> has no box, so it never
-    // intersects; opening it is what triggers the first draw.
-    // The manifest is about 5KB and carries the sentences that wrap each box
-    // -- the whole point of the rebuild -- so it is fetched straight away and
-    // the previews fill in as soon as it lands. The pictures are about 630KB
-    // between them and wait for firstDraw() below.
-    loadWordingShots().then(() => {
-      if(WSHOTS) WORDING_STEPS.forEach((st) => st.keys.forEach(showPreview));
-      if(drawn) showShot(active);
-    });
-
-    firstDrawOnFocus = (key) => { active = key; firstDraw(); };
-    const firstDraw = () => {
-      if(drawn) return;
-      drawn = true;
-      loadWordingShots().then(() => showShot(active));
-    };
+    // The panes that are not showing still need measuring once they are, and
+    // a box inside a shut <details> has no box at all until it opens.
     if(typeof IntersectionObserver === 'function'){
       const io = new IntersectionObserver((entries) => {
-        if(entries.some((e) => e.isIntersecting)){ io.disconnect(); firstDraw(); }
+        if(entries.some((e) => e.isIntersecting)){
+          io.disconnect();
+          panes[step].querySelectorAll('[data-wkey]').forEach(size);
+        }
       });
       io.observe(wiz);
-    } else {
-      firstDraw();
     }
   });
 }
@@ -1899,8 +2334,8 @@ async function wordingDialog(leadId){
   if(!COPY_FIELDS.length) return flash('Could not load the wording questions. Check your connection and try again.');
   openDialog(
     '<h3>What ' + esc(lead.company_name) + '’s customers will read</h3>' +
-    '<p class="muted">Their words, in their trade. Leave a box empty and the wording shown inside it is used instead. ' +
-    '<b>{reward}</b> becomes their gift card amount, <b>{name}</b> their business name.</p>' +
+    '<p class="muted">Their words, in their trade. Each step is one of the pages their customers see \u2014 ' +
+    'click any line to change it. A box left as it is uses the wording shown in it.</p>' +
     '<form id="wordingForm">' + copyFieldsHtml(lead.copy, lead.company_name) +
       '<div class="actions">' +
         '<button type="button" class="btn secondary" id="cancelDlg">Cancel</button>' +
@@ -2851,37 +3286,21 @@ const BRAND_COLOR_FIELDS = [
   ['taglineColor', 'Tagline'],
 ];
 
-// Every wording field the API knows about, grouped by where it shows up.
-// Driven by the server's own list so a field added there appears here with
-// no change to this page -- there are 26 of them now and hand-writing each
-// one is how the two lists drift apart.
-function brandCopyFieldsHtml(fields, copy){
-  if(!Array.isArray(fields) || !fields.length) return '';
-  const groups = [];
-  fields.forEach((f) => {
-    const g = groups.find((x) => x.stage === f.stage);
-    (g ? g.fields : (groups[groups.push({ stage: f.stage, fields: [] }) - 1]).fields).push(f);
-  });
-  return groups.map((g) =>
-    '<details class="copygroup"><summary>' + esc(g.stage || 'Wording') +
-      ' <span class="muted">(' + g.fields.length + ')</span></summary>' +
-    g.fields.map((f) => {
-      const val = esc(copy[f.key] || '');
-      const ph = esc(f.placeholder || '');
-      return '<label class="fieldlabel" for="cf_' + esc(f.key) + '">' + esc(f.label || f.key) + '</label>' +
-        (f.multiline
-          ? '<textarea id="cf_' + esc(f.key) + '" data-copyfield="' + esc(f.key) + '" rows="3" maxlength="' + (f.max || 600) + '" placeholder="' + ph + '">' + val + '</textarea>'
-          : '<input id="cf_' + esc(f.key) + '" data-copyfield="' + esc(f.key) + '" type="text" maxlength="' + (f.max || 200) + '" placeholder="' + ph + '" value="' + val + '">') +
-        (f.where ? '<p class="muted small">' + esc(f.where) + '</p>' : '');
-    }).join('') +
-    '</details>').join('');
-}
-
+// The branding dialog used to draw its own wording section: seven collapsed
+// <details> groups of labelled boxes, which is the layout reps could not
+// read. It now shows the same wizard the Wording dialog does, so there is
+// one editor for these 36 fields rather than two that look nothing alike.
+//
+// It also fixes an empty-placeholder bug: this dialog was fed copy_fields
+// from the branding endpoint, which does not attach `generic`, so every box
+// here showed a blank placeholder while the same box on the Wording dialog
+// showed the fallback wording. loadCopyFields() is the list that carries it.
 async function brandDialog(tenantId){
   let cur;
   try{
     cur = await api('/rep-dealers/' + tenantId + '/brand');
   }catch(err){ return flash(err.message); }
+  await loadCopyFields();
   const b = cur.branding || {};
   const files = cur.logo_files || [];
   // An embedded (data:) logo is real and worth keeping, but it is thousands of
@@ -2925,7 +3344,9 @@ async function brandDialog(tenantId){
       '<label class="fieldlabel" for="brandContact">Contact email shown to customers</label>' +
       '<input id="brandContact" name="contactEmail" type="email" maxlength="200" placeholder="(none — the Questions? line is hidden)" value="' + esc(b.contactEmail || '') + '">' +
 
-      brandCopyFieldsHtml(cur.copy_fields, b.copy || {}) +
+      '<label class="fieldlabel">Wording</label>' +
+      '<p class="muted small">Each step is one of the pages their customers see. Only the lines you change are saved.</p>' +
+      copyFieldsHtml(b.copy || {}, cur.name) +
 
       '<label class="fieldlabel">Colors</label>' +
       '<div class="colorrow">' +
@@ -2944,10 +3365,15 @@ async function brandDialog(tenantId){
       '<div class="actions">' +
         '<button type="button" class="btn secondary" id="cancelDlg">Cancel</button>' +
         '<button class="btn" type="submit" id="saveBrand">Save branding</button>' +
-      '</div></form>'
+      '</div></form>',
+    // The wizard draws a whole Gmail window; 560px is not enough for it.
+    { wide: true }
   );
   wireLogoPreview();
-  document.querySelectorAll('[data-copyfield]').forEach((el) => {
+  // What each box held when the dialog opened, so the submit below can send
+  // only what actually changed -- an untouched box must not be resent, and a
+  // box the admin empties must send '' so the generic wording comes back.
+  document.querySelectorAll('#brandForm [data-wkey]').forEach((el) => {
     el.dataset.initialCopy = el.value.trim();
   });
   $('cancelDlg').addEventListener('click', closeDialog);
@@ -3011,9 +3437,9 @@ async function brandDialog(tenantId){
       if(el.value.toLowerCase() !== el.dataset.initial) body[el.dataset.color] = el.value;
     });
     const copyChanges = {};
-    f.querySelectorAll('[data-copyfield]').forEach((el) => {
+    f.querySelectorAll('[data-wkey]').forEach((el) => {
       const was = el.dataset.initialCopy || '';
-      if(el.value.trim() !== was) copyChanges[el.dataset.copyfield] = el.value.trim();
+      if(el.value.trim() !== was) copyChanges[el.dataset.wkey] = el.value.trim();
     });
     if(Object.keys(copyChanges).length) body.copy = copyChanges;
     try{
