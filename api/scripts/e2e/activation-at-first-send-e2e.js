@@ -244,6 +244,75 @@ const sent = [];
         (await page.locator('#gateLede').textContent()) || ''),
       staffGate.trim());
 
+    // ---------------------------------------------------------------
+    // After paying, nobody is ever asked again.
+    //
+    // The question this answers: a dealer pays the $500, and then keeps
+    // using the product -- signing in, signing out, reloading, sending
+    // more customers, coming back the next day. Can any of that put the
+    // activation screen back up, or quietly open a second Checkout
+    // Session that could be paid?
+    // ---------------------------------------------------------------
+    console.log('\nAfter paying, never asked again');
+    await wc(dbUrl(DB), (c) => c.query(
+      `update tenants set activation_paid_at = now(), activation_livemode = true, billing_status = 'active' where id = $1`,
+      [ids.tenant]));
+
+    const paidChecks = [];
+    // Straight after paying, on the same page, no reload.
+    await page.reload(); await page.waitForTimeout(2000);
+    paidChecks.push(['reload after paying', !(await page.locator('#gateBox').isVisible()) && await page.locator('#sendForm').isVisible()]);
+
+    // Signing out and back in, which is the case actually asked about.
+    await page.evaluate(() => localStorage.removeItem('fifty:session'));
+    await page.reload(); await page.waitForTimeout(1200);
+    await page.evaluate((t) => localStorage.setItem('fifty:session', JSON.stringify({ access_token: t, refresh_token: 'n' })), adminTok);
+    await page.reload(); await page.waitForTimeout(2000);
+    paidChecks.push(['sign out and back in', !(await page.locator('#gateBox').isVisible()) && await page.locator('#sendForm').isVisible()]);
+
+    // Landing on the URL Stripe returns people to, long after the fact --
+    // a bookmark, a back button, a re-opened tab.
+    await page.goto(`http://127.0.0.1:${P.page}/fifty-template-dealer.html?activation=success&session_id=cs_test_old`);
+    await page.waitForTimeout(2500);
+    paidChecks.push(['stale ?activation=success link', !(await page.locator('#gateBox').isVisible()) && await page.locator('#sendForm').isVisible()]);
+
+    await page.goto(`http://127.0.0.1:${P.page}/fifty-template-dealer.html?activation=cancelled`);
+    await page.waitForTimeout(2000);
+    paidChecks.push(['stale ?activation=cancelled link', !(await page.locator('#gateBox').isVisible()) && await page.locator('#sendForm').isVisible()]);
+
+    for (const [label, pass] of paidChecks) ok(`a paid dealer sees no payment screen: ${label}`, pass);
+
+    // Sending again -- the action that used to be the wall.
+    const sentBeforeSecond = sent.length;
+    await page.fill('#custName', 'Second Customer');
+    await page.fill('#custEmail', 'second@example.com');
+    await page.click('#sendBtn');
+    await page.waitForTimeout(2500);
+    ok('a paid dealer can send again with no payment screen',
+      !(await page.locator('#gateBox').isVisible()) && sent.length === sentBeforeSecond + 1,
+      `${sent.length - sentBeforeSecond} email(s)`);
+
+    // And the server refuses to open a second activation even if something
+    // asked it to directly -- the guard that does not depend on the page.
+    const secondCheckout = await call('/api/billing/checkout-session', { method: 'POST', token: adminTok,
+      body: { return_url: 'https://go.referwith50.com/fifty-template-dealer.html' } });
+    ok('the API refuses to start a second activation', secondCheckout.status === 409,
+      `status ${secondCheckout.status}, code ${secondCheckout.body?.code}`);
+    ok('and says why', secondCheckout.body?.code === 'already_activated', secondCheckout.body?.code);
+
+    // A staff member cannot open one either.
+    const staffSecond = await call('/api/billing/checkout-session', { method: 'POST', token: staffTok,
+      body: { return_url: 'https://go.referwith50.com/fifty-template-dealer.html' } });
+    ok('a staff member cannot start a second one either', staffSecond.status === 409,
+      `status ${staffSecond.status}, code ${staffSecond.body?.code}`);
+
+    // The row itself: one activation, recorded once.
+    const t = await wc(dbUrl(DB), async (c) => (await c.query(
+      'select activation_paid_at, activation_livemode, billing_status from tenants where id = $1', [ids.tenant])).rows[0]);
+    ok('the tenant records exactly one activation',
+      Boolean(t.activation_paid_at) && t.activation_livemode === true && t.billing_status === 'active',
+      `paid_at=${t.activation_paid_at ? 'set' : 'null'} livemode=${t.activation_livemode} status=${t.billing_status}`);
+
     ok('no uncaught page errors', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | ').slice(0, 140));
   } finally {
     teardown();
