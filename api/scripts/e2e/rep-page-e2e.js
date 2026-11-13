@@ -1284,19 +1284,19 @@ async function main() {
       return 'lead added under Alice, with its website';
     });
 
-    // The wording form is a three-step wizard now: a field is only reachable
-    // once its own step is showing. This mirrors WORDING_STEPS in
-    // fifty-reps.html -- if the grouping there changes, this breaks loudly
-    // rather than silently filling the wrong box.
-    const WIZ_STEP = {
-      offerHow: 0, shareTitle: 0, shareText: 0,
-      friendAction: 1, afterPurchase: 1, inquiryNoun: 1,
-      eligibility: 2, qualifyingEvent: 2, rewardCondition: 2,
-    };
+    // The wording form is a wizard: one step per PAGE a customer sees, and a
+    // field is only reachable once its own step is showing. Which step a key
+    // lands on is looked up from the form rather than hardcoded -- the old
+    // version of this helper carried a key->step map that had rotted (it
+    // still named a field the API had dropped), and a stale map silently
+    // fills the wrong box instead of failing.
     const wizFill = async (page, scope, key, value) => {
-      await page.click(`${scope} [data-wstep="${WIZ_STEP[key]}"]`);
-      await page.waitForSelector(`${scope} [data-wpane="${WIZ_STEP[key]}"].on`);
-      await page.fill(`${scope} [name=copy_${key}]`, value);
+      const sel = `${scope} [name=copy_${key}]`;
+      await page.waitForSelector(sel, { state: 'attached' });
+      const idx = await page.$eval(sel, (el) => +el.closest('[data-wpane]').dataset.wpane);
+      await page.click(`${scope} [data-wstep="${idx}"]`);
+      await page.waitForSelector(`${scope} [data-wpane="${idx}"].on`);
+      await page.fill(sel, value);
     };
 
     await check('She can type the business\'s own wording onto a lead, and it reaches the database', async () => {
@@ -1307,192 +1307,173 @@ async function main() {
       assert(shut, 'the wording section starts closed');
       await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
       await repPage.fill('#leadForm [name=company_name]', 'Gutters By Dale');
-      await wizFill(repPage, '#leadForm', 'friendAction', 'book your gutter job');
+      await wizFill(repPage, '#leadForm', 'friendPitch', 'Dale did our gutters and they are still perfect.');
       await wizFill(repPage, '#leadForm', 'inquiryNoun', 'gutter inquiry');
       await repPage.click('#leadForm button[type=submit]');
       await repPage.waitForFunction(() => document.getElementById('tab-leads').textContent.includes('Gutters By Dale'));
       const [row] = await sql(`select copy from rep_leads where company_name = 'Gutters By Dale'`);
-      eq(row.copy.friendAction, 'book your gutter job', 'what she typed');
+      eq(row.copy.friendPitch, 'Dale did our gutters and they are still perfect.', 'what she typed');
       eq(row.copy.inquiryNoun, 'gutter inquiry', 'and the second line');
       eq(Object.keys(row.copy).length, 2, 'only the boxes she filled');
       return '2 lines stored, the rest left to the generic wording';
     });
 
-    await check('Every empty box shows the wording that runs instead, so nothing looks missing', async () => {
+    await check('Every empty box shows what will run instead, so nothing looks missing', async () => {
       await openAddLead(repPage);
       await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
       const holders = await repPage.$$eval('#leadForm details.wording [name^=copy_]', (els) =>
         els.map((e) => ({ name: e.name, placeholder: e.placeholder })));
       // From the field list rather than a literal, so a new field does not
       // silently narrow what this check covers.
-      const { COPY_KEYS } = require('../../src/lib/tenantCopy');
-      eq(holders.length, COPY_KEYS.length, 'every line has a fallback shown');
-      assert(holders.every((h) => h.placeholder && h.placeholder.length > 2), `a box with no fallback shown: ${JSON.stringify(holders)}`);
+      const { COPY_KEYS, GENERIC_COPY } = require('../../src/lib/tenantCopy');
+      eq(holders.length, COPY_KEYS.length, 'every line has something shown');
+      // Ten fields are optional and have no fallback at all. Those must show
+      // a prompt rather than nothing, or they draw as a blank line in the
+      // middle of an email and read as a bug.
+      holders.forEach((h) => {
+        const key = h.name.replace(/^copy_/, '');
+        assert(h.placeholder && h.placeholder.length > 2, `nothing shown in ${key}`);
+        if (!GENERIC_COPY[key]) {
+          assert(h.placeholder.startsWith('+ '), `${key} has no fallback but does not prompt: ${h.placeholder}`);
+        }
+      });
       const all = holders.map((h) => h.placeholder).join(' ').toLowerCase();
       assert(!all.includes('shed'), `shed wording offered to a non-shed business: ${all}`);
-      return 'every box shows its trade-neutral fallback';
+      return 'every box shows its trade-neutral fallback, or a prompt where there is none';
     });
 
-    await check('The boxes come a few at a time, not all at once', async () => {
-      // Asserted as a property, not as "three": steps hold different numbers
-      // of fields and a tenth was added for what the gift card is called. The
-      // thing that must stay true is that every box is in the form so saving
-      // sends them all, while only one step's worth is ever on screen.
+    await check('Each step is one page, and no field is stranded off the wizard', async () => {
       const { COPY_KEYS } = require('../../src/lib/tenantCopy');
       await openAddLead(repPage);
       await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
       const all = await repPage.$$eval('#leadForm [name^=copy_]', (els) => els.length);
       eq(all, COPY_KEYS.length, 'every box is in the form, so saving sends them all');
-      const shown = await repPage.$$eval('#leadForm .wpane.on [name^=copy_]', (els) => els.map((e) => e.name));
-      assert(shown.length > 0 && shown.length < all,
-        `one step shows ${shown.length} of ${all} boxes — the wizard has flattened back out`);
-      await repPage.click('#leadForm [data-wstep="2"]');
-      await repPage.waitForSelector('#leadForm [data-wpane="2"].on');
-      const later = await repPage.$$eval('#leadForm .wpane.on [name^=copy_]', (els) => els.map((e) => e.name));
-      assert(later.length > 0 && later.length < all, `step 3 shows ${later.length} of ${all}`);
-      assert(later.join() !== shown.join(), `step 3 shows the same boxes as step 1: ${later.join()}`);
+      const steps = await repPage.$$eval('#leadForm [data-wstep]', (els) => els.length);
+      assert(steps > 2, `the wizard flattened back out to ${steps} step(s)`);
       // No box may be stranded: every field has to live on some step, or a
-      // rep can never reach it.
+      // rep can never reach it. Walked over every step there is rather than a
+      // hardcoded three, so adding a page cannot narrow the check.
       const reachable = new Set();
-      for (const i of [0, 1, 2]) {
+      const seenPerStep = [];
+      for (let i = 0; i < steps; i++) {
         await repPage.click(`#leadForm [data-wstep="${i}"]`);
         await repPage.waitForSelector(`#leadForm [data-wpane="${i}"].on`);
-        (await repPage.$$eval('#leadForm .wpane.on [name^=copy_]', (els) => els.map((e) => e.name)))
-          .forEach((n) => reachable.add(n.replace(/^copy_/, '')));
+        const shown = await repPage.$$eval('#leadForm .wpane.on [name^=copy_]', (els) => els.map((e) => e.name));
+        assert(shown.length > 0 && shown.length < all, `step ${i + 1} shows ${shown.length} of ${all}`);
+        seenPerStep.push(shown.join());
+        shown.forEach((n) => reachable.add(n.replace(/^copy_/, '')));
       }
+      eq(new Set(seenPerStep).size, steps, 'two steps show the same boxes');
       const stranded = COPY_KEYS.filter((k) => !reachable.has(k));
       eq(stranded.length, 0, `fields on no step, so a rep cannot reach them: ${stranded.join(', ')}`);
-      return `${all} in the form, ${shown.length} on screen, every one reachable`;
+      return `${all} boxes across ${steps} pages, every one reachable`;
     });
 
-    await check('A fragment box shows the finished sentence it lands inside', async () => {
+    await check('A phrase that finishes a sentence is typed inside that sentence', async () => {
+      // The reason this tab was rebuilt. Several boxes are fragments -- "had
+      // a roof put on by us", "made your purchase" -- and a labelled box in a
+      // column never showed the rep what sentence they were finishing. The
+      // box now sits inside a drawing of the real page, so the words around
+      // it are on screen beside what is being typed.
       await openAddLead(repPage);
       await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
       await wizFill(repPage, '#leadForm', 'eligibility', 'had a roof put on by us');
-      // Six of the nine boxes are fragments completing a sentence the rep
-      // could not see -- which is exactly what made this tab confusing. The
-      // preview is the fix, so it has to actually contain both the fixed
-      // words of the real sentence and the rep's own.
-      const preview = await repPage.textContent('#leadForm [data-wprev=eligibility]');
-      assert(/had a roof put on by us/.test(preview), `the rep's words are missing: ${preview}`);
-      assert(/referral program is open to customers of/.test(preview),
-        `the sentence around them is missing, so the rep still cannot see where their words go: ${preview}`);
-      return `reads: ${preview.trim().slice(0, 70)}…`;
+      const around = await repPage.$eval('#leadForm [name=copy_eligibility]',
+        (el) => (el.closest('p') || el.parentElement).textContent.replace(/\s+/g, ' ').trim());
+      assert(/referral program is open to customers of/.test(around),
+        `the sentence around the box is missing, so the rep still cannot see where their words go: ${around}`);
+      eq(await repPage.inputValue('#leadForm [name=copy_eligibility]'), 'had a roof put on by us', 'and the box holds what she typed');
+      // And the drawing it sits in is the terms page, not a generic box.
+      const page = await repPage.$eval('#leadForm .wpane.on', (el) => el.dataset.wpage);
+      eq(page, 'terms', 'the step is drawn as the terms page');
+      return `typed inside: "…${around.slice(0, 60)}…"`;
     });
 
-    await check('"Use this wording" drops the fallback in, ready to edit', async () => {
+    await check('"Use the standard wording" drops the fallback in, ready to edit', async () => {
       await openAddLead(repPage);
       await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
-      await repPage.click('#leadForm [data-wstep="1"]');
-      await repPage.waitForSelector('#leadForm [data-wpane="1"].on');
-      eq(await repPage.inputValue('#leadForm [name=copy_friendAction]'), '', 'starts empty');
-      await repPage.click('#leadForm [data-wuse=friendAction]');
-      const v = await repPage.inputValue('#leadForm [name=copy_friendAction]');
+      // One button, for whichever box has focus -- a button under every box
+      // was most of what made the old column unreadable. An earlier check
+      // leaves a box focused, so the blur is what puts this back to the
+      // state a rep opening the wizard actually sees.
+      await repPage.evaluate(() => document.activeElement && document.activeElement.blur());
+      await repPage.waitForTimeout(60);
+      assert(await repPage.isHidden('#leadForm [data-wuse]'), 'the button shows before any box is focused');
+      await wizFill(repPage, '#leadForm', 'friendGreeting', '');
+      await repPage.focus('#leadForm [name=copy_friendGreeting]');
+      assert(await repPage.isVisible('#leadForm [data-wuse]'), 'the button does not appear on focus');
+      await repPage.click('#leadForm [data-wuse]');
+      const v = await repPage.inputValue('#leadForm [name=copy_friendGreeting]');
       assert(v.length > 2, `nothing was dropped in: ${JSON.stringify(v)}`);
       // Raw, with its tokens intact: baking "$50" in here would freeze the
       // amount for a dealer whose card is not $50.
       assert(!/\$\d/.test(v), `the reward amount was baked in rather than left as a token: ${v}`);
+      await repPage.fill('#leadForm [name=copy_friendGreeting]', '');
       return `filled with: ${v}`;
     });
 
-    await check('Typing in a box never pulls the controls below it upward', async () => {
-      // The preview under an EMPTY box opens with "If left empty: " in front
-      // of it. Typing removes that prefix and changes the words, so the
-      // sentence can rewrap one line SHORTER and everything below slides up
-      // under the rep's cursor mid-click. Joseph hit this for real.
-      //
-      // The box must start EMPTY. An earlier version of this check used a
-      // fixture with the field pre-filled, so the prefix was never there to
-      // remove, the shrink never happened, and the check passed against
-      // broken code -- which is how the fix got deleted as useless.
+    await check('Moving between boxes never shifts the buttons under the rep\'s cursor', async () => {
+      // One strip under the drawing says where the focused box's words come
+      // out. Its text changes every time focus moves, so if it can wrap to a
+      // second line the Back/Next row jumps -- which is the bug Joseph hit on
+      // the old layout, where a preview appeared and disappeared under his
+      // cursor mid-click.
       await openAddLead(repPage);
       await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
-      await repPage.click('#leadForm [data-wstep="2"]');
-      await repPage.waitForSelector('#leadForm [data-wpane="2"].on');
-      // Cleared here rather than assumed: an earlier check types into this
-      // box and the add-a-lead form restores what was typed across redraws,
-      // so by now it is usually full. The assertion below is the guard that
-      // caught exactly that -- keep it.
-      await repPage.fill('#leadForm [name=copy_eligibility]', '');
-      await repPage.waitForTimeout(150);
-      eq(await repPage.inputValue('#leadForm [name=copy_eligibility]'), '', 'the box starts empty, or this check proves nothing');
-      const heightOf = () => repPage.$eval('#leadForm [data-wprev=eligibility]',
-        (el) => Math.round(el.getBoundingClientRect().height));
-      const before = await heightOf();
-      assert(before > 0, 'the preview is not on screen, so nothing is being measured');
-      // Several lengths: whether any one of them rewraps depends on the
-      // company name and column width, so a single string proves little.
-      for (const words of ['bought cabinets', 'had us out', 'had a roof put on by us', 'had any work done by our crew']) {
-        await repPage.fill('#leadForm [name=copy_eligibility]', words);
-        await repPage.waitForTimeout(120);
-        const now = await heightOf();
-        assert(now >= before, `typing "${words}" shrank the preview from ${before}px to ${now}px, pulling the next button up by ${before - now}px`);
+      await repPage.click('#leadForm [data-wstep="0"]');
+      await repPage.waitForSelector('#leadForm [data-wpane="0"].on');
+      // Measured against the wizard, not the viewport: focusing a box scrolls
+      // it into view, which moves everything on screen without moving
+      // anything within the wizard.
+      const navTop = () => repPage.$eval('#leadForm .wnav', (el) =>
+        Math.round(el.getBoundingClientRect().top - el.closest('.wiz').getBoundingClientRect().top));
+      const before = await navTop();
+      assert(before > 0, 'the nav row is not on screen, so nothing is being measured');
+      const keys = await repPage.$$eval('#leadForm .wpane.on [name^=copy_]', (els) => els.map((e) => e.name));
+      for (const name of keys) {
+        await repPage.focus(`#leadForm [name=${name}]`);
+        await repPage.waitForTimeout(60);
+        const now = await navTop();
+        assert(Math.abs(now - before) <= 1, `focusing ${name} moved the buttons ${now - before}px`);
       }
-      await repPage.fill('#leadForm [name=copy_eligibility]', '');
-      return `preview held at ${before}px or taller across four edits`;
+      return `buttons held at ${before}px across ${keys.length} boxes`;
     });
 
-    await check('The picture panel holds its space before the picture arrives', async () => {
-      // The picture is fetched only once the wizard is on screen, so it lands
-      // after the boxes are already drawn -- and on a phone it sits ABOVE
-      // them. A panel sized by its content is ~60px of "Loading..." until the
-      // image arrives and then jumps to full height, shoving every box down
-      // by about 200px and landing a rep's tap on the wrong control.
+    await check('The drawings need nothing fetched, so the wizard works on bad signal', async () => {
+      // The old version fetched ~630KB of screenshots and a manifest, and
+      // showed "No picture for this one yet" whenever the two drifted. The
+      // pages are drawn in CSS now; a rep in someone's driveway on one bar
+      // gets the whole thing from the page they already have.
       await openAddLead(repPage);
       await repPage.$eval('#leadForm details.wording', (d) => { d.open = true; });
-      await repPage.waitForSelector('#leadForm .wpane.on .wshot');
-      const h = await repPage.$eval('#leadForm .wpane.on .wshot', (el) => el.getBoundingClientRect().height);
-      assert(h > 150, `the picture panel collapses to ${Math.round(h)}px before the image loads, so the boxes below it will jump when it arrives`);
-      return `panel reserves ${Math.round(h)}px from the first paint`;
+      const imgs = await repPage.$$eval('#leadForm .wiz img', (els) => els.length);
+      eq(imgs, 0, 'the wizard still loads images');
+      const h = await repPage.$eval('#leadForm .wpane.on .wstage', (el) => Math.round(el.getBoundingClientRect().height));
+      assert(h > 200, `the drawing is only ${h}px tall, so it is not rendering`);
+      return `drawn in ${h}px with nothing fetched`;
     });
 
-    await check('The reps page and the API agree on the wording fields', async () => {
-      // fifty-reps.html keeps its OWN copy of the field list, because it is a
-      // static page with no build step. Two lists that must agree and nothing
-      // making them: adding cardNoun to the API's list and not the page's is
-      // exactly how the offer line kept promising an Amazon card after the
-      // default had stopped saying one.
-      const { COPY_FIELDS, GENERIC_COPY } = require('../../src/lib/tenantCopy');
+    await check('The page keeps no wording list of its own to drift from the API', async () => {
+      // fifty-reps.html used to carry its own copy of the field list, and
+      // adding cardNoun to the API without the page is exactly how the offer
+      // line kept promising an Amazon card after the default had stopped
+      // saying one. The list is fetched now; this check is what stops someone
+      // pasting a local copy back in.
+      const { COPY_FIELDS } = require('../../src/lib/tenantCopy');
       const html = require('fs').readFileSync(
         require('path').join(__dirname, '../../../fifty-reps.html'), 'utf8');
-      const block = html.match(/const COPY_FIELDS = \[([\s\S]*?)\n\];/);
-      assert(block, 'could not find COPY_FIELDS in fifty-reps.html');
-      const pageKeys = [...block[1].matchAll(/key:'([a-zA-Z]+)'/g)].map((m) => m[1]);
-      const apiKeys = COPY_FIELDS.map((f) => f.key);
-      eq(JSON.stringify(pageKeys), JSON.stringify(apiKeys),
-        `the page and the API list different fields, or in a different order`);
-      // The fallbacks have to match too: the page shows one as a placeholder
-      // while the API writes the other onto the dealer, so a dealer could be
-      // given wording no rep was ever shown.
-      const drifted = apiKeys.filter((k) => {
-        const want = GENERIC_COPY[k];
-        return want && !block[1].includes(want.slice(0, 40));
-      });
-      eq(drifted.length, 0, `fallbacks differ between the page and the API: ${drifted.join(', ')}`);
-      return `${apiKeys.length} fields, same order, same fallbacks`;
-    });
-
-    await check('Every wording field has a picture pinning it to a real page', async () => {
-      // Guards the seam between api/scripts/build-wording-shots.js and the
-      // field list: add a tenth field and forget to re-run the script, and a
-      // rep gets a box with no picture and no sentence around it.
-      const { COPY_KEYS } = require('../../src/lib/tenantCopy');
-      const manifest = JSON.parse(
-        require('fs').readFileSync(require('path').join(__dirname, '../../../assets/wording/manifest.json'), 'utf8'));
-      const pinned = new Set();
-      manifest.shots.forEach((shot) => shot.marks.forEach((m) => pinned.add(m.key)));
-      const missing = COPY_KEYS.filter((k) => !pinned.has(k));
-      eq(missing.length, 0, `fields with no picture (re-run build-wording-shots.js): ${missing.join(', ')}`);
-      // The six fragments must carry the words around them, or the preview
-      // has nothing to wrap and the rep is back to guessing.
-      const frags = ['friendAction', 'afterPurchase', 'inquiryNoun', 'eligibility', 'qualifyingEvent', 'rewardCondition'];
-      manifest.shots.forEach((shot) => shot.marks.forEach((m) => {
-        if (frags.includes(m.key)) {
-          assert((m.before || '').length + (m.after || '').length > 10,
-            `${m.key} is a sentence fragment but carries no surrounding sentence`);
-        }
-      }));
-      return `${pinned.size} fields pinned across ${manifest.shots.length} pictures`;
+      assert(!/const COPY_FIELDS = \[/.test(html),
+        'fifty-reps.html has a hardcoded COPY_FIELDS again — it must come from /copy-fields');
+      // The drawings DO name keys, one per field, and a key named here that
+      // the API does not serve draws nothing at all. Caught here rather than
+      // by a rep finding a blank line in a mockup.
+      const pages = html.match(/const WPAGES = \[([\s\S]*?)\n\];/);
+      assert(pages, 'could not find WPAGES in fifty-reps.html');
+      const apiKeys = new Set(COPY_FIELDS.map((f) => f.key));
+      const drawn = [...pages[1].matchAll(/c\('([a-zA-Z]+)'/g)].map((m) => m[1]);
+      const unknown = [...new Set(drawn)].filter((k) => !apiKeys.has(k));
+      eq(unknown.length, 0, `drawings place fields the API does not serve: ${unknown.join(', ')}`);
+      return `${drawn.length} fields drawn, all served by the API`;
     });
 
     await check('The lead row says how much is in their own words, and reopens for editing', async () => {
@@ -1500,8 +1481,10 @@ async function main() {
       assert(/2 of \d+ in their own words/.test(rowText), `row: ${rowText}`);
       await leadAction(repPage, repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }), 'wording');
       await repPage.waitForSelector('#wordingForm');
-      await repPage.click('#wordingForm [data-wstep="1"]');
-      eq(await repPage.inputValue('#wordingForm [name=copy_friendAction]'), 'book your gutter job', 'reopens with what she typed');
+      const back = await repPage.$eval('#wordingForm [name=copy_friendPitch]', (el) => +el.closest('[data-wpane]').dataset.wpane);
+      await repPage.click(`#wordingForm [data-wstep="${back}"]`);
+      eq(await repPage.inputValue('#wordingForm [name=copy_friendPitch]'),
+        'Dale did our gutters and they are still perfect.', 'reopens with what she typed');
       // A line added on the second visit, which is the normal way this gets filled.
       await wizFill(repPage, '#wordingForm', 'offerHow', 'Have us do your gutters and you both get {reward}.');
       await repPage.evaluate(() => { document.getElementById('appMsg').textContent = ''; });
@@ -1518,7 +1501,7 @@ async function main() {
     await check('Clearing every box drops the lead back to the generic wording', async () => {
       await leadAction(repPage, repPage.locator('#tab-leads tr', { hasText: 'Gutters By Dale' }), 'wording');
       await repPage.waitForSelector('#wordingForm');
-      for (const k of ['friendAction', 'inquiryNoun', 'offerHow']) {
+      for (const k of ['friendPitch', 'inquiryNoun', 'offerHow']) {
         await wizFill(repPage, '#wordingForm', k, '');
       }
       await repPage.evaluate(() => { document.getElementById('appMsg').textContent = ''; });
@@ -2015,6 +1998,62 @@ async function main() {
         return `worst row has ${worst} of 4 allowed; More carries wording, files and follow up`;
       } finally {
         await cp.close();
+      }
+    });
+
+    await check('The branding screen edits wording through the same wizard, and saves only what changed', async () => {
+      // There used to be two editors for these 36 fields: the Wording dialog
+      // on a lead, and a column of collapsed <details> groups buried in
+      // branding. The second one also showed blank placeholders, because the
+      // branding endpoint serves COPY_FIELDS without the `generic` fallbacks
+      // attached. Both now draw the one wizard off /copy-fields.
+      const bp = await newPage('brand');
+      let tenantId = null;
+      let before = null;
+      try {
+        await signIn(bp, USERS.admin);
+        await bp.click('[data-tab=dealers]');
+        await bp.waitForSelector('#tab-dealers [data-brand]');
+        tenantId = await bp.$eval('#tab-dealers [data-brand]', (el) => el.dataset.brand);
+        [{ branding: before }] = await sql('select branding from tenants where id = $1', [tenantId]);
+        await bp.click('#tab-dealers [data-brand]');
+        await bp.waitForSelector('#brandForm .wiz');
+        const steps = await bp.$$eval('#brandForm [data-wstep]', (els) => els.length);
+        assert(steps > 2, `branding shows ${steps} wording step(s)`);
+        // The bug this fixes: every box here was blank where the same box on
+        // the Wording dialog showed the fallback.
+        const blanks = await bp.$$eval('#brandForm [data-wkey]',
+          (els) => els.filter((e) => !e.placeholder || e.placeholder.length < 3).map((e) => e.dataset.wkey));
+        eq(blanks.length, 0, `boxes with nothing shown in them: ${blanks.join(', ')}`);
+
+        const idx = await bp.$eval('#brandForm [name=copy_leadButton]',
+          (el) => +el.closest('[data-wpane]').dataset.wpane);
+        await bp.click(`#brandForm [data-wstep="${idx}"]`);
+        await bp.waitForSelector(`#brandForm [data-wpane="${idx}"].on`);
+        await bp.fill('#brandForm [name=copy_leadButton]', 'Send me the offer');
+        await bp.evaluate(() => { document.getElementById('appMsg').textContent = ''; });
+        await bp.click('#saveBrand');
+        await bp.waitForFunction(() => document.getElementById('appMsg').textContent.includes('Branding saved'),
+          null, { timeout: 10000 });
+
+        const [{ branding: after }] = await sql('select branding from tenants where id = $1', [tenantId]);
+        eq((after.copy || {}).leadButton, 'Send me the offer', 'the line that was changed');
+        // Only the touched line may be sent. Every other box posting its own
+        // value would freeze today's fallbacks onto the dealer for good --
+        // and a dealer who already has wording would have it overwritten
+        // with whatever the boxes happened to be showing.
+        const was = (before && before.copy) || {};
+        const now = after.copy || {};
+        const changed = [...new Set([...Object.keys(was), ...Object.keys(now)])]
+          .filter((k) => was[k] !== now[k]).sort();
+        eq(changed.join(','), 'leadButton', 'boxes she never touched were saved too');
+        return `wizard in branding (${steps} steps), one line changed, ${Object.keys(now).length} stored`;
+      } finally {
+        if (tenantId) {
+          await sql('update tenants set branding = $2 where id = $1',
+            [tenantId, before === null ? null : JSON.stringify(before)]);
+        }
+        await bp.close();
       }
     });
 

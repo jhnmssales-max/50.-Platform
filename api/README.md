@@ -347,27 +347,15 @@ Both are bounded (8s, 1.5MB of HTML, a sampled grid rather than every pixel), be
   - `npm run e2e:rep-page` — the page in headless Chromium as Joseph, as the helper, as a rep and as a dealer's login, including dropping a real PNG on a lead and building the dealer from the review screen. 35 checks.
 
 
-## The wording wizard's pictures
+## The wording wizard
 
-`scripts/build-wording-shots.js` regenerates everything the reps page shows beside each wording box.
+The reps page walks a business's wording one page at a time: the invite email, their share page, the share sheet, the page their friend lands on, the reminder email, the gift-card notes, the terms page. Each step DRAWS that page in CSS and puts the editable text where it sits on it, so a rep typing "had a roof put on by us" can see the sentence it finishes.
 
-**Re-run it whenever you change a public page's wording or layout, or add a field to `COPY_FIELDS`:**
+The field list itself comes from `GET /api/copy-fields`, which serves `COPY_FIELDS` with each field's `generic` fallback attached. The page keeps no copy of it — an earlier version did, and adding `cardNoun` to the API without the page is how the offer line kept promising an Amazon card after the default had stopped saying one. `rep-page-e2e` fails if a local list reappears.
 
-```
-node api/scripts/build-wording-shots.js
-```
+**Adding a field.** Add it to `COPY_FIELDS` and `GENERIC_COPY` in `src/lib/tenantCopy.js`, then place it in the matching entry of `WPAGES` in `fifty-reps.html`. If it is not placed, it is not lost: the wizard appends a final plain-boxes step for anything the drawings do not cover, and `rep-page-e2e` checks that every field is reachable. Fields a business may leave blank need no `GENERIC_COPY` entry; they draw as a `+ add a signature` prompt instead of a blank line.
 
-It writes `assets/wording/*.webp` and `assets/wording/manifest.json`, which are committed to the repo and served as static files. Nothing regenerates them at deploy time, so a change to a public page without a re-run leaves the pictures showing the old layout.
-
-**Why a script rather than a folder of screenshots.** Every rewordable sentence is already wrapped in `<span data-copy="theKey">` so `tenant-branding.js` can swap the words at run time. The script loads the real page, finds those spans, and records three things in the same pass: the page as an image, the box coordinates of each span, and the fixed words on either side of it. Picture and pin come from one DOM, so they cannot drift. Hand-shot screenshots would go stale silently — still plausible-looking, pointing at the wrong line.
-
-The surrounding words are what let the reps page show *"When you ___, you and Sarah will each get a $50 card"* rather than a box labelled "What the friend has to do". Six of the nine fields are sentence fragments, and not being able to see the sentence is what made the old flat form confusing.
-
-**It fails loudly rather than producing a wrong picture.** The run aborts if a `data-copy` span is missing, if one has a zero-size box (almost always a field on a screen that is hidden until something is clicked — `afterPurchase` lives on the post-submit confirmation panel, which is why that shot has a `prep` step), or if any key in `COPY_KEYS` ends up with no picture at all. `rep-page-e2e.js` re-checks the last of those against the committed manifest, so adding a field and forgetting to re-run is caught by the suite rather than by a rep.
-
-**Two fields have no real page.** `shareTitle` and `shareText` are handed to `navigator.share()` and never render anywhere, so the only place a rep can see them is the phone's own share sheet. That one picture is drawn by the script (`shareSheetHtml`) rather than shot from a page.
-
-**The sample business.** Pictures are shot with a stand-in name so a rep showing them to a roofer never sees "50." or shed wording — the generic, trade-neutral `GENERIC_COPY` is applied, not `tenant-branding.js`'s `DEFAULT_COPY`, which is still the original shed wording. In the captured sentences that name is swapped back to a `{name}` token, so the reps page can show the real company in the preview.
+This replaced a pipeline that screenshotted the real pages and pinned coordinates onto them (`build-wording-shots.js`, `assets/wording/`). It was accurate when it ran, but it had to be re-run by hand after any layout change, it refused to write a manifest while any field was unpinned — which it had been since the follow-up fields went in — and it shipped ~630KB of images to a rep who might be on one bar in someone's driveway. The drawings are part of the page now, so there is nothing to regenerate and nothing to fetch.
 
 ## Stripe safety gate: `assertRealStripeConfigured()`
 
