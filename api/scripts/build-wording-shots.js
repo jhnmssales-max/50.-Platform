@@ -108,7 +108,7 @@ const SHOTS = [
     title: 'Their customer’s share page',
     file: 'fifty-template-customer.html',
     width: 900,
-    keys: ['offerHow', 'shareButton'],
+    keys: ['shareGreeting', 'shareButton', 'shareIntro', 'offerHow', 'shareClosing'],
   },
   {
     id: 'share-sheet',

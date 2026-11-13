@@ -170,6 +170,43 @@ const COPY_FIELDS = [
     where: 'The main call to action, on the page and in the email. Keep it short — it is a button.',
     max: 80,
   },
+  // The three blocks below were hardcoded into fifty-template-customer.html
+  // and could not be changed by anybody. That page is read by a dealer's own
+  // past customers, and five of the things on it are sentences in the
+  // business's voice -- but only the button and the offer line had a box
+  // behind them, so a roofer's customer read two sentences their roofer
+  // chose and three written for a shed company. These close that.
+  //
+  // They are deliberately separate fields rather than one block of prose: a
+  // rep sitting with an owner gets three small, answerable questions instead
+  // of "rewrite this page", and leaving any one empty still falls back to
+  // wording that reads correctly for any trade.
+  {
+    key: 'shareGreeting',
+    ask: 'When a customer opens their referral link, what should the page say first?',
+    stage: 'Their share page',
+    label: 'The line at the top of their share page',
+    where: 'The first thing a customer reads after the company name. Short — it sits on its own line.',
+    max: 120,
+  },
+  {
+    key: 'shareIntro',
+    ask: 'Why does a referral from a customer matter to you? A sentence or two.',
+    stage: 'Their share page',
+    label: 'Why a referral means something',
+    where: 'Under the share button, before the offer. The warm bit — why being recommended matters.',
+    max: 600,
+    multiline: true,
+  },
+  {
+    key: 'shareClosing',
+    ask: 'How do you want to sign off on that page?',
+    stage: 'Their share page',
+    label: 'The last line on their share page',
+    where: 'The final line under the offer, before their link.',
+    max: 400,
+    multiline: true,
+  },
   {
     key: 'cardNoun',
     ask: 'What should we call the reward? Most say Amazon gift card.',
@@ -364,6 +401,15 @@ const GENERIC_COPY = {
   cardNoun: 'electronic gift card',
   shareTitle: 'Get {reward} when you make a purchase from {name}',
   shareText: 'I referred you — make your purchase through my link and we both get {reward}.',
+  // The share page's own three lines. Word for word what that page showed
+  // when they were hardcoded, so no existing dealer's page changes because
+  // these became editable. {first} is filled by the page itself once the
+  // link says who is reading it.
+  shareGreeting: 'Hi {first} — thanks for choosing us.',
+  shareIntro:
+    "When you recommend {name} to a friend, you're trusting us to take good care of someone you know. That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.",
+  shareClosing:
+    'Thank you for supporting our business and giving us the opportunity to serve the people you care about.',
   afterPurchase: 'made your purchase',
   inquiryNoun: 'inquiry',
   eligibility: 'have made a purchase with us',

@@ -107,15 +107,23 @@
     <div class="tag" data-tenant-tagline>Referral Program</div>
   </div>
 
-  <div class="greeting" id="greetingLine">Thanks for choosing us.</div>
+  <!-- {first} is the customer's first name, filled in below once the link
+       says who they are. It lives in the wording itself rather than being
+       bolted on in JS, so a business that would rather not use a first name
+       can simply write a greeting without it. -->
+  <div class="greeting" id="greetingLine" data-copy="shareGreeting">Hi {first} &mdash; thanks for choosing us.</div>
 
   <hr class="divider" />
 
   <button class="sharebtn" id="shareBtn" data-copy="shareButton">Share My Referral Link</button>
 
-  <p class="finePrint">When you recommend <span data-tenant-name-inline>us</span> to a friend, you're trusting us to take good care of someone you know. That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.</p>
+  <!-- data-copy replaces the whole element's text, so the tenant name has to
+       arrive as a {name} token rather than a nested span: a business that
+       writes its own version of this line would otherwise lose the span and
+       with it the name. -->
+  <p class="finePrint" data-copy="shareIntro">When you recommend {name} to a friend, you're trusting us to take good care of someone you know. That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.</p>
   <p class="finePrint" data-copy="offerHow">Here's how it works: Buy a shed from us and receive your own referral link to share. When your friend buys a building through that link, you each receive a $50 Amazon E-Gift Card.</p>
-  <p class="finePrint">Thank you for supporting our business and giving us the opportunity to serve the people you care about.</p>
+  <p class="finePrint" data-copy="shareClosing">Thank you for supporting our business and giving us the opportunity to serve the people you care about.</p>
 
   <div class="shareResult" id="shareResult">
     <div class="label">Your referral code</div>
@@ -164,6 +172,18 @@ async function apiFetch(path, options={}){
 
 let currentCode = null;
 
+// Puts the customer's first name into whatever greeting this business wrote.
+//
+// Runs AFTER TenantBranding has applied their wording, because that replaces
+// the element's text wholesale -- substituting first would write the name
+// into a line that is about to be thrown away. Safe to call twice: once the
+// token is gone there is nothing left to replace.
+function fillFirstName(firstName){
+  const el = document.getElementById('greetingLine');
+  if(!el) return;
+  el.textContent = el.textContent.replace(/\{first\}/g, (firstName || '').trim() || 'there');
+}
+
 async function resolveCode(code){
   if(!code){ TenantBranding.applyFromLink(null); return; }
   try{
@@ -171,10 +191,12 @@ async function resolveCode(code){
     // This customer's own business — never a hardcoded tenant.
     TenantBranding.applyFromLink(link);
     currentCode = code;
-    const firstName = link.referrer_first_name || 'there';
-    document.getElementById('greetingLine').textContent = 'Hi ' + firstName + ' — thanks for choosing us.';
+    fillFirstName(link.referrer_first_name);
   }catch(err){
     TenantBranding.applyFromLink(null);
+    // Still substitute, so a customer who lands here without a working link
+    // reads "Hi there" rather than a literal {first}.
+    fillFirstName(null);
     // Leave the default greeting and currentCode unset — the share button
     // below prompts for a code via the demo panel in that case.
   }

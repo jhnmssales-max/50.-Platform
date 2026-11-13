@@ -54,7 +54,14 @@
     // added to fill() without being added here, which meant a dealer who
     // mails physical cards still had "electronic gift card" on their
     // customers' pages while the wizard showed their chosen wording.
-    cardNoun: "electronic gift card"
+    cardNoun: "electronic gift card",
+    // The share page's own voice. {first} is left for the page to fill once
+    // the link says who is reading it -- fill() does not know that token, so
+    // it survives to be replaced there. A business that would rather not use
+    // a first name writes a greeting without it and nothing substitutes.
+    shareGreeting: "Hi {first} — thanks for choosing us.",
+    shareIntro: "When you recommend {name} to a friend, you're trusting us to take good care of someone you know. That means a lot to us. That's why we designed our new referral program as a simple way to say thank you.",
+    shareClosing: "Thank you for supporting our business and giving us the opportunity to serve the people you care about."
   };
   DEFAULT.copy = DEFAULT_COPY;
 
@@ -145,7 +152,24 @@
     document.querySelectorAll('[data-copy]').forEach(function(el){
       var key = el.getAttribute('data-copy');
       var text = b.copy && b.copy[key];
-      if(text) el.textContent = fill(text, b);
+      // A token in the page's own default still has to be filled, or a
+      // customer reads a literal {name}.
+      //
+      // Filling it in place does not work: apply() runs twice -- once with
+      // the fallback branding as the script loads, again when the link says
+      // whose page this is -- and the first pass would consume the token,
+      // leaving the second nothing to replace and the page stuck showing the
+      // fallback's name. So the template is stashed the first time and every
+      // render starts from it.
+      //
+      // Only defaults that actually carry a token are touched. Several others
+      // hold nested spans doing their own substitution, and setting
+      // textContent on those would flatten the spans and lose what they fill.
+      if(el.getAttribute('data-copy-template') === null && /\{[a-z]+\}/.test(el.textContent)){
+        el.setAttribute('data-copy-template', el.textContent);
+      }
+      var template = el.getAttribute('data-copy-template');
+      if(text || template) el.textContent = fill(text || template, b);
     });
     // Same wording system, but into the placeholder attribute rather than
     // the element's text.
