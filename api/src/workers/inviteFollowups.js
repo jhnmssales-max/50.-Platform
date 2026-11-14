@@ -6,11 +6,16 @@
 // (tenants.invite_followup_months -- 3, 6, 9 or 12; null is off and is the
 // default, so no dealer starts sending because this shipped).
 //
-// Three sends at most, ever. At 3 months that is a year of reminders; at 12
-// it is three years. The cap is what keeps this a nudge rather than a
-// subscription nobody asked for, and it is enforced by the database -- the
-// sequence CHECK and the unique constraint on invite_followups together --
-// not by this file remembering to stop.
+// It does not stop. There used to be a cap of three sends ever, which meant
+// a dealer on the six-month default reminded someone at 6, 12 and 18 months
+// and then never again; Joseph's call (Nov 14, 2026) is to keep going. A
+// customer who bought three years ago can still recommend the business, and
+// the interval the dealer picked already says how often they want to ask.
+//
+// The way out is unchanged and is doing the work the cap used to: every one
+// of these carries an unsubscribe link, anyone who uses it is never emailed
+// again by that company, a closed company's scrubbed addresses are skipped,
+// and a suppressed address surfaces in the dealer's monthly summary.
 //
 // Exactly-once is the same claim pattern as the billing emails: insert the
 // claim, send, stamp sent_at. A failed send deletes the claim so the next
@@ -26,17 +31,22 @@ const { buildInviteUrl, resolveLogoUrl } = require('../lib/customerInvite');
 const { unsubscribeUrl, tokenForSending } = require('../lib/unsubscribe');
 const { noteDeliveryOutcome } = require('../lib/deliveryOutcome');
 
-const MAX_FOLLOWUPS = 3;
 const STALE_CLAIM = "15 minutes";
 
 // Everyone currently due one, with the data needed to write the email.
 //
-// Due means: their dealer has an interval set and is still open, their
-// invite link was minted at least (sequence x interval) months ago, they
-// have not unsubscribed, and no row claims that sequence for them yet. The
-// lowest unsent sequence is the one that goes -- so a dealer who switches
-// the setting on two years after inviting somebody sends them one reminder
-// now, not three at once.
+// Due means: their dealer has an interval set and is still open, they have
+// not unsubscribed, and it has been a full interval since they last heard
+// from this reminder -- or since their invite, if they never have.
+//
+// Counting from the LAST reminder rather than from the invite is what makes
+// an uncapped reminder safe. The old rule asked whether the invite was
+// (sequence x interval) months old, which was only ever survivable because
+// three was the most a customer could be owed. Without the cap, that same
+// arithmetic would decide a customer invited five years ago on a three-month
+// interval is due twenty reminders, and mail them an hour apart until it had
+// caught up. Nobody is owed the years before this shipped: an overdue
+// customer gets one now, and the next one an interval later.
 //
 // Two guards against mailing people who cannot be mailed. remove_company
 // closes a company that traded by scrubbing its customers' addresses to
@@ -57,25 +67,33 @@ async function findDue(client, limit) {
           and c.email not like '%@removed.invalid'
         group by c.id, c.tenant_id, c.name, c.email
      ),
-     sent as (
-       select customer_id, count(*)::int as n from invite_followups group by customer_id
+     history as (
+       -- count(*) over every row, sent or merely claimed, because sequence
+       -- has to be a number no row of theirs has taken: the unique
+       -- constraint on (customer_id, sequence) is what makes a reminder
+       -- unrepeatable. max(sent_at) over the sent ones only, because an
+       -- abandoned claim must not push their next reminder an interval away.
+       select customer_id, count(*)::int as n, max(sent_at) as last_sent
+         from invite_followups group by customer_id
      )
      select i.customer_id, i.tenant_id, i.name, i.email, i.invited_at,
-            coalesce(s.n, 0) + 1 as sequence,
+            coalesce(h.n, 0) + 1 as sequence,
             t.name as tenant_name, t.domain as tenant_domain, t.branding as tenant_branding,
             t.reward_amount_cents, t.reward_currency,
             t.send_from_address, t.send_from_name, t.send_domain_verified,
             t.invite_followup_months
        from invited i
        join tenants t on t.id = i.tenant_id
-       left join sent s on s.customer_id = i.customer_id
+       left join history h on h.customer_id = i.customer_id
       where t.invite_followup_months is not null
         and t.closed_at is null
-        and coalesce(s.n, 0) < $1
-        and i.invited_at <= now() - ((coalesce(s.n, 0) + 1) * t.invite_followup_months || ' months')::interval
-      order by i.invited_at
-      limit $2`,
-    [MAX_FOLLOWUPS, limit]
+        and coalesce(h.last_sent, i.invited_at)
+              <= now() - (t.invite_followup_months || ' months')::interval
+      -- Longest-waiting first, so a dealer switching this on for a big list
+      -- works through it oldest-first across cycles instead of restarting.
+      order by coalesce(h.last_sent, i.invited_at)
+      limit $1`,
+    [limit]
   );
   return rows;
 }
@@ -171,8 +189,8 @@ async function sendOne(person) {
 // one burst that a mail provider would read as a blast.
 async function runInviteFollowupCycle({ limit = 200, dryRun = false, now = new Date() } = {}) {
   // Every one of these is the platform mailing a customer on its own schedule.
-  // A follow-up is due once an invite is older than the interval, so a day
-  // skipped is a day later, never a send missed.
+  // A follow-up is due once a full interval has passed since the last one,
+  // so a day skipped is a day later, never a send missed.
   if (isQuietDay(now)) {
     console.log('INVITE_FOLLOWUP quiet_day Sunday: holding follow-ups until Monday');
     return quietDaySummary({ due: 0, skipped: 0, failed: 0, dryRun });
@@ -192,7 +210,22 @@ async function runInviteFollowupCycle({ limit = 200, dryRun = false, now = new D
       summary.sent += 1;
       continue;
     }
-    const claimId = await claim(person.customer_id, person.tenant_id, person.sequence);
+    // Inside the loop's error handling, not outside it. The claim is a
+    // database write and can throw -- the clearest case being this cycle
+    // asking for sequence 4 against a database where the migration that
+    // lifted the three-send CHECK has not been applied yet. Thrown from out
+    // here that would abort the whole cycle and stop reminders for the other
+    // 199 people in it; caught here it costs one customer one reminder.
+    let claimId;
+    try {
+      claimId = await claim(person.customer_id, person.tenant_id, person.sequence);
+    } catch (err) {
+      summary.failed += 1;
+      console.error(
+        `INVITE_FOLLOWUP could not claim #${person.sequence} for ${person.email} (${person.tenant_name}): ${err.message}`
+      );
+      continue;
+    }
     if (!claimId) { summary.skipped += 1; continue; }
     try {
       const { outcome } = await sendOne(person);
@@ -228,4 +261,4 @@ async function runInviteFollowupCycle({ limit = 200, dryRun = false, now = new D
   return summary;
 }
 
-module.exports = { runInviteFollowupCycle, findDue, MAX_FOLLOWUPS };
+module.exports = { runInviteFollowupCycle, findDue };
