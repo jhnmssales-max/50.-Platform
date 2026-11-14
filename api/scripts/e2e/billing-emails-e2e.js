@@ -386,6 +386,12 @@ async function main() {
 
     await check('A dealer with no interval set sends nothing, however long ago the invite went', async () => {
       const t = await makeTenant({ slug: 'nofollow' });
+      // Explicitly off, which this check never did. tenants.invite_followup_months
+      // has defaulted to 6 since 20261029_followups_default_six_months, so every
+      // tenant makeTenant() builds has an interval -- this dealer was never the
+      // no-interval dealer its name claims, and a 36-month-old invite was due
+      // reminders all along. Turning it off is the only way to test "off".
+      await sql('update tenants set invite_followup_months = null where id = $1', [t.id]);
       await makeInvitedCustomer(t.id, 'nofollow', { monthsAgo: 36 });
       const before = emails.length;
       const out = await followups.runInviteFollowupCycle();
@@ -428,22 +434,72 @@ async function main() {
       return `still ${before} email(s) after a second cycle`;
     });
 
-    await check('It stops after three, however old the invite is', async () => {
-      const t = await makeTenant({ slug: 'capped' });
+    await check('An old invite gets one reminder now, not a backlog of them', async () => {
+      // The reminders used to stop after three. They no longer do, which puts
+      // all the weight on where the clock starts. Counted from the invite,
+      // this customer is five years and twenty intervals overdue, and every
+      // cycle would mail them again until it had caught up -- twenty emails
+      // an hour apart to someone who asked for none of them. Counted from
+      // their last reminder, they are due exactly one.
+      const t = await makeTenant({ slug: 'backlog' });
       await sql('update tenants set invite_followup_months = 3 where id = $1', [t.id]);
-      // Five years back: every one of the three is overdue, and a fourth
-      // would be too if the cap were not real.
-      await makeInvitedCustomer(t.id, 'capped', { monthsAgo: 60 });
-      // One cycle sends the lowest unsent sequence, so catching up takes a
-      // few passes rather than arriving as a burst.
+      await makeInvitedCustomer(t.id, 'backlog', { monthsAgo: 60 });
       for (let i = 0; i < 5; i += 1) await followups.runInviteFollowupCycle();
-      eq(sentTo('capped').length, 3, 'emails after five cycles');
+      eq(sentTo('backlog').length, 1, 'emails after five cycles');
       const rows = await sql(
         `select sequence from invite_followups f
            join customers c on c.id = f.customer_id
           where c.tenant_id = $1 order by sequence`, [t.id]);
-      eq(rows.map((r) => r.sequence).join(','), '1,2,3', 'sequences recorded');
-      return 'invited five years ago, five cycles run, exactly three reminders';
+      eq(rows.map((r) => r.sequence).join(','), '1', 'sequences recorded');
+      return 'invited five years ago, five cycles run, exactly one reminder owed';
+    });
+
+    await check('And it keeps reminding past the old limit of three', async () => {
+      const t = await makeTenant({ slug: 'forever' });
+      await sql('update tenants set invite_followup_months = 6 where id = $1', [t.id]);
+      await makeInvitedCustomer(t.id, 'forever', { monthsAgo: 7 });
+      // Each pass: send whoever is due, then age that send by a full interval
+      // so the next one comes due. Five passes is two more than the cap used
+      // to allow, so a cap left anywhere -- the CHECK, the query, the worker
+      // -- shows up here as a count that stalls at three.
+      for (let i = 0; i < 5; i += 1) {
+        await followups.runInviteFollowupCycle();
+        await sql(
+          `update invite_followups set sent_at = sent_at - interval '6 months'
+             where sent_at is not null
+               and customer_id in (select id from customers where tenant_id = $1)`,
+          [t.id]
+        );
+      }
+      eq(sentTo('forever').length, 5, 'reminders sent across five intervals');
+      const rows = await sql(
+        `select sequence from invite_followups f
+           join customers c on c.id = f.customer_id
+          where c.tenant_id = $1 order by sequence`, [t.id]);
+      eq(rows.map((r) => r.sequence).join(','), '1,2,3,4,5', 'sequences recorded');
+      // The reason the cap could go: the way out is on every one of them.
+      sentTo('forever').forEach((e, i) => {
+        assert(/\/api\/unsubscribe\//.test(e.TextBody), `reminder ${i + 1} has no unsubscribe link`);
+      });
+      return 'five intervals, five reminders, sequences 1-5, every one with a way out';
+    });
+
+    await check('Unsubscribing still stops them, however many have gone out', async () => {
+      const t = await makeTenant({ slug: 'optout2' });
+      await sql('update tenants set invite_followup_months = 6 where id = $1', [t.id]);
+      const id = await makeInvitedCustomer(t.id, 'optout2', { monthsAgo: 7 });
+      await followups.runInviteFollowupCycle();
+      eq(sentTo('optout2').length, 1, 'the first reminder');
+      // Opt out, then let another interval go by. Uncapped, this customer
+      // would otherwise be due reminders for the rest of the dealer's life.
+      await sql('update customers set unsubscribed_at = now() where id = $1', [id]);
+      await sql(
+        `update invite_followups set sent_at = sent_at - interval '6 months'
+           where customer_id = $1`, [id]);
+      const out = await followups.runInviteFollowupCycle();
+      eq(out.due, 0, 'reminders due after unsubscribing');
+      eq(sentTo('optout2').length, 1, 'emails after another interval passed');
+      return 'opted out after one reminder, nothing sent an interval later';
     });
 
     await check('Unsubscribing stops them, and the link needs no login', async () => {
