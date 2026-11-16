@@ -904,7 +904,9 @@ async function loadReps(){ const d = await api('/reps'); state.reps = d.reps; st
 async function showTab(tab){
   state.tab = tab; clearFlash();
   $('tabs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  for(const k of ['calendar','leads','reps','dealers','money','mymoney','builds','company']) $('tab-' + k).classList.toggle('hide', k !== tab);
+  // Every tab's section, not just the ones that existed when this was
+  // written: a key missing here renders its tab perfectly and never shows it.
+  for(const k of ['calendar','leads','calls','reps','dealers','money','mymoney','builds','company']) $('tab-' + k).classList.toggle('hide', k !== tab);
   try{
     if(tab === 'calendar') await renderCalendar();
     if(tab === 'leads') await renderLeads();

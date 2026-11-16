@@ -1237,7 +1237,12 @@ async function main() {
 
     await check('Importing creates the list, and it shows how much is left to do', async () => {
       await page.click('#clImport');
-      await page.waitForSelector('#tab-calls tbody tr', { timeout: 10000 });
+      // Wait for the preview to be replaced, not merely for a table row:
+      // the preview has a sample table of its own, so the first tbody row on
+      // the page is still a preview row for a moment after the click.
+      await page.waitForFunction(
+        () => !document.querySelector('#clImport') && /Texas list/.test(document.querySelector('#tab-calls').textContent),
+        { timeout: 15000 });
       const row = (await page.textContent('#tab-calls tbody tr')).replace(/\s+/g, ' ');
       assert(/Texas list/.test(row), `the list is not on the page: ${row}`);
       assert(/0 of 3/.test(row), `expected none worked yet: ${row}`);
