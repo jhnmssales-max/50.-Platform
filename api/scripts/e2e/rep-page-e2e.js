@@ -1250,71 +1250,9 @@ async function main() {
       eq(n, 3, 'entries written');
       return row.slice(0, 120);
     });
-
-    await check('A caller is given one company at a time, with a number they can tap', async () => {
-      await page.click('#tab-calls [data-callstart]');
-      await page.waitForSelector('.callcard', { timeout: 10000 });
-      const name = await page.textContent('.callcard h3');
-      eq(name.trim(), 'Lone Star Roofing', 'the first company');
-      const href = await page.getAttribute('.callcard .bignum a', 'href');
-      eq(href, 'tel:2145550101', 'the phone number is not dialable');
-      return `${name.trim()} — ${href}`;
-    });
-
-    await check('No answer moves on to the next company and does not offer the same one again', async () => {
-      await page.click('.callcard [data-outcome="no_answer"]');
-      await page.waitForFunction(
-        () => (document.querySelector('.callcard h3') || {}).textContent !== 'Lone Star Roofing',
-        { timeout: 10000 });
-      const name = (await page.textContent('.callcard h3')).trim();
-      assert(name !== 'Lone Star Roofing', `handed the same company back: ${name}`);
-      const [row] = await sql(`select status, outcome, attempts, next_call_after from call_list_entries where company_name = 'Lone Star Roofing'`);
-      eq(row.status, 'waiting', 'a no-answer should stay on the list');
-      eq(row.attempts, 1, 'the attempt was counted');
-      assert(new Date(row.next_call_after) > new Date(Date.now() + 36 * 3600 * 1000),
-        `it should not be due again today: ${row.next_call_after}`);
-      return `now on ${name}; Lone Star back in ${Math.round((new Date(row.next_call_after) - Date.now()) / 86400000)} days`;
-    });
-
-    await check('An interested company becomes a lead, with the correction the caller typed', async () => {
-      const name = (await page.textContent('.callcard h3')).trim();
-      await page.click('.callcard details summary');
-      await page.fill('#callContact', 'Dana Lee-Smith');
-      await page.fill('#callNote', 'wants a call from Joseph on Friday');
-      await page.click('.callcard [data-outcome="interested"]');
-      await page.waitForFunction((n) => (document.querySelector('.callcard h3') || {}).textContent !== n,
-        name, { timeout: 10000 });
-      const [lead] = await sql('select company_name, contact_name, notes from rep_leads where company_name = $1', [name]);
-      assert(lead, `${name} did not become a lead`);
-      eq(lead.contact_name, 'Dana Lee-Smith', 'the correction made on the phone');
-      assert(/Friday/.test(lead.notes || ''), `the note did not reach the lead: ${lead.notes}`);
-      const [entry] = await sql('select status, outcome, rep_lead_id from call_list_entries where company_name = $1', [name]);
-      eq(entry.status, 'done', 'the call list entry should be finished');
-      assert(entry.rep_lead_id, 'the entry does not point at the lead it became');
-      return `${name} -> lead, contact corrected, note carried over`;
-    });
-
-    await check('And it shows up on the Leads tab like any other lead', async () => {
-      await page.click('[data-tab=leads]');
-      await page.waitForSelector('#tab-leads table');
-      await page.fill('#tab-leads .searchbox', 'Bluebonnet');
-      await page.waitForFunction(
-        () => document.querySelector('#tab-leads').textContent.includes('Bluebonnet'), { timeout: 10000 });
-      const rows = await page.$$eval('#tab-leads tbody tr[data-search] td b', (b) => b.map((x) => x.textContent.trim()));
-      assert(rows.includes('Bluebonnet Decks'), `not in Leads: ${rows.join(', ')}`);
-      await page.fill('#tab-leads .searchbox', '');
-      return rows.join(', ');
-    });
-
-    await check('Back on the list, the progress is what actually happened', async () => {
-      await page.click('[data-tab=calls]');
-      await page.waitForSelector('#tab-calls tbody tr', { timeout: 10000 });
-      const row = (await page.textContent('#tab-calls tbody tr')).replace(/\s+/g, ' ');
-      assert(/1 of 3/.test(row), `expected one finished: ${row}`);
-      assert(/Became leads|1/.test(row), row);
-      assert(/call/.test(row), `calls made should be counted: ${row}`);
-      return row.slice(0, 160);
-    });
+    // Joseph imports; the calling is checked further down as Alice. Making
+    // calls needs a reps row, which Joseph does not have in this suite --
+    // and the agency's callers are reps, so that is the real shape of it.
 
     await check('Signing out clears the session', async () => {
       await page.click('#signOutBtn');
@@ -1414,6 +1352,76 @@ async function main() {
       assert(/rep$/.test((await repPage.textContent('#who')).trim()), `who: ${await repPage.textContent('#who')}`);
       return (await repPage.textContent('#who')).trim();
     });
+
+    // ------------------------------------------------------------------
+    // The agency's half of the call list: Alice works what Joseph imported.
+    await check('A caller is given one company at a time, with a number they can tap', async () => {
+      await repPage.click('[data-tab=calls]');
+      await repPage.waitForSelector('#tab-calls [data-callstart]', { timeout: 10000 });
+      await repPage.click('#tab-calls [data-callstart]');
+      await repPage.waitForSelector('.callcard', { timeout: 10000 });
+      const name = await repPage.textContent('.callcard h3');
+      eq(name.trim(), 'Lone Star Roofing', 'the first company');
+      const href = await repPage.getAttribute('.callcard .bignum a', 'href');
+      eq(href, 'tel:2145550101', 'the phone number is not dialable');
+      return `${name.trim()} — ${href}`;
+    });
+
+    await check('No answer moves on to the next company and does not offer the same one again', async () => {
+      await repPage.click('.callcard [data-outcome="no_answer"]');
+      await repPage.waitForFunction(
+        () => (document.querySelector('.callcard h3') || {}).textContent !== 'Lone Star Roofing',
+        { timeout: 10000 });
+      const name = (await repPage.textContent('.callcard h3')).trim();
+      assert(name !== 'Lone Star Roofing', `handed the same company back: ${name}`);
+      const [row] = await sql(`select status, outcome, attempts, next_call_after from call_list_entries where company_name = 'Lone Star Roofing'`);
+      eq(row.status, 'waiting', 'a no-answer should stay on the list');
+      eq(row.attempts, 1, 'the attempt was counted');
+      assert(new Date(row.next_call_after) > new Date(Date.now() + 36 * 3600 * 1000),
+        `it should not be due again today: ${row.next_call_after}`);
+      return `now on ${name}; Lone Star back in ${Math.round((new Date(row.next_call_after) - Date.now()) / 86400000)} days`;
+    });
+
+    await check('An interested company becomes a lead, with the correction the caller typed', async () => {
+      const name = (await repPage.textContent('.callcard h3')).trim();
+      await repPage.click('.callcard details summary');
+      await repPage.fill('#callContact', 'Dana Lee-Smith');
+      await repPage.fill('#callNote', 'wants a call from Joseph on Friday');
+      await repPage.click('.callcard [data-outcome="interested"]');
+      await repPage.waitForFunction((n) => (document.querySelector('.callcard h3') || {}).textContent !== n,
+        name, { timeout: 10000 });
+      const [lead] = await sql('select company_name, contact_name, notes from rep_leads where company_name = $1', [name]);
+      assert(lead, `${name} did not become a lead`);
+      eq(lead.contact_name, 'Dana Lee-Smith', 'the correction made on the phone');
+      assert(/Friday/.test(lead.notes || ''), `the note did not reach the lead: ${lead.notes}`);
+      const [entry] = await sql('select status, outcome, rep_lead_id from call_list_entries where company_name = $1', [name]);
+      eq(entry.status, 'done', 'the call list entry should be finished');
+      assert(entry.rep_lead_id, 'the entry does not point at the lead it became');
+      return `${name} -> lead, contact corrected, note carried over`;
+    });
+
+    await check('And it shows up on the Leads tab like any other lead', async () => {
+      await repPage.click('[data-tab=leads]');
+      await repPage.waitForSelector('#tab-leads table');
+      await repPage.fill('#tab-leads .searchbox', 'Bluebonnet');
+      await repPage.waitForFunction(
+        () => document.querySelector('#tab-leads').textContent.includes('Bluebonnet'), { timeout: 10000 });
+      const rows = await repPage.$$eval('#tab-leads tbody tr[data-search] td b', (b) => b.map((x) => x.textContent.trim()));
+      assert(rows.includes('Bluebonnet Decks'), `not in Leads: ${rows.join(', ')}`);
+      await repPage.fill('#tab-leads .searchbox', '');
+      return rows.join(', ');
+    });
+
+    await check('Back on the list, the progress is what actually happened', async () => {
+      await repPage.click('[data-tab=calls]');
+      await repPage.waitForSelector('#tab-calls tbody tr', { timeout: 10000 });
+      const row = (await repPage.textContent('#tab-calls tbody tr')).replace(/\s+/g, ' ');
+      assert(/1 of 3/.test(row), `expected one finished: ${row}`);
+      assert(/Became leads|1/.test(row), row);
+      assert(/call/.test(row), `calls made should be counted: ${row}`);
+      return row.slice(0, 160);
+    });
+
 
     await check('She sees the lead she is on and can add one, with no "brought in by" to choose', async () => {
       await repPage.waitForSelector('#tab-leads table');

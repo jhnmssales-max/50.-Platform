@@ -3797,9 +3797,15 @@ async function renderCalls(){
             (l.assigned_rep_id ? '<div class="muted">' + esc(repName(l.assigned_rep_id) || '') + '</div>' : '<div class="muted">anyone</div>') + '</td>' +
           '<td data-label="Worked">' + l.done + ' of ' + l.total + bar(l) +
             '<div class="muted">' + l.calls_made + ' call' + (l.calls_made === 1 ? '' : 's') + ' made</div></td>' +
+          // The parentheses below matter: + binds tighter than ||, so
+          // without them this read as ('<td…>' + joined) || ('—' + all the
+          // rest of the row). The left side is always a non-empty string, so
+          // every cell after this one -- the Start calling button included --
+          // was discarded. The row looked almost right, which is why it took a
+          // browser to catch it.
           '<td data-label="Outcomes"><div class="muted">' +
-            [['interested','Interested'],['signed','Signed'],['callback','Call back'],['not_interested','Not interested'],['no_answer','No answer'],['bad_number','Bad number']]
-              .filter(([k]) => l[k]).map(([k, label]) => esc(label) + ' ' + l[k]).join(' · ') || '—' +
+            ([['interested','Interested'],['signed','Signed'],['callback','Call back'],['not_interested','Not interested'],['no_answer','No answer'],['bad_number','Bad number']]
+              .filter(([k]) => l[k]).map(([k, label]) => esc(label) + ' ' + l[k]).join(' · ') || '—') +
             '</div></td>' +
           '<td data-label="Became leads">' + l.became_leads + '</td>' +
           '<td class="right"><button type="button" class="btn small" data-callstart="' + l.id + '">' +
