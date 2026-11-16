@@ -1423,6 +1423,11 @@ async function main() {
       assert(/1 of 3/.test(row), `expected one finished: ${row}`);
       assert(/Became leads|1/.test(row), row);
       assert(/call/.test(row), `calls made should be counted: ${row}`);
+      // Put her back where the checks after this one expect to find her.
+      // Leaving a browser on another tab is invisible here and shows up as
+      // every later check timing out on a Leads tab that is hidden.
+      await repPage.click('[data-tab=leads]');
+      await repPage.waitForSelector('#tab-leads table', { timeout: 10000 });
       return row.slice(0, 160);
     });
 
