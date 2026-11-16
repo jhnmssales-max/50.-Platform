@@ -2212,6 +2212,7 @@ const sheetBody = express.raw({ type: () => true, limit: SHEET_MAX_BYTES });
 const columnsParam = z.record(z.string(), z.number().int().min(0).max(500)).optional();
 
 function parseColumnsHeader(raw) {
+  if (Array.isArray(raw)) raw = raw[0];
   if (!raw) return undefined;
   try {
     const parsed = columnsParam.parse(JSON.parse(raw));
@@ -2221,11 +2222,16 @@ function parseColumnsHeader(raw) {
   }
 }
 
+// Everything about the upload that is not the bytes travels in the query
+// string, not in headers. HTTP header values are effectively ASCII: a list
+// called "Joseph's Texas list \u2014 November", or a file whose name carries
+// an accent, makes the browser refuse to send the request at all. Query
+// parameters are percent-encoded and carry any of it safely.
 async function readSheetOr400(req) {
   if (!Buffer.isBuffer(req.body) || !req.body.length) throw httpError(400, 'No file was uploaded');
-  const filename = String(req.get('x-file-name') || 'upload.csv').slice(0, 260);
-  const columns = parseColumnsHeader(req.get('x-columns'));
-  const headerRaw = req.get('x-has-header');
+  const filename = String(req.query.filename || 'upload.csv').slice(0, 260);
+  const columns = parseColumnsHeader(req.query.columns);
+  const headerRaw = req.query.has_header;
   const hasHeader = headerRaw === undefined || headerRaw === '' ? undefined : headerRaw === 'true';
   try {
     return { filename, ...(await sheetImport.readCallList(req.body, filename, { columns, hasHeader })) };
@@ -2285,8 +2291,8 @@ router.post('/call-lists/preview', requireAuth, sheetBody, wrap(async (req, res)
 router.post('/call-lists', requireAuth, sheetBody, wrap(async (req, res) => {
   const parsed = await readSheetOr400(req);
   if (!parsed.entries.length) throw httpError(400, 'That file has no companies in it');
-  const name = String(req.get('x-list-name') || parsed.filename).slice(0, 200).trim() || parsed.filename;
-  const assignTo = req.get('x-assign-rep') || null;
+  const name = String(req.query.name || parsed.filename).slice(0, 200).trim() || parsed.filename;
+  const assignTo = req.query.assign_rep || null;
 
   const out = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { admin: true });

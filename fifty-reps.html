@@ -765,11 +765,23 @@ async function api(path, options = {}, retried){
 // spreadsheet base64'd into a JSON string is a third bigger and has to be
 // decoded in one piece at the other end. Everything about the upload that is
 // not the bytes travels as a header.
-function apiRaw(path, buffer, headers){
-  return api(path, {
+// The file goes up as itself rather than wrapped in JSON: a 10,000-row
+// spreadsheet base64'd into a JSON string is a third bigger and has to be
+// decoded in one piece at the other end.
+//
+// Everything about it that is not the bytes goes in the query string, NOT in
+// headers. Header values are effectively ASCII, so a list called "Joseph's
+// Texas list \u2014 November" makes the browser refuse to send the request at
+// all -- and a person naming a list is exactly where a dash or a curly
+// apostrophe turns up.
+function apiRaw(path, buffer, params){
+  const qs = new URLSearchParams();
+  Object.entries(params || {}).forEach(([k, v]) => { if(v !== undefined && v !== null && v !== '') qs.set(k, v); });
+  const q = qs.toString();
+  return api(path + (q ? '?' + q : ''), {
     method: 'POST',
     body: buffer,
-    headers: { 'Content-Type': 'application/octet-stream', ...(headers || {}) },
+    headers: { 'Content-Type': 'application/octet-stream' },
   });
 }
 function post(path, data){ return api(path, { method:'POST', body: JSON.stringify(data || {}) }); }
@@ -3821,14 +3833,17 @@ async function renderCalls(){
 // agreed. A list imported under the wrong column mapping is far more work to
 // undo than to get right the first time.
 let CALL_FILE = null;
-async function previewCallList(f){
+async function previewCallList(f, cols){
   if(!f) return;
   CALL_FILE = f;
   $('clChosen').textContent = f.name;
   $('clPreview').innerHTML = '<p class="muted">Reading ' + esc(f.name) + '…</p>';
   try{
     const buf = await f.arrayBuffer();
-    const p = await apiRaw('/call-lists/preview', buf, { 'x-file-name': f.name });
+    const p = await apiRaw('/call-lists/preview', buf, {
+      filename: f.name,
+      ...(cols && Object.keys(cols).length ? { columns: JSON.stringify(cols) } : {}),
+    });
     state.callPreview = p;
     const fieldLabel = { company_name:'Company', contact_name:'Contact', phone:'Phone', email:'Email', website:'Website', city:'City', state:'State', notes:'Notes' };
     const header = p.header_row || [];
@@ -3889,10 +3904,10 @@ async function importCallList(){
     const name = ($('clName').value || '').trim();
     const rep = $('clRep') ? $('clRep').value : '';
     const out = await apiRaw('/call-lists', buf, {
-      'x-file-name': CALL_FILE.name,
-      'x-list-name': name || CALL_FILE.name,
-      'x-columns': JSON.stringify(readColumnChoice()),
-      ...(rep ? { 'x-assign-rep': rep } : {}),
+      filename: CALL_FILE.name,
+      name: name || CALL_FILE.name,
+      columns: JSON.stringify(readColumnChoice()),
+      ...(rep ? { assign_rep: rep } : {}),
     });
     CALL_FILE = null;
     flash(out.imported + ' compan' + (out.imported === 1 ? 'y' : 'ies') + ' imported.', true);

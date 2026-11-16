@@ -89,8 +89,12 @@ function startPostmark() {
   return new Promise((r) => server.listen(PORTS.postmark, () => r(server)));
 }
 
-function request(pathname, { method = 'GET', token, body, raw, headers: extra } = {}) {
+function request(pathname, { method = 'GET', token, body, raw, headers: extra, query } = {}) {
   return new Promise((resolve) => {
+    if (query) {
+      const qs = new URLSearchParams(query).toString();
+      pathname += (pathname.includes('?') ? '&' : '?') + qs;
+    }
     const payload = raw || (body ? JSON.stringify(body) : null);
     const headers = { ...(raw ? { 'Content-Type': 'application/octet-stream' } : { 'Content-Type': 'application/json' }), ...(extra || {}) };
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -211,7 +215,7 @@ async function main() {
 
     const preview = await request('/api/call-lists/preview', {
       method: 'POST', token: joseph, raw: sheet,
-      headers: { 'x-file-name': 'texas-roofers.xlsx' },
+      query: { filename: 'texas-roofers.xlsx' },
     });
     check('a preview reads the file without writing anything',
       preview.status === 200, `status ${preview.status} ${JSON.stringify(preview.body).slice(0, 200)}`);
@@ -227,9 +231,14 @@ async function main() {
 
     const created = await request('/api/call-lists', {
       method: 'POST', token: joseph, raw: sheet,
-      headers: { 'x-file-name': 'texas-roofers.xlsx', 'x-list-name': 'Texas roofers', 'x-assign-rep': ids.agencyRep },
+      query: { filename: 'texas-roofers.xlsx', name: "Joseph's Texas roofers \u2014 November", assign_rep: ids.agencyRep },
     });
     check('the import creates the list', created.status === 201, `status ${created.status}`);
+    // A name with a curly apostrophe and an em dash. Sent as a header this
+    // fails outright -- header values are effectively ASCII -- and naming a
+    // list is exactly where a person types one.
+    check('a list name with real punctuation in it survives the upload',
+      created.body?.list?.name === "Joseph's Texas roofers \u2014 November", created.body?.list?.name);
     check('only the companies worth ringing are imported',
       created.body?.imported === 3, `imported ${created.body?.imported} (expected Acme, Bluebird, Copper Creek)`);
     check('the company that was already a lead is reported, not imported',
@@ -247,7 +256,7 @@ async function main() {
     // Importing the same file again must not double the list.
     const again = await request('/api/call-lists', {
       method: 'POST', token: joseph, raw: sheet,
-      headers: { 'x-file-name': 'texas-roofers.xlsx', 'x-list-name': 'Texas roofers (again)' },
+      query: { filename: 'texas-roofers.xlsx', name: 'Texas roofers (again)' },
     });
     check('importing the same file twice imports nobody a second time',
       again.body?.imported === 0, `imported ${again.body?.imported}`);
@@ -276,7 +285,7 @@ async function main() {
     );
     const raceList = (await request('/api/call-lists', {
       method: 'POST', token: joseph, raw: raceSheet,
-      headers: { 'x-file-name': 'race.xlsx', 'x-list-name': 'Race' },
+      query: { filename: 'race.xlsx', name: 'Race' },
     })).body?.list?.id;
     const racers = await Promise.all([agency, other, agency, other, agency, other].map(
       (t) => request(`/api/call-lists/${raceList}/next`, { method: 'POST', token: t })));
@@ -362,7 +371,7 @@ async function main() {
     check("and cannot take a call from it", stolen.status === 403, `status ${stolen.status}`);
 
     const repImport = await request('/api/call-lists', {
-      method: 'POST', token: agency, raw: sheet, headers: { 'x-file-name': 'sneaky.xlsx' },
+      method: 'POST', token: agency, raw: sheet, query: { filename: 'sneaky.xlsx' },
     });
     check('a rep cannot import a list of their own', repImport.status === 403, `status ${repImport.status}`);
 
@@ -370,12 +379,12 @@ async function main() {
     console.log('\nA file that is not what anyone thinks it is');
     const junk = await request('/api/call-lists/preview', {
       method: 'POST', token: joseph, raw: Buffer.from('%PDF-1.4 not a spreadsheet at all'),
-      headers: { 'x-file-name': 'invoice.xlsx' },
+      query: { filename: 'invoice.xlsx' },
     });
     check('a file that is not a spreadsheet is refused clearly, not as a server fault',
       junk.status === 400, `status ${junk.status} ${junk.body?.error}`);
     const empty = await request('/api/call-lists', {
-      method: 'POST', token: joseph, raw: Buffer.from('Company\n'), headers: { 'x-file-name': 'headers-only.csv' },
+      method: 'POST', token: joseph, raw: Buffer.from('Company\n'), query: { filename: 'headers-only.csv' },
     });
     check('a file with headings and no companies is refused', empty.status === 400, `status ${empty.status}`);
 
@@ -387,7 +396,7 @@ async function main() {
     const t0 = Date.now();
     const bulk = await request('/api/call-lists', {
       method: 'POST', token: joseph, raw: bigSheet,
-      headers: { 'x-file-name': 'ten-thousand.xlsx', 'x-list-name': 'A month of calls' },
+      query: { filename: 'ten-thousand.xlsx', name: 'A month of calls' },
     });
     const took = Date.now() - t0;
     check('a 10,000-company sheet imports in one go',
