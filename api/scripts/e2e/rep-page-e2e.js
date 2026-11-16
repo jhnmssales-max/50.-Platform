@@ -356,7 +356,7 @@ async function main() {
     await check('Admin signs in and sees every one of his tabs', async () => {
       await signIn(page, USERS.admin);
       const t = await tabNames(page);
-      assert(JSON.stringify(t) === JSON.stringify(['Calendar', 'Leads', 'Reps', 'Companies', 'Build dashboards', 'Money', 'Finances']), `tabs: ${t}`);
+      assert(JSON.stringify(t) === JSON.stringify(['Calendar', 'Leads', 'Calls', 'Reps', 'Companies', 'Build dashboards', 'Money', 'Finances']), `tabs: ${t}`);
       return `${await page.textContent('#who')}`;
     });
     await check('Add two reps (Alice, Bob) on the Reps tab', async () => {
@@ -1097,62 +1097,162 @@ async function main() {
     });
 
     await check('A search survives the list redrawing underneath it, without stealing the cursor', async () => {
-      // A row that must NOT match, so narrowing is observable. Without one,
-      // whatever leads happen to survive earlier checks decide whether this
-      // check can prove anything — and at one matching row it cannot.
+      // Searching the leads tab moved into the database, because with 10,000+
+      // leads the rows on screen are one page of them and filtering those
+      // would only ever search the page. So narrowing is now measured by what
+      // comes BACK, not by which rows got hidden: a non-matching row is
+      // absent from the table rather than present with hidden set.
       const [alice3] = await sql(`select id from reps where name = 'Alice Rep'`);
       const [decoy] = await sql(
         `insert into rep_leads (company_name, brought_in_by_rep_id, status) values ('Zzz Decoy Fencing', $1, 'open') returning id`,
         [alice3.id]
       );
+      const rowNames = (p) => p.$$eval('#tab-leads tbody tr[data-search] td b', (b) => b.map((x) => x.textContent.trim()));
       try {
-      await page.click('[data-tab=leads]');
-      await page.waitForSelector('#tab-leads tr[data-search]');
-      // Opening the tab refetches and redraws, and the selector above matches
-      // the rows already in the DOM from the last visit. Typing into a box
-      // that is about to be replaced lands in a node whose input handler has
-      // not been attached yet, so the keystroke filters nothing — harmless in
-      // a browser, where the next keystroke fixes it, but it made this check
-      // pass or fail on timing.
-      await page.waitForLoadState('networkidle').catch(() => {});
-      await page.waitForFunction(() => document.querySelector('#tab-leads').textContent.includes('Zzz Decoy Fencing'), { timeout: 10000 });
-      // Acme Roofing is won, so it is behind the toggle -- without this the
-      // search has nothing to match and the check fails for the wrong reason.
-      await revealWonLeads(page);
-      await page.fill('#tab-leads .searchbox', 'acme');
-      await page.waitForFunction(() => {
-        const rows = Array.from(document.querySelectorAll('#tab-leads tbody tr[data-search]'));
-        return rows.length > 0 && rows.some((r) => !r.hidden)
-          && rows.filter((r) => !r.hidden).every((r) => (r.getAttribute('data-search') || '').includes('acme'));
-      }, { timeout: 6000 }).catch(() => {});
-      const counted = await page.$$eval('#tab-leads tbody tr[data-search]', (r) => ({
-        shown: r.filter((x) => !x.hidden).length,
-        total: r.length,
-        matching: r.filter((x) => (x.getAttribute('data-search') || '').includes('acme')).length,
-      }));
-      const before = counted.shown;
-      // Deliberately not "before >= 1". That passes when the filter never ran
-      // at all, because then nothing is hidden and every row counts — which is
-      // exactly how a lost keystroke hid here instead of failing.
-      assert(before >= 1, 'nothing matched acme to begin with');
-      eq(before, counted.matching, 'the filter is showing rows that do not match');
-      assert(before < counted.total, `typing filtered nothing: ${before} of ${counted.total} rows still shown`);
+        await page.click('[data-tab=leads]');
+        await page.waitForSelector('#tab-leads tr[data-search]');
+        await page.waitForLoadState('networkidle').catch(() => {});
+        await page.waitForFunction(() => document.querySelector('#tab-leads').textContent.includes('Zzz Decoy Fencing'), { timeout: 10000 });
+        // Acme Roofing is won, so it is behind the toggle -- without this the
+        // search has nothing to match and the check fails for the wrong reason.
+        await revealWonLeads(page);
+        const all = await rowNames(page);
+        assert(all.includes('Zzz Decoy Fencing'), 'the decoy should be on the unfiltered list');
 
-      // Something else redraws the tab entirely.
-      await page.evaluate(() => renderLeads());
-      await page.waitForTimeout(250);
-      eq(await page.inputValue('#tab-leads .searchbox'), 'acme', 'the query was lost in the redraw');
-      const after = await page.$$eval('#tab-leads tbody tr[data-search]', (r) => r.filter((x) => !x.hidden).length);
-      eq(after, before, 'the filter was not re-applied after the redraw');
-      // And it did not take focus from whatever was being typed into.
-      const focused = await page.evaluate(() => document.activeElement && document.activeElement.className);
-      assert(!/searchbox/.test(String(focused)), 'the search box grabbed focus on a redraw');
-      await page.fill('#tab-leads .searchbox', '');
-      return 'query and filter both survive a redraw; focus is left alone';
+        await page.fill('#tab-leads .searchbox', 'acme');
+        // The box waits 300ms before asking the server, so that two
+        // keystrokes are one query rather than two.
+        await page.waitForFunction(
+          () => !document.querySelector('#tab-leads').textContent.includes('Zzz Decoy Fencing'),
+          { timeout: 8000 }
+        );
+        const matched = await rowNames(page);
+        assert(matched.length >= 1, 'nothing matched acme');
+        assert(matched.every((n) => /acme/i.test(n)), `a row that does not match came back: ${matched.join(', ')}`);
+        assert(matched.length < all.length, `searching narrowed nothing: ${matched.length} of ${all.length}`);
+        // The count in the heading has to be of matches, not of everything.
+        const head = await page.textContent('#tab-leads .head');
+        assert(/match/.test(head), `the heading does not say what matched: ${head}`);
+
+        // Something else redraws the tab entirely.
+        await page.evaluate(() => renderLeads());
+        await page.waitForTimeout(400);
+        eq(await page.inputValue('#tab-leads .searchbox'), 'acme', 'the query was lost in the redraw');
+        const after = await rowNames(page);
+        eq(after.length, matched.length, 'the search was not re-applied after the redraw');
+        // And it did not take focus from whatever was being typed into.
+        const focused = await page.evaluate(() => document.activeElement && document.activeElement.className);
+        assert(!/searchbox/.test(String(focused)), 'the search box grabbed focus on a redraw');
+
+        await page.fill('#tab-leads .searchbox', '');
+        await page.waitForFunction(
+          () => document.querySelector('#tab-leads').textContent.includes('Zzz Decoy Fencing'),
+          { timeout: 8000 }
+        );
+        return `${all.length} leads, ${matched.length} matched "acme"; query survives a redraw, focus left alone`;
       } finally {
         await sql('delete from rep_leads where id = $1', [decoy.id]).catch(() => {});
       }
     });
+
+    await check('Typing keeps the cursor, and the list pages instead of stopping at 500', async () => {
+      // The 500-row ceiling: there was no offset, so the 501st lead could not
+      // be reached from this page at all. An agency working a bought call
+      // list adds 10,000+ a month.
+      const [alice4] = await sql(`select id from reps where name = 'Alice Rep'`);
+      await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, status, found_on)
+         select 'Bulk Page Co ' || lpad(g::text, 4, '0'), $1, 'open', current_date - g
+           from generate_series(1, 260) g`,
+        [alice4.id]
+      );
+      try {
+        await page.click('[data-tab=leads]');
+        await page.evaluate(() => renderLeads({ offset: 0 }));
+        await page.waitForFunction(() => document.querySelector('#tab-leads .pager'), { timeout: 10000 });
+        const firstPage = await page.$$eval('#tab-leads tbody tr[data-search] td b', (b) => b.map((x) => x.textContent.trim()));
+        const label = await page.textContent('#tab-leads .pager .muted');
+        assert(/of \d{3,}/.test(label), `the pager should show a real total: ${label}`);
+
+        await page.click('#tab-leads .pager [data-leadpage="next"]');
+        await page.waitForFunction(() => /^20[1-9]|^2[1-9]\d/.test(
+          (document.querySelector('#tab-leads .pager .muted') || {}).textContent || ''), { timeout: 10000 }).catch(() => {});
+        const secondPage = await page.$$eval('#tab-leads tbody tr[data-search] td b', (b) => b.map((x) => x.textContent.trim()));
+        assert(secondPage.length > 0, 'page two came back empty');
+        const overlap = secondPage.filter((n) => firstPage.includes(n));
+        eq(overlap.length, 0, `page two repeated rows from page one: ${overlap.slice(0, 3).join(', ')}`);
+
+        // And back again, to the same rows.
+        await page.click('#tab-leads .pager [data-leadpage="prev"]');
+        await page.waitForTimeout(600);
+        const backAgain = await page.$$eval('#tab-leads tbody tr[data-search] td b', (b) => b.map((x) => x.textContent.trim()));
+        eq(backAgain.join('|'), firstPage.join('|'), 'going back landed somewhere else');
+        return `${firstPage.length} per page, page two holds different rows, back returns to page one`;
+      } finally {
+        await sql(`delete from rep_leads where company_name like 'Bulk Page Co %'`).catch(() => {});
+        await page.evaluate(() => renderLeads({ offset: 0 })).catch(() => {});
+      }
+    });
+
+    // ======================================================================
+    section('Call lists: Joseph imports, a caller works it');
+
+    const callSheet = [
+      'Business Name,Owner,Primary Phone,Email Address,City,ST',
+      'Lone Star Roofing,Pat Smith,(214) 555-0101,pat@lonestar.test,Dallas,TX',
+      'Bluebonnet Decks,Dana Lee,(214) 555-0102,dana@bluebonnet.test,Plano,TX',
+      'Hill Country Barns,Sam Ray,(512) 555-0103,sam@hillcountry.test,Austin,TX',
+      ',,,,,',
+      'LONE STAR ROOFING,Repeat Row,,,,',
+    ].join('\n');
+
+    await check('Joseph imports a spreadsheet, and sees what it found before anything is saved', async () => {
+      await page.click('[data-tab=calls]');
+      // Attached, not visible: the file input is hidden behind a button, the
+      // way every file picker worth looking at is.
+      await page.waitForSelector('#tab-calls #clFile', { state: 'attached' });
+      await page.fill('#clName', 'Texas list — November');
+      await page.setInputFiles('#tab-calls #clFile', {
+        name: 'texas.csv', mimeType: 'text/csv', buffer: Buffer.from(callSheet),
+      });
+      await page.waitForSelector('#clImport', { timeout: 10000 });
+      const text = await page.textContent('#clPreview');
+      assert(/3 companies ready to import/.test(text), `preview said: ${text.replace(/\s+/g, ' ').slice(0, 200)}`);
+      // Nothing may be written by a preview: the whole point of showing it.
+      const [{ n }] = await sql('select count(*)::int as n from call_lists');
+      eq(n, 0, 'a preview wrote a list to the database');
+      // The repeat inside the file is reported rather than imported.
+      assert(/Leaving out/.test(text), 'the preview does not say what it is leaving out');
+      return text.replace(/\s+/g, ' ').match(/[\d]+ companies ready to import[^.]*\./)[0];
+    });
+
+    await check('The guessed columns are shown and can be corrected', async () => {
+      const picked = await page.$$eval('[data-clcol]', (sels) =>
+        Object.fromEntries(sels.map((s2) => [s2.dataset.clcol, s2.options[s2.selectedIndex].text])));
+      eq(picked.company_name, 'Business Name', 'company column');
+      eq(picked.phone, 'Primary Phone', 'phone column');
+      eq(picked.state, 'ST', 'state column');
+      return Object.entries(picked).filter(([, v]) => v !== '— not in this file —').map(([k, v]) => `${k}=${v}`).join(', ');
+    });
+
+    await check('Importing creates the list, and it shows how much is left to do', async () => {
+      await page.click('#clImport');
+      // Wait for the preview to be replaced, not merely for a table row:
+      // the preview has a sample table of its own, so the first tbody row on
+      // the page is still a preview row for a moment after the click.
+      await page.waitForFunction(
+        () => !document.querySelector('#clImport') && /Texas list/.test(document.querySelector('#tab-calls').textContent),
+        { timeout: 15000 });
+      const row = (await page.textContent('#tab-calls tbody tr')).replace(/\s+/g, ' ');
+      assert(/Texas list/.test(row), `the list is not on the page: ${row}`);
+      assert(/0 of 3/.test(row), `expected none worked yet: ${row}`);
+      const [{ n }] = await sql('select count(*)::int as n from call_list_entries');
+      eq(n, 3, 'entries written');
+      return row.slice(0, 120);
+    });
+    // Joseph imports; the calling is checked further down as Alice. Making
+    // calls needs a reps row, which Joseph does not have in this suite --
+    // and the agency's callers are reps, so that is the real shape of it.
 
     await check('Signing out clears the session', async () => {
       await page.click('#signOutBtn');
@@ -1168,7 +1268,7 @@ async function main() {
       global.__helper = hp;
       await signIn(hp, USERS.helper);
       const t = await tabNames(hp);
-      assert(JSON.stringify(t) === JSON.stringify(['Calendar', 'Leads', 'Reps', 'Companies']), `tabs: ${t}`);
+      assert(JSON.stringify(t) === JSON.stringify(['Calendar', 'Leads', 'Calls', 'Reps', 'Companies']), `tabs: ${t}`);
       assert(/helper/.test(await hp.textContent('#who')), 'who');
     });
     await check('No dollar sign appears on any tab, and the Reps table has no earned / owe columns', async () => {
@@ -1244,14 +1344,93 @@ async function main() {
     });
 
     let repPage;
-    await check('Alice signs in and sees Calendar, My leads, My dealers and My money — no Reps tab, no Money tab', async () => {
+    await check('Alice signs in and sees Calendar, My leads, Calls, My dealers and My money — no Reps tab, no Money tab', async () => {
       repPage = await newPage('rep');
       await signIn(repPage, { email: 'alice@x.test' });
       const t = await tabNames(repPage);
-      eqArr(t, ['Calendar', 'My leads', 'My dealers', 'My money'], 'tabs');
+      eqArr(t, ['Calendar', 'My leads', 'Calls', 'My dealers', 'My money'], 'tabs');
       assert(/rep$/.test((await repPage.textContent('#who')).trim()), `who: ${await repPage.textContent('#who')}`);
       return (await repPage.textContent('#who')).trim();
     });
+
+    // ------------------------------------------------------------------
+    // The agency's half of the call list: Alice works what Joseph imported.
+    await check('A caller is given one company at a time, with a number they can tap', async () => {
+      await repPage.click('[data-tab=calls]');
+      await repPage.waitForSelector('#tab-calls [data-callstart]', { timeout: 10000 });
+      await repPage.click('#tab-calls [data-callstart]');
+      await repPage.waitForSelector('.callcard', { timeout: 10000 });
+      const name = await repPage.textContent('.callcard h3');
+      eq(name.trim(), 'Lone Star Roofing', 'the first company');
+      const href = await repPage.getAttribute('.callcard .bignum a', 'href');
+      eq(href, 'tel:2145550101', 'the phone number is not dialable');
+      return `${name.trim()} — ${href}`;
+    });
+
+    await check('No answer moves on to the next company and does not offer the same one again', async () => {
+      await repPage.click('.callcard [data-outcome="no_answer"]');
+      await repPage.waitForFunction(
+        () => (document.querySelector('.callcard h3') || {}).textContent !== 'Lone Star Roofing',
+        { timeout: 10000 });
+      const name = (await repPage.textContent('.callcard h3')).trim();
+      assert(name !== 'Lone Star Roofing', `handed the same company back: ${name}`);
+      const [row] = await sql(`select status, outcome, attempts, next_call_after from call_list_entries where company_name = 'Lone Star Roofing'`);
+      eq(row.status, 'waiting', 'a no-answer should stay on the list');
+      eq(row.attempts, 1, 'the attempt was counted');
+      assert(new Date(row.next_call_after) > new Date(Date.now() + 36 * 3600 * 1000),
+        `it should not be due again today: ${row.next_call_after}`);
+      return `now on ${name}; Lone Star back in ${Math.round((new Date(row.next_call_after) - Date.now()) / 86400000)} days`;
+    });
+
+    await check('An interested company becomes a lead, with the correction the caller typed', async () => {
+      const name = (await repPage.textContent('.callcard h3')).trim();
+      await repPage.click('.callcard details summary');
+      await repPage.fill('#callContact', 'Dana Lee-Smith');
+      await repPage.fill('#callNote', 'wants a call from Joseph on Friday');
+      await repPage.click('.callcard [data-outcome="interested"]');
+      await repPage.waitForFunction((n) => (document.querySelector('.callcard h3') || {}).textContent !== n,
+        name, { timeout: 10000 });
+      const [lead] = await sql('select company_name, contact_name, notes from rep_leads where company_name = $1', [name]);
+      assert(lead, `${name} did not become a lead`);
+      eq(lead.contact_name, 'Dana Lee-Smith', 'the correction made on the phone');
+      assert(/Friday/.test(lead.notes || ''), `the note did not reach the lead: ${lead.notes}`);
+      const [entry] = await sql('select status, outcome, rep_lead_id from call_list_entries where company_name = $1', [name]);
+      eq(entry.status, 'done', 'the call list entry should be finished');
+      assert(entry.rep_lead_id, 'the entry does not point at the lead it became');
+      return `${name} -> lead, contact corrected, note carried over`;
+    });
+
+    await check('And it shows up on the Leads tab like any other lead', async () => {
+      await repPage.click('[data-tab=leads]');
+      await repPage.waitForSelector('#tab-leads table');
+      await repPage.fill('#tab-leads .searchbox', 'Bluebonnet');
+      await repPage.waitForFunction(
+        () => document.querySelector('#tab-leads').textContent.includes('Bluebonnet'), { timeout: 10000 });
+      const rows = await repPage.$$eval('#tab-leads tbody tr[data-search] td b', (b) => b.map((x) => x.textContent.trim()));
+      assert(rows.includes('Bluebonnet Decks'), `not in Leads: ${rows.join(', ')}`);
+      await repPage.fill('#tab-leads .searchbox', '');
+      return rows.join(', ');
+    });
+
+    await check('Back on the list, the progress is what actually happened', async () => {
+      // Coming back to the tab resumes the call she was on, which is what a
+      // caller wants; getting to the lists means leaving it deliberately.
+      await repPage.click('[data-tab=calls]');
+      await repPage.waitForSelector('#callDone', { timeout: 10000 });
+      await repPage.click('#callDone');
+      await repPage.waitForSelector('#tab-calls tbody tr', { timeout: 10000 });
+      const row = (await repPage.textContent('#tab-calls tbody tr')).replace(/\s+/g, ' ');
+      assert(/1 of 3/.test(row), `expected one finished: ${row}`);
+      assert(/Became leads|1/.test(row), row);
+      assert(/call/.test(row), `calls made should be counted: ${row}`);
+      // Put her back where the checks after this one expect to find her.
+      // Leaving a browser on another tab is invisible here and shows up as
+      // every later check timing out on a Leads tab that is hidden.
+      await repPage.click('[data-tab=leads]');
+      await repPage.waitForSelector('#tab-leads table', { timeout: 10000 });
+      return row.slice(0, 160);
+    });
+
 
     await check('She sees the lead she is on and can add one, with no "brought in by" to choose', async () => {
       await repPage.waitForSelector('#tab-leads table');
@@ -1859,7 +2038,7 @@ async function main() {
       await p.click('#setPwBtn');
       await p.waitForSelector('#app:not(.hide) nav.tabs button', { timeout: 10000 });
       const tabs = await tabNames(p);
-      eqArr(tabs, ['Calendar', 'My leads', 'My dealers', 'My money'], 'she lands in her own pipeline');
+      eqArr(tabs, ['Calendar', 'My leads', 'Calls', 'My dealers', 'My money'], 'she lands in her own pipeline');
 
       // And the password really is set: an ordinary sign-in works now.
       const signIn = await fetch(`${AUTH_BASE}/auth/v1/token?grant_type=password`, {

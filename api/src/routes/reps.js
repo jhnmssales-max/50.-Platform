@@ -414,29 +414,69 @@ const LEAD_CAN_DELETE = `(l.status <> 'won'
 
 // A rep calling this gets only their own leads — not because of anything
 // here, but because RLS gives them no other rows.
+const LEAD_PAGE = 200;
+const LEAD_PAGE_MAX = 500;
+
+// Every word has to appear somewhere in the row, in any order, so "silver
+// roof" finds Silver Run Home Improvements without the words being adjacent.
+// Same rule the page used to apply in the browser -- it just could not see
+// past the rows it had been sent.
+function leadSearchClauses(q, params) {
+  const words = String(q || '').trim().toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
+  return words.map((w) => {
+    params.push(`%${w}%`);
+    return `(l.company_name || ' ' || coalesce(l.contact_name, '') || ' ' ||
+             coalesce(l.email, '') || ' ' || coalesce(l.phone, '')) ilike $${params.length}`;
+  });
+}
+
 router.get('/rep-leads', requireAuth, wrap(async (req, res) => {
   const status = req.query.status;
   if (status !== undefined && !['open', 'won', 'lost'].includes(status)) throw httpError(400, 'status must be open, won or lost');
+  const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 200) : '';
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || LEAD_PAGE, 1), LEAD_PAGE_MAX);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
   const rows = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { rep: true });
-    // The 500 cap stays -- the page renders every row it is given, so lifting
-    // it would just move the problem. What changes is that the cap is no
-    // longer silent: the real total comes back alongside, so the page can say
-    // "showing 500 of 812" instead of quietly dropping the oldest leads and
-    // printing a total that is really just the length of what fitted.
-    const { rows } = await client.query(
-      `select ${LEAD_COLUMNS}, ${LEAD_CAN_DELETE} from rep_leads l ${status ? 'where l.status = $1' : ''} order by l.found_on desc, l.created_at desc limit 500`,
-      status ? [status] : []
-    );
+    // Paged, and searched in the database rather than in the browser.
+    //
+    // This used to send the newest 500 and nothing else, with no offset: the
+    // 501st lead could not be reached from the page at all, and the search
+    // box filtered only what had already arrived -- so the notice telling
+    // people to "search to reach the rest" was advice that could not work.
+    // Fine at a few hundred leads. An agency working a bought call list adds
+    // 10,000+ a month.
+    const params = [];
+    const where = [];
+    if (status) { params.push(status); where.push(`l.status = $${params.length}`); }
+    leadSearchClauses(q, params).forEach((c) => where.push(c));
+    const whereSql = where.length ? `where ${where.join(' and ')}` : '';
+
+    // The counts are of everything MATCHING, not of everything there is, so
+    // the page can say "81 of 10,412 match" and page through just those.
     const { rows: [counts] } = await client.query(
       `select count(*)::int as total,
               count(*) filter (where l.status = 'open')::int as open
-         from rep_leads l ${status ? 'where l.status = $1' : ''}`,
-      status ? [status] : []
+         from rep_leads l ${whereSql}`,
+      params
+    );
+    const { rows } = await client.query(
+      `select ${LEAD_COLUMNS}, ${LEAD_CAN_DELETE} from rep_leads l ${whereSql}
+        order by l.found_on desc, l.created_at desc
+        limit $${params.length + 1} offset $${params.length + 2}`,
+      [...params, limit, offset]
     );
     return { rows, counts };
   });
-  res.json({ leads: rows.rows, total: rows.counts.total, open_total: rows.counts.open, limit: 500 });
+  res.json({
+    leads: rows.rows,
+    total: rows.counts.total,
+    open_total: rows.counts.open,
+    limit,
+    offset,
+    q,
+  });
 }));
 
 // Leads that look like the same company: the same name (ignoring case and
@@ -2140,6 +2180,371 @@ router.delete('/rep-followups/:id', requireAuth, wrap(async (req, res) => {
     await requirePlatform(client, req.userId, { rep: true });
     const { rowCount } = await client.query('delete from rep_followups where id = $1', [id]);
     if (rowCount !== 1) throw httpError(404, 'That follow-up does not exist');
+  });
+  res.json({ ok: true });
+}));
+
+/* ===========================================================================
+   Call lists
+   ===========================================================================
+
+   A bought or built list of companies to cold-call, worked by an agency.
+
+   Held apart from rep_leads on purpose. A rep_lead is a company somebody has
+   decided is worth pursuing: it carries credit, it feeds the pipeline five
+   reps work by hand, and winning one pays someone. Ten thousand unqualified
+   names a month would bury that.
+
+   The list is imported whole, before anyone picks up the phone, rather than
+   typed in as each call is made. That is the difference between being able to
+   see what an agency has worked and only being able to see what it happened
+   to write down -- a company that is recorded only when someone rings it
+   means the ones nobody reached do not exist to count.
+   =========================================================================== */
+
+const sheetImport = require('../lib/sheetImport');
+
+// Big enough for a 100,000-row spreadsheet, which is well past what anyone
+// should be sending, and small enough that it cannot be used to fill memory.
+const SHEET_MAX_BYTES = 25 * 1024 * 1024;
+const sheetBody = express.raw({ type: () => true, limit: SHEET_MAX_BYTES });
+
+const columnsParam = z.record(z.string(), z.number().int().min(0).max(500)).optional();
+
+function parseColumnsHeader(raw) {
+  if (Array.isArray(raw)) raw = raw[0];
+  if (!raw) return undefined;
+  try {
+    const parsed = columnsParam.parse(JSON.parse(raw));
+    return parsed && Object.keys(parsed).length ? parsed : undefined;
+  } catch (e) {
+    throw httpError(400, 'The column mapping sent with the file could not be read');
+  }
+}
+
+// Everything about the upload that is not the bytes travels in the query
+// string, not in headers. HTTP header values are effectively ASCII: a list
+// called "Joseph's Texas list \u2014 November", or a file whose name carries
+// an accent, makes the browser refuse to send the request at all. Query
+// parameters are percent-encoded and carry any of it safely.
+async function readSheetOr400(req) {
+  if (!Buffer.isBuffer(req.body) || !req.body.length) throw httpError(400, 'No file was uploaded');
+  const filename = String(req.query.filename || 'upload.csv').slice(0, 260);
+  const columns = parseColumnsHeader(req.query.columns);
+  const headerRaw = req.query.has_header;
+  const hasHeader = headerRaw === undefined || headerRaw === '' ? undefined : headerRaw === 'true';
+  try {
+    return { filename, ...(await sheetImport.readCallList(req.body, filename, { columns, hasHeader })) };
+  } catch (err) {
+    // A corrupt .xlsx, a PDF renamed to .csv, a password-protected workbook.
+    // None of those should read as a server fault.
+    throw httpError(400, `That file could not be read as a spreadsheet (${err.message})`);
+  }
+}
+
+// Read the file and show what WOULD be imported. Writes nothing.
+//
+// The browser keeps the file and sends it again to import, which costs one
+// extra upload and saves holding half-imported spreadsheets in the memory of
+// a server that may be one of several.
+router.post('/call-lists/preview', requireAuth, sheetBody, wrap(async (req, res) => {
+  const parsed = await readSheetOr400(req);
+  const sample = parsed.entries.slice(0, 20);
+  const out = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+    if (!parsed.entries.length) return { already_leads: 0, already_listed: 0 };
+    const names = parsed.entries.map((e) => e.company_name);
+    // Counted in one pass over the whole file rather than per row: at 10,000
+    // companies a query each would be 10,000 round trips.
+    const { rows: [counts] } = await client.query(
+      `with incoming as (select unnest($1::text[]) as company_name)
+       select count(*) filter (where exists (
+                select 1 from rep_leads l
+                 where fifty_norm_company(l.company_name) = fifty_norm_company(i.company_name)))::int as already_leads,
+              count(*) filter (where exists (
+                select 1 from call_list_entries e
+                  join call_lists cl on cl.id = e.list_id
+                 where cl.archived_at is null
+                   and fifty_norm_company(e.company_name) = fifty_norm_company(i.company_name)))::int as already_listed
+         from incoming i`,
+      [names]
+    );
+    return counts;
+  });
+  res.json({
+    filename: parsed.filename,
+    columns: parsed.columns,
+    header_row: parsed.headerRow,
+    has_header: parsed.headerRow !== null,
+    fields: Object.keys(sheetImport.FIELD_HEADERS),
+    total_rows: parsed.totalRows,
+    truncated: parsed.truncated,
+    would_import: parsed.entries.length,
+    skipped: parsed.skipped.slice(0, 50),
+    skipped_total: parsed.skipped.length,
+    already_leads: out.already_leads,
+    already_listed: out.already_listed,
+    sample,
+  });
+}));
+
+router.post('/call-lists', requireAuth, sheetBody, wrap(async (req, res) => {
+  const parsed = await readSheetOr400(req);
+  if (!parsed.entries.length) throw httpError(400, 'That file has no companies in it');
+  const name = String(req.query.name || parsed.filename).slice(0, 200).trim() || parsed.filename;
+  const assignTo = req.query.assign_rep || null;
+
+  const out = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+    const { rows: [list] } = await client.query(
+      `insert into call_lists (name, source_file, assigned_rep_id) values ($1, $2, $3) returning id, name`,
+      [name, parsed.filename, assignTo || null]
+    );
+
+    // One statement for the whole sheet. The alternative -- a round trip per
+    // company -- is ten thousand of them, and a half-finished import if the
+    // connection drops in the middle.
+    const cols = ['company_name', 'contact_name', 'phone', 'email', 'website', 'city', 'state', 'notes'];
+    const arrays = cols.map((c) => parsed.entries.map((e) => e[c]));
+    const { rows: inserted } = await client.query(
+      `with incoming as (
+         select ord, company_name, contact_name, phone, email, website, city, state, notes
+           from unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[])
+                with ordinality as t(company_name, contact_name, phone, email, website, city, state, notes, ord)
+       ),
+       keep as (
+         select * from incoming i
+          where not exists (
+                  select 1 from rep_leads l
+                   where fifty_norm_company(l.company_name) = fifty_norm_company(i.company_name))
+            and not exists (
+                  select 1 from call_list_entries e
+                    join call_lists cl on cl.id = e.list_id
+                   where cl.archived_at is null
+                     and fifty_norm_company(e.company_name) = fifty_norm_company(i.company_name))
+       )
+       insert into call_list_entries
+         (list_id, row_no, company_name, contact_name, phone, email, website, city, state, notes)
+       select $1, row_number() over (order by k.ord), k.company_name, k.contact_name, k.phone,
+              k.email, k.website, k.city, k.state, k.notes
+         from keep k
+       returning id`,
+      [list.id, ...arrays]
+    );
+
+    return { list, imported: inserted.length };
+  });
+
+  res.status(201).json({
+    list: out.list,
+    imported: out.imported,
+    // Everything the file held that did not become an entry, and why.
+    rows_in_file: parsed.totalRows,
+    unusable_rows: parsed.skipped.length,
+    skipped_as_known: parsed.entries.length - out.imported,
+    truncated: parsed.truncated,
+  });
+}));
+
+router.get('/call-lists', requireAuth, wrap(async (req, res) => {
+  const includeArchived = req.query.archived === 'true';
+  const rows = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { rep: true });
+    const { rows } = await client.query(
+      `select * from call_list_progress
+        ${includeArchived ? '' : 'where archived_at is null'}
+        order by archived_at nulls first, created_at desc`
+    );
+    return rows;
+  });
+  res.json({ lists: rows });
+}));
+
+router.patch('/call-lists/:id', requireAuth, wrap(async (req, res) => {
+  const body = parseOr400(z.object({
+    name: z.string().trim().min(1).max(200).optional(),
+    notes: z.string().trim().max(2000).nullable().optional(),
+    assigned_rep_id: z.string().uuid().nullable().optional(),
+    archived: z.boolean().optional(),
+  }), req.body || {});
+  const out = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+    const sets = [];
+    const params = [req.params.id];
+    const set = (sql, value) => { params.push(value); sets.push(`${sql} = $${params.length}`); };
+    if (body.name !== undefined) set('name', body.name);
+    if (body.notes !== undefined) set('notes', body.notes);
+    if (body.assigned_rep_id !== undefined) set('assigned_rep_id', body.assigned_rep_id);
+    if (body.archived !== undefined) sets.push(`archived_at = ${body.archived ? 'now()' : 'null'}`);
+    if (!sets.length) throw httpError(400, 'Nothing to change');
+    const { rows } = await client.query(
+      `update call_lists set ${sets.join(', ')} where id = $1 returning id`, params);
+    if (!rows.length) throw httpError(404, 'That call list no longer exists');
+    return rows[0];
+  });
+  res.json(out);
+}));
+
+// Deleting a list keeps any company that already graduated into a lead: the
+// lead is the thing with value, and it stands on its own once it exists.
+router.delete('/call-lists/:id', requireAuth, wrap(async (req, res) => {
+  await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { admin: true });
+    const { rows } = await client.query('delete from call_lists where id = $1 returning id', [req.params.id]);
+    if (!rows.length) throw httpError(404, 'That call list no longer exists');
+  });
+  res.json({ ok: true });
+}));
+
+const ENTRY_COLUMNS = `e.id, e.list_id, e.row_no, e.company_name, e.contact_name, e.phone, e.email,
+  e.website, e.city, e.state, e.notes, e.status, e.outcome, e.attempts, e.last_called_at,
+  e.next_call_after, e.last_note, e.called_by_rep_id, e.rep_lead_id, e.claimed_by_rep_id, e.claimed_at`;
+
+router.get('/call-lists/:id/entries', requireAuth, wrap(async (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 500);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+  const status = req.query.status;
+  if (status !== undefined && !['waiting', 'done'].includes(status)) throw httpError(400, 'status must be waiting or done');
+  const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 200) : '';
+
+  const out = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { rep: true });
+    const params = [req.params.id];
+    const where = ['e.list_id = $1'];
+    if (status) { params.push(status); where.push(`e.status = $${params.length}`); }
+    String(q).trim().toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6).forEach((w) => {
+      params.push(`%${w}%`);
+      where.push(`(e.company_name || ' ' || coalesce(e.contact_name, '') || ' ' ||
+                   coalesce(e.email, '') || ' ' || coalesce(e.phone, '')) ilike $${params.length}`);
+    });
+    const whereSql = `where ${where.join(' and ')}`;
+    const { rows: [counts] } = await client.query(
+      `select count(*)::int as total from call_list_entries e ${whereSql}`, params);
+    const { rows } = await client.query(
+      `select ${ENTRY_COLUMNS} from call_list_entries e ${whereSql}
+        order by e.row_no limit $${params.length + 1} offset $${params.length + 2}`,
+      [...params, limit, offset]);
+    return { rows, total: counts.total };
+  });
+  res.json({ entries: out.rows, total: out.total, limit, offset });
+}));
+
+// The next company to ring. Null when the list is worked through for now --
+// which is not the same as finished, because callbacks come back round.
+router.post('/call-lists/:id/next', requireAuth, wrap(async (req, res) => {
+  const out = await withUserTransaction(req.userId, async (client) => {
+    await requirePlatform(client, req.userId, { rep: true });
+    const { rows: [claimed] } = await client.query('select claim_next_call($1) as id', [req.params.id]);
+    if (!claimed.id) {
+      const { rows: [left] } = await client.query(
+        `select count(*) filter (where status = 'waiting')::int as waiting,
+                min(next_call_after) filter (where status = 'waiting' and next_call_after > now()) as next_due
+           from call_list_entries where list_id = $1`, [req.params.id]);
+      return { entry: null, waiting: left.waiting, next_due: left.next_due };
+    }
+    const { rows: [entry] } = await client.query(
+      `select ${ENTRY_COLUMNS} from call_list_entries e where e.id = $1`, [claimed.id]);
+    return { entry };
+  });
+  res.json(out);
+}));
+
+const OUTCOMES = ['no_answer', 'callback', 'not_interested', 'bad_number', 'interested', 'signed'];
+// How long before an entry comes back round, per outcome. A callback carries
+// its own time, so it is not in here.
+const RETRY_DAYS = { no_answer: 2 };
+
+router.post('/call-list-entries/:id/outcome', requireAuth, wrap(async (req, res) => {
+  const body = parseOr400(z.object({
+    outcome: z.enum(OUTCOMES),
+    note: z.string().trim().max(2000).optional(),
+    call_back_at: z.string().datetime({ offset: true }).optional(),
+    // Corrections the caller makes while on the phone -- a wrong number, a
+    // name the sheet got wrong. Worth keeping: the sheet came from outside.
+    contact_name: z.string().trim().max(120).nullable().optional(),
+    phone: z.string().trim().max(50).nullable().optional(),
+    email: z.string().trim().max(200).nullable().optional(),
+    website: z.string().trim().max(300).nullable().optional(),
+  }), req.body || {});
+  if (body.outcome === 'callback' && !body.call_back_at) {
+    throw httpError(400, 'A callback needs the time to call back');
+  }
+
+  const out = await withUserTransaction(req.userId, async (client) => {
+    const ctx = await requirePlatform(client, req.userId, { rep: true });
+    const { rows: [entry] } = await client.query(
+      `select ${ENTRY_COLUMNS} from call_list_entries e where e.id = $1 for update`, [req.params.id]);
+    if (!entry) throw httpError(404, 'That company is not on a list any more');
+    if (entry.status === 'done') throw httpError(409, 'That call has already been recorded');
+
+    const contact = body.contact_name !== undefined ? body.contact_name : entry.contact_name;
+    const phone = body.phone !== undefined ? body.phone : entry.phone;
+    const email = body.email !== undefined ? body.email : entry.email;
+    const website = body.website !== undefined ? body.website : entry.website;
+
+    // A call that went somewhere becomes an ordinary lead, and from then on
+    // it lives in the pipeline like any other. Credit goes to whoever made
+    // the call, the same rule the rest of the program uses.
+    let leadId = null;
+    if (body.outcome === 'interested' || body.outcome === 'signed') {
+      const { rows: [lead] } = await client.query(
+        `insert into rep_leads (company_name, contact_name, phone, email, website, notes, brought_in_by_rep_id)
+         values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+        [entry.company_name, contact, phone, email, website,
+         [entry.notes, body.note].filter(Boolean).join('\n'), ctx.rep_id || null]
+      );
+      leadId = lead.id;
+    }
+
+    // Only 'no answer' and 'callback' leave a company on the list; the rest
+    // are a decision, and a decision does not need ringing again.
+    const done = body.outcome !== 'no_answer' && body.outcome !== 'callback';
+    // Worked out here rather than branching inside the SQL. Building the
+    // statement differently per outcome meant that for most outcomes the
+    // text never mentioned $5, and Postgres rejects a bind carrying a
+    // parameter the statement does not use -- so every outcome but a
+    // callback answered 500.
+    const nextCallAfter = body.outcome === 'callback'
+      ? body.call_back_at
+      : body.outcome === 'no_answer'
+        ? new Date(Date.now() + RETRY_DAYS.no_answer * 24 * 60 * 60 * 1000).toISOString()
+        : null;
+
+    const { rows: [saved] } = await client.query(
+      `update call_list_entries
+          set status = $2,
+              outcome = $3,
+              attempts = attempts + 1,
+              last_called_at = now(),
+              last_note = coalesce($4, last_note),
+              next_call_after = $5::timestamptz,
+              called_by_rep_id = coalesce($6, called_by_rep_id),
+              rep_lead_id = coalesce($7, rep_lead_id),
+              contact_name = $8, phone = $9, email = $10, website = $11,
+              claimed_by_rep_id = null,
+              claimed_at = null
+        where id = $1
+       returning ${ENTRY_COLUMNS.replace(/e\./g, '')}`,
+      [req.params.id, done ? 'done' : 'waiting', body.outcome, body.note || null,
+       nextCallAfter, ctx.rep_id || null, leadId,
+       contact, phone, email, website]
+    );
+    return { entry: saved, lead_id: leadId };
+  });
+  res.json(out);
+}));
+
+// Put a company back without recording a call -- the caller got pulled away,
+// or opened it by accident. Without this the entry waits out its fifteen
+// minutes before anyone else can have it.
+router.post('/call-list-entries/:id/release', requireAuth, wrap(async (req, res) => {
+  await withUserTransaction(req.userId, async (client) => {
+    const ctx = await requirePlatform(client, req.userId, { rep: true });
+    await client.query(
+      `update call_list_entries set claimed_by_rep_id = null, claimed_at = null
+        where id = $1 and (claimed_by_rep_id = $2 or $3)`,
+      [req.params.id, ctx.rep_id || null, !ctx.is_rep]
+    );
   });
   res.json({ ok: true });
 }));

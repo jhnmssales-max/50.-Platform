@@ -747,10 +747,8 @@ async function main() {
                    from generate_series(1, 505) g`);
       try {
         const after = (await api('GET', '/rep-leads', { as: USERS.admin })).body;
-        eq(after.leads.length, 500, 'the cap still applies');
-        assert(after.total > 500, `total should exceed the cap, got ${after.total}`);
-        assert(after.total !== after.leads.length,
-          'total still equals the row count -- the cap is silent again');
+        assert(after.leads.length < after.total, 'one page should be shorter than the total');
+        assert(after.total > 500, `total should exceed one page, got ${after.total}`);
         assert(after.open_total >= 505, `open_total should count every open lead, got ${after.open_total}`);
 
         // A status filter must count within that status, not across all leads.
@@ -761,7 +759,90 @@ async function main() {
       } finally {
         await sql(`delete from rep_leads where company_name like 'Bulk Co %'`);
       }
-      return 'cap still 500, total and open_total come from the table';
+      return 'one page is sent, and the totals come from the table';
+    });
+
+    await check('Paging reaches every lead, and no page repeats or skips one', async () => {
+      // What the 500-row cap made impossible. The 501st lead could not be
+      // reached from the page at all: no offset, and the search box filtered
+      // rows already on screen, so the notice telling people to search for
+      // the rest was advice that could not work. An agency working a bought
+      // call list adds 10,000+ leads a month.
+      await sql(`insert into rep_leads (company_name, contact_name, status, found_on)
+                 select 'Paged Co ' || lpad(g::text, 4, '0'), 'Contact ' || g, 'open', current_date - (g % 300)
+                   from generate_series(1, 505) g`);
+      try {
+        const seen = new Set();
+        let offset = 0;
+        let total = null;
+        let pages = 0;
+        while (pages < 20) {
+          const { body } = await api('GET', `/rep-leads?limit=100&offset=${offset}`, { as: USERS.admin });
+          if (total === null) total = body.total;
+          eq(body.offset, offset, 'the route should echo the offset it was given');
+          if (!body.leads.length) break;
+          body.leads.forEach((l) => {
+            assert(!seen.has(l.id), `lead ${l.company_name} came back on two pages`);
+            seen.add(l.id);
+          });
+          offset += 100;
+          pages += 1;
+        }
+        eq(seen.size, total, 'paging right through should reach every lead exactly once');
+        assert(total > 500, `expected more than one old-cap page, got ${total}`);
+
+        // The oldest lead is the one the cap used to hide. It must be
+        // reachable by paging, and findable by searching.
+        const oldest = (await sql(
+          `select id, company_name from rep_leads order by found_on asc, created_at asc limit 1`))[0];
+        assert(seen.has(oldest.id), 'the oldest lead was never reached by paging');
+        const found = (await api('GET',
+          `/rep-leads?q=${encodeURIComponent(oldest.company_name)}`, { as: USERS.admin })).body;
+        assert(found.leads.some((l) => l.id === oldest.id),
+          `searching for "${oldest.company_name}" did not find it`);
+        return `${total} leads, ${pages} pages, every one reached once, oldest findable by search`;
+      } finally {
+        await sql(`delete from rep_leads where company_name like 'Paged Co %'`);
+      }
+    });
+
+    await check('Search runs in the database, matches any order, and counts only matches', async () => {
+      await sql(`insert into rep_leads (company_name, contact_name, phone, email, status)
+                 values ('Silver Run Home Improvements', 'Christian S', '717-555-0100', 'chris@silverrun.example', 'open'),
+                        ('Copper Creek Decks', 'Dana W', '402-555-0199', 'dana@coppercreek.example', 'open')`);
+      try {
+        const all = (await api('GET', '/rep-leads', { as: USERS.admin })).body.total;
+        // Words in any order, not adjacent -- the rule the browser-side
+        // filter used, now applied to the whole table rather than one page.
+        const r = (await api('GET', '/rep-leads?q=' + encodeURIComponent('improvements silver'), { as: USERS.admin })).body;
+        eq(r.leads.length, 1, 'rows returned for "improvements silver"');
+        eq(r.leads[0].company_name, 'Silver Run Home Improvements', 'the row it found');
+        assert(r.total < all, 'total should count matches, not every lead');
+        eq(r.total, 1, 'total for this search');
+
+        // Contact, email and phone are searched too, not just the company.
+        const byEmail = (await api('GET', '/rep-leads?q=coppercreek.example', { as: USERS.admin })).body;
+        eq(byEmail.leads.length, 1, 'found by email');
+        // Asserted as "is among the results" rather than "is the only one":
+        // other fixtures in this database have 555 numbers too, and a search
+        // that finds extra matches is working, not broken.
+        const byPhone = (await api('GET', '/rep-leads?q=555-0100', { as: USERS.admin })).body;
+        assert(byPhone.leads.some((l) => l.company_name === 'Silver Run Home Improvements'),
+          `found by phone (got ${byPhone.leads.map((l) => l.company_name).join(', ') || 'nothing'})`);
+        const byContact = (await api('GET', '/rep-leads?q=christian', { as: USERS.admin })).body;
+        eq(byContact.leads.length, 1, 'found by contact name');
+
+        // Search and status filter have to apply together.
+        const both = (await api('GET', '/rep-leads?status=lost&q=silver', { as: USERS.admin })).body;
+        eq(both.total, 0, 'a lost-status search for an open lead should match nothing');
+
+        const none = (await api('GET', '/rep-leads?q=zzzznothinghere', { as: USERS.admin })).body;
+        eq(none.total, 0, 'a search matching nothing');
+        eq(none.leads.length, 0, 'and it sends no rows');
+        return 'words in any order, across company, contact, email and phone';
+      } finally {
+        await sql(`delete from rep_leads where company_name in ('Silver Run Home Improvements', 'Copper Creek Decks')`);
+      }
     });
 
     await check('A rep can edit her own lead but not another rep\'s', async () => {
