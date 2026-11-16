@@ -551,6 +551,22 @@
     margin:16px 0 0;padding-top:10px;border-top:1px solid var(--line);}
   .stagehead:first-of-type{border-top:0;padding-top:0;margin-top:8px;}
   .hint{color:var(--muted);font-size:12px;margin:4px 0 0;}
+  /* The caller's card: one company, and a phone number readable at arm's
+     length while the phone is already ringing. */
+  .callcard h3{font-family:'Fraunces',serif;font-size:26px;color:var(--primary);margin:4px 0 2px;}
+  .callcard .who{font-size:15px;color:var(--primary-dark);margin:0 0 6px;}
+  .callcard .bignum{margin:10px 0;}
+  .callcard .bignum a{font-size:30px;font-weight:700;color:var(--primary);text-decoration:none;letter-spacing:.01em;}
+  .callcard .bignum a:hover{text-decoration:underline;}
+  .outcomes{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 14px;}
+  .bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:4px 0;max-width:180px;}
+  .bar i{display:block;height:100%;background:var(--ok, var(--secondary));}
+
+  /* Paging controls for a list too long to show at once. */
+  .pager{display:flex;align-items:center;gap:12px;margin:10px 0;flex-wrap:wrap;}
+  .pager .muted{font-variant-numeric:tabular-nums;}
+  .pager button[disabled]{opacity:.45;cursor:default;}
+
   .searchrow{display:flex;align-items:center;gap:10px;margin:0 0 10px;}
   .searchbox{flex:1 1 260px;max-width:420px;min-width:0;padding:9px 12px;border:1px solid var(--line);
     border-radius:10px;background:var(--card);font:inherit;color:var(--charcoal);}
@@ -632,6 +648,7 @@
     <section id="tab-mymoney" class="hide"></section>
     <section id="tab-builds" class="hide"></section>
     <section id="tab-company" class="hide"></section>
+    <section id="tab-calls" class="hide"></section>
   </main>
 </div>
 
@@ -743,6 +760,17 @@ async function api(path, options = {}, retried){
     throw err;
   }
   return body;
+}
+// Sending a file as itself rather than wrapped in JSON: a 10,000-row
+// spreadsheet base64'd into a JSON string is a third bigger and has to be
+// decoded in one piece at the other end. Everything about the upload that is
+// not the bytes travels as a header.
+function apiRaw(path, buffer, headers){
+  return api(path, {
+    method: 'POST',
+    body: buffer,
+    headers: { 'Content-Type': 'application/octet-stream', ...(headers || {}) },
+  });
 }
 function post(path, data){ return api(path, { method:'POST', body: JSON.stringify(data || {}) }); }
 function patch(path, data){ return api(path, { method:'PATCH', body: JSON.stringify(data || {}) }); }
@@ -862,8 +890,8 @@ async function start(){
   // where everyone's habit already is; adding a tab should not move the
   // furniture. Change state.tab's default to 'calendar' to open on it.
   const tabs = state.isRep
-    ? [['calendar','Calendar'],['leads','My leads'],['dealers','My dealers'],['mymoney','My money']]
-    : [['calendar','Calendar'],['leads','Leads'],['reps','Reps'],['dealers','Companies']];
+    ? [['calendar','Calendar'],['leads','My leads'],['calls','Calls'],['dealers','My dealers'],['mymoney','My money']]
+    : [['calendar','Calendar'],['leads','Leads'],['calls','Calls'],['reps','Reps'],['dealers','Companies']];
   if(state.isAdmin) tabs.push(['builds','Build dashboards'], ['money','Money'], ['company','Finances']);
   $('tabs').innerHTML = tabs.map(([k,l]) => '<button type="button" data-tab="' + k + '">' + l + '</button>').join('');
   $('tabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
@@ -886,6 +914,7 @@ async function showTab(tab){
     if(tab === 'mymoney') await renderMyMoney();
     if(tab === 'builds') await renderBuilds();
     if(tab === 'company') await renderCompany();
+    if(tab === 'calls') await renderCalls();
   }catch(err){ flash(err.message); }
 }
 
@@ -1898,6 +1927,30 @@ function captureSearch(tabId, key){
   const box = el && el.querySelector('[data-search-for="' + key + '"]');
   if(box) SEARCH[key] = box.value;
 }
+// The leads tab searches in the database instead, because with 10,000+ leads
+// the rows on screen are one page of them -- filtering those would only ever
+// search the page. That means a redraw per keystroke, so the box's focus and
+// caret are put back afterwards. Keeping the cursor is the thing the
+// browser-side version got right, and losing it mid-word is what makes people
+// stop using a search box.
+const SEARCH_TIMER = {};
+let SEARCH_REFOCUS = null;
+function wireServerSearch(tabId, key, reload){
+  const box = $(tabId).querySelector('[data-search-for="' + key + '"]');
+  if(!box) return;
+  if(SEARCH_REFOCUS === key){
+    SEARCH_REFOCUS = null;
+    box.focus();
+    try{ box.setSelectionRange(box.value.length, box.value.length); }catch(e){ /* older browsers */ }
+  }
+  box.addEventListener('input', () => {
+    SEARCH[key] = box.value;
+    clearTimeout(SEARCH_TIMER[key]);
+    // Long enough that typing a company name is one query, not nine.
+    SEARCH_TIMER[key] = setTimeout(() => { SEARCH_REFOCUS = key; reload({ offset: 0 }); }, 300);
+  });
+}
+
 function wireSearch(tabId, key){
   const box = $(tabId).querySelector('[data-search-for="' + key + '"]');
   if(!box) return;
@@ -1911,7 +1964,23 @@ function wireSearch(tabId, key){
 }
 
 /* ---------- Leads ---------- */
-async function renderLeads(){
+const LEAD_PAGE = 200;
+
+// Shown above and below the table, because the reason to page is that the
+// table is long. Hidden entirely while everything fits, so a dealer with
+// forty leads never sees paging controls that do nothing.
+function leadPager(from, to, paged, q){
+  if(!paged && !(state.leadOffset > 0)) return '';
+  const back = (state.leadOffset || 0) > 0;
+  const fwd = to < state.leadTotal;
+  return '<div class="pager">' +
+    '<button type="button" class="btn small secondary" data-leadpage="prev"' + (back ? '' : ' disabled') + '>Previous</button>' +
+    '<span class="muted">' + from + '\u2013' + to + ' of ' + state.leadTotal + (q ? ' matching' : '') + '</span>' +
+    '<button type="button" class="btn small secondary" data-leadpage="next"' + (fwd ? '' : ' disabled') + '>Next</button>' +
+  '</div>';
+}
+
+async function renderLeads(opts){
   // Anything half-typed into the add-a-lead form, and whether it was open at
   // all, has to survive this redraw: the list reloads whenever a lead changes,
   // and losing a lead someone was in the middle of writing down is the kind of
@@ -1927,15 +1996,33 @@ async function renderLeads(){
     return { open: details.open, wordingOpen: wording ? wording.open : false, values, focused: (document.activeElement || {}).name || null };
   })();
 
-  const [l, dl] = await Promise.all([api('/rep-leads'), api('/rep-dealers')]);
+  // Whatever is in the search box right now, taken before the fetch rather
+  // than after: the query is part of the request now, not a filter applied to
+  // the answer.
+  captureSearch('tab-leads', 'leads');
+  if(opts && typeof opts.offset === 'number') state.leadOffset = opts.offset;
+  const q = (SEARCH.leads || '').trim();
+  const qs = new URLSearchParams({ limit: String(LEAD_PAGE), offset: String(state.leadOffset || 0) });
+  if(q) qs.set('q', q);
+
+  const [l, dl] = await Promise.all([api('/rep-leads?' + qs.toString()), api('/rep-dealers')]);
   state.leads = l.leads; state.dealers = dl.dealers;
-  // The API caps the rows it sends and now reports the real totals, so these
-  // come from the database rather than from the length of what arrived. They
-  // used to be the same number, which is why nothing looked wrong until the
-  // 501st lead would have quietly stopped existing.
+  // Totals of what MATCHES, straight from the database -- not the length of
+  // what arrived, which is one page. They used to be the same number, which
+  // is why nothing looked wrong until the 501st lead quietly stopped
+  // existing.
   state.leadTotal = (typeof l.total === 'number') ? l.total : state.leads.length;
   const open = (typeof l.open_total === 'number') ? l.open_total : state.leads.filter((x) => x.status === 'open').length;
-  const capped = state.leads.length < state.leadTotal;
+  // Deleting the last lead on the last page, or narrowing a search, can leave
+  // the offset past the end. Step back rather than show an empty table under
+  // a total that says there are hundreds.
+  if(!state.leads.length && state.leadOffset > 0){
+    state.leadOffset = 0;
+    return renderLeads();
+  }
+  const from = state.leadTotal ? (state.leadOffset || 0) + 1 : 0;
+  const to = (state.leadOffset || 0) + state.leads.length;
+  const paged = state.leadTotal > state.leads.length;
 
   // A won lead is not a lead any more -- it is a company, and it belongs on
   // the Companies tab. Keeping it here left a row nobody would act on again,
@@ -1954,8 +2041,9 @@ async function renderLeads(){
   const showWonBy = !state.isRep && state.showWonLeads;
   captureSearch('tab-leads', 'leads');
   $('tab-leads').innerHTML =
-    '<div class="head"><h2>Leads</h2><span class="muted">' + open + ' open · ' + state.leadTotal + ' total' +
-      (capped ? ' · showing the newest ' + state.leads.length : '') + '</span></div>' +
+    '<div class="head"><h2>Leads</h2><span class="muted">' +
+      (q ? state.leadTotal + ' match' + (state.leadTotal === 1 ? 'es' : '') + ' \u201c' + esc(q) + '\u201d'
+         : open + ' open \u00b7 ' + state.leadTotal + ' total') + '</span></div>' +
     (wonLeads.length
       ? '<p class="muted" style="margin:-6px 0 10px"><button type="button" class="linkish" id="toggleWon">' +
         (state.showWonLeads
@@ -1963,10 +2051,7 @@ async function renderLeads(){
           : 'Show won leads (' + wonLeads.length + ')') + '</button>' +
         (state.showWonLeads ? '' : ' <span class="muted">— they are on the Companies tab once built.</span>') + '</p>'
       : '') +
-    (capped
-      ? '<div class="notice">This tab shows the newest ' + state.leads.length + ' of ' + state.leadTotal +
-        ' leads. Filter by status, or search, to reach the rest.</div>'
-      : '') +
+
     '<details class="card" ' + (state.leads.length ? '' : 'open') + '><summary>Add a lead</summary>' +
       '<form id="leadForm"><div class="row">' +
         '<div><label>Company</label><input name="company_name" required maxlength="200"></div>' +
@@ -1988,6 +2073,7 @@ async function renderLeads(){
       '<div class="actions"><button class="btn" type="submit">Add lead</button></div></form>' +
       '<div id="dupBox"></div></details>' +
     searchBox('leads', state.isRep ? 'Search your leads \u2014 company, contact, email, phone' : 'Search leads \u2014 company, contact, email, phone') +
+    leadPager(from, to, paged, q) +
     '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th>' + (state.isRep ? '' : '<th>Brought in by</th>') + '<th>Found</th><th>Status</th>' + (showWonBy ? '<th>Won by</th>' : '') + '<th></th></tr></thead><tbody>' +
     (shown.map((x) =>
       '<tr data-search="' + searchable([x.company_name, x.contact_name, x.phone, x.email, x.website, x.notes, x.status]) + '"><td><b>' + esc(x.company_name) + '</b>' +
@@ -2050,7 +2136,7 @@ async function renderLeads(){
         '</td></tr>'
     ).join('') || '<tr data-empty-row><td colspan="' + (state.isRep ? 5 : (showWonBy ? 7 : 6)) + '" class="muted" style="padding:18px">' +
       (state.leads.length ? 'Every lead here has been won. They are on the Companies tab.' : 'No leads yet.') + '</td></tr>') +
-    '</tbody></table></div>';
+    '</tbody></table></div>' + leadPager(from, to, paged, q);
 
   const form = $('leadForm');
   if(keep){
@@ -2075,7 +2161,11 @@ async function renderLeads(){
   // who had typed wording looking at "If left empty: …" the moment the list
   // redrew behind them.
   wireWording($('tab-leads'));
-  wireSearch('tab-leads', 'leads');
+  wireServerSearch('tab-leads', 'leads', renderLeads);
+  $('tab-leads').querySelectorAll('[data-leadpage]').forEach((b) => b.addEventListener('click', () => {
+    const step = b.dataset.leadpage === 'next' ? LEAD_PAGE : -LEAD_PAGE;
+    renderLeads({ offset: Math.max((state.leadOffset || 0) + step, 0) });
+  }));
   form.addEventListener('submit', (e) => { e.preventDefault(); submitLead(form, false); });
   // Pre-filled with the company name and tied to the lead, so a follow-up set
   // from here needs one word typed and still points back at the right row.
@@ -3645,6 +3735,280 @@ async function companyReport(tenantId, year){
 }
 
 /* ---------- the company's year (admin only) ---------- */
+/* ---------- Call lists ----------
+   A bought list of companies, worked through by whoever is ringing them.
+
+   Two screens behind one tab, because they are two jobs: Joseph loads a
+   spreadsheet and watches how far through it the agency is, and a caller
+   wants one company on the screen at a time with a phone number big enough
+   to read while the phone is already ringing. */
+
+const OUTCOME_LABELS = {
+  no_answer: 'No answer',
+  callback: 'Call back later',
+  not_interested: 'Not interested',
+  bad_number: 'Wrong / dead number',
+  interested: 'Interested',
+  signed: 'Signed up',
+};
+
+async function renderCalls(){
+  if(state.callingList){ return renderCaller(); }
+  const { lists } = await api('/call-lists');
+  state.callLists = lists;
+
+  const bar = (l) => {
+    const pct = l.total ? Math.round((l.done / l.total) * 100) : 0;
+    return '<div class="bar" title="' + pct + '% worked"><i style="width:' + pct + '%"></i></div>';
+  };
+
+  $('tab-calls').innerHTML =
+    '<div class="head"><h2>Calls</h2><span class="muted">' + lists.length + ' list' + (lists.length === 1 ? '' : 's') + '</span></div>' +
+    (state.isRep ? '' :
+      '<details class="card"' + (lists.length ? '' : ' open') + '><summary>Import a list</summary>' +
+        '<p class="hint">A spreadsheet of companies to ring — .xlsx or .csv. Nothing is saved until you have seen what it found. ' +
+        'Companies already in Leads, or already on another list, are left out so nobody gets rung twice.</p>' +
+        '<div class="row"><div><label>What to call this list</label><input id="clName" maxlength="200" placeholder="Texas roofers — November"></div>' +
+        '<div><label>Who is working it</label><select id="clRep">' + repOptions('', { blank: '— anyone —', activeOnly: true }) + '</select></div></div>' +
+        '<div class="actions"><input type="file" id="clFile" accept=".xlsx,.xls,.csv,.tsv,.txt" style="display:none">' +
+        '<button type="button" class="btn" id="clPick">Choose a spreadsheet</button>' +
+        '<span class="muted" id="clChosen"></span></div>' +
+        '<div id="clPreview"></div>' +
+      '</details>') +
+    (lists.length
+      ? '<div class="tablewrap"><table><thead><tr><th>List</th><th>Worked</th><th>Outcomes</th><th>Became leads</th><th></th></tr></thead><tbody>' +
+        lists.map((l) =>
+          '<tr><td><b>' + esc(l.name) + '</b>' +
+            (l.source_file ? '<div class="muted">' + esc(l.source_file) + '</div>' : '') +
+            (l.assigned_rep_id ? '<div class="muted">' + esc(repName(l.assigned_rep_id) || '') + '</div>' : '<div class="muted">anyone</div>') + '</td>' +
+          '<td data-label="Worked">' + l.done + ' of ' + l.total + bar(l) +
+            '<div class="muted">' + l.calls_made + ' call' + (l.calls_made === 1 ? '' : 's') + ' made</div></td>' +
+          '<td data-label="Outcomes"><div class="muted">' +
+            [['interested','Interested'],['signed','Signed'],['callback','Call back'],['not_interested','Not interested'],['no_answer','No answer'],['bad_number','Bad number']]
+              .filter(([k]) => l[k]).map(([k, label]) => esc(label) + ' ' + l[k]).join(' · ') || '—' +
+            '</div></td>' +
+          '<td data-label="Became leads">' + l.became_leads + '</td>' +
+          '<td class="right"><button type="button" class="btn small" data-callstart="' + l.id + '">' +
+            (l.waiting ? 'Start calling' : 'Review') + '</button>' +
+            (state.isRep ? '' : ' <button type="button" class="btn small secondary" data-callarchive="' + l.id + '">' +
+              (l.archived_at ? 'Unarchive' : 'Archive') + '</button>') + '</td></tr>').join('') +
+        '</tbody></table></div>'
+      : '<div class="notice">No call lists yet.' + (state.isRep ? ' Joseph loads these.' : ' Import a spreadsheet of companies above.') + '</div>');
+
+  $('tab-calls').querySelectorAll('[data-callstart]').forEach((b) => b.addEventListener('click', async () => {
+    state.callingList = b.dataset.callstart;
+    state.callEntry = null;
+    await renderCalls();
+  }));
+  $('tab-calls').querySelectorAll('[data-callarchive]').forEach((b) => b.addEventListener('click', async () => {
+    const l = state.callLists.find((x) => x.id === b.dataset.callarchive);
+    try{
+      await patch('/call-lists/' + b.dataset.callarchive, { archived: !l.archived_at });
+      await renderCalls();
+    }catch(err){ flash(err.message); }
+  }));
+
+  const file = $('clFile');
+  if(file){
+    $('clPick').addEventListener('click', () => file.click());
+    file.addEventListener('change', () => previewCallList(file.files[0]));
+  }
+}
+
+// The file never leaves the browser until the preview has been seen and
+// agreed. A list imported under the wrong column mapping is far more work to
+// undo than to get right the first time.
+let CALL_FILE = null;
+async function previewCallList(f){
+  if(!f) return;
+  CALL_FILE = f;
+  $('clChosen').textContent = f.name;
+  $('clPreview').innerHTML = '<p class="muted">Reading ' + esc(f.name) + '…</p>';
+  try{
+    const buf = await f.arrayBuffer();
+    const p = await apiRaw('/call-lists/preview', buf, { 'x-file-name': f.name });
+    state.callPreview = p;
+    const fieldLabel = { company_name:'Company', contact_name:'Contact', phone:'Phone', email:'Email', website:'Website', city:'City', state:'State', notes:'Notes' };
+    const header = p.header_row || [];
+    const colPicker = (field) =>
+      '<select data-clcol="' + field + '"><option value="">— not in this file —</option>' +
+      header.map((h, i) => '<option value="' + i + '"' + (p.columns[field] === i ? ' selected' : '') + '>' +
+        esc(String(h || ('Column ' + (i + 1)))) + '</option>').join('') + '</select>';
+
+    $('clPreview').innerHTML =
+      '<div class="card" style="margin-top:12px">' +
+        '<p><b>' + p.would_import + '</b> compan' + (p.would_import === 1 ? 'y' : 'ies') + ' ready to import, from ' + p.total_rows + ' rows.</p>' +
+        ((p.already_leads || p.already_listed || p.skipped_total)
+          ? '<p class="muted">Leaving out: ' +
+            [p.already_leads ? p.already_leads + ' already in Leads' : '',
+             p.already_listed ? p.already_listed + ' already on another call list' : '',
+             p.skipped_total ? p.skipped_total + ' row' + (p.skipped_total === 1 ? '' : 's') + ' with no company name or repeated in the file' : '']
+              .filter(Boolean).join(' · ') + '.</p>'
+          : '') +
+        (p.truncated ? '<div class="notice">Only the first ' + p.total_rows + ' rows were read.</div>' : '') +
+        (header.length
+          ? '<p class="hint">These are the columns it found. Change any it got wrong.</p><div class="row">' +
+            ['company_name','contact_name','phone','email'].map((f2) => '<div><label>' + fieldLabel[f2] + '</label>' + colPicker(f2) + '</div>').join('') +
+            '</div><div class="row">' +
+            ['website','city','state','notes'].map((f2) => '<div><label>' + fieldLabel[f2] + '</label>' + colPicker(f2) + '</div>').join('') + '</div>'
+          : '<p class="hint">No headings found, so the first column is being read as the company name.</p>') +
+        (p.sample.length
+          ? '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th><th>Phone</th><th>Email</th></tr></thead><tbody>' +
+            p.sample.slice(0, 8).map((e) => '<tr><td>' + esc(e.company_name) + '</td><td>' + esc(e.contact_name || '') +
+              '</td><td>' + esc(e.phone || '') + '</td><td>' + esc(e.email || '') + '</td></tr>').join('') +
+            '</tbody></table></div><p class="muted">First ' + Math.min(8, p.sample.length) + ' of ' + p.would_import + '.</p>'
+          : '') +
+        '<div class="actions">' +
+          '<button type="button" class="btn" id="clImport"' + (p.would_import ? '' : ' disabled') + '>Import ' + p.would_import + ' compan' + (p.would_import === 1 ? 'y' : 'ies') + '</button>' +
+          '<button type="button" class="btn secondary" id="clRecheck">Re-read with these columns</button>' +
+        '</div>' +
+      '</div>';
+
+    $('clRecheck').addEventListener('click', () => previewCallList(CALL_FILE, readColumnChoice()));
+    $('clImport').addEventListener('click', importCallList);
+  }catch(err){
+    $('clPreview').innerHTML = '<div class="notice">' + esc(err.message) + '</div>';
+  }
+}
+
+function readColumnChoice(){
+  const cols = {};
+  document.querySelectorAll('[data-clcol]').forEach((sel) => {
+    if(sel.value !== '') cols[sel.dataset.clcol] = Number(sel.value);
+  });
+  return cols;
+}
+
+async function importCallList(){
+  const btn = $('clImport');
+  btn.disabled = true; btn.textContent = 'Importing…';
+  try{
+    const buf = await CALL_FILE.arrayBuffer();
+    const name = ($('clName').value || '').trim();
+    const rep = $('clRep') ? $('clRep').value : '';
+    const out = await apiRaw('/call-lists', buf, {
+      'x-file-name': CALL_FILE.name,
+      'x-list-name': name || CALL_FILE.name,
+      'x-columns': JSON.stringify(readColumnChoice()),
+      ...(rep ? { 'x-assign-rep': rep } : {}),
+    });
+    CALL_FILE = null;
+    flash(out.imported + ' compan' + (out.imported === 1 ? 'y' : 'ies') + ' imported.', true);
+    await renderCalls();
+  }catch(err){
+    flash(err.message);
+    btn.disabled = false; btn.textContent = 'Import';
+  }
+}
+
+/* ---------- One company at a time ---------- */
+async function renderCaller(){
+  const list = (state.callLists || []).find((l) => l.id === state.callingList);
+  const box = $('tab-calls');
+  if(!state.callEntry){
+    box.innerHTML = '<p class="muted">Finding the next company…</p>';
+    try{
+      const out = await post('/call-lists/' + state.callingList + '/next', {});
+      state.callEntry = out.entry;
+      state.callWaiting = out.waiting;
+      state.callNextDue = out.next_due;
+    }catch(err){ box.innerHTML = '<div class="notice">' + esc(err.message) + '</div>'; }
+  }
+  const e = state.callEntry;
+
+  box.innerHTML =
+    '<div class="head"><h2>' + esc(list ? list.name : 'Calling') + '</h2>' +
+      '<button type="button" class="btn small secondary" id="callDone">Back to lists</button></div>' +
+    (!e
+      ? '<div class="card"><p><b>Nothing to ring right now.</b></p>' +
+        (state.callWaiting
+          ? '<p class="muted">' + state.callWaiting + ' still to do, waiting on callback times' +
+            (state.callNextDue ? ' — the next is due ' + esc(plainDate(state.callNextDue)) : '') + '.</p>'
+          : '<p class="muted">This list is worked through.</p>') + '</div>'
+      : '<div class="card callcard">' +
+          '<div class="muted">Company ' + e.row_no + (list ? ' of ' + list.total : '') + '</div>' +
+          '<h3>' + esc(e.company_name) + '</h3>' +
+          (e.contact_name ? '<p class="who">' + esc(e.contact_name) + '</p>' : '') +
+          (e.phone ? '<p class="bignum"><a href="tel:' + esc(String(e.phone).replace(/[^0-9+]/g, '')) + '">' + esc(e.phone) + '</a></p>'
+                   : '<p class="muted">No phone number on the list.</p>') +
+          '<p class="muted">' +
+            [e.city, e.state].filter(Boolean).map(esc).join(', ') +
+            (e.email ? ' · ' + esc(e.email) : '') +
+            (e.website ? ' · ' + esc(e.website) : '') + '</p>' +
+          (e.attempts ? '<p class="muted">Tried ' + e.attempts + ' time' + (e.attempts === 1 ? '' : 's') + ' already' +
+            (e.last_note ? ' — last note: ' + esc(e.last_note) : '') + '.</p>' : '') +
+          (e.notes ? '<p class="muted">' + esc(e.notes) + '</p>' : '') +
+          '<label>How did it go?</label>' +
+          '<div class="outcomes">' +
+            Object.entries(OUTCOME_LABELS).map(([k, label]) =>
+              '<button type="button" class="btn ' + (k === 'interested' || k === 'signed' ? '' : 'secondary') + '" data-outcome="' + k + '">' + esc(label) + '</button>').join('') +
+          '</div>' +
+          '<div id="callExtra"></div>' +
+          '<label>Note (optional)</label><textarea id="callNote" rows="2" maxlength="2000" placeholder="What they said."></textarea>' +
+          '<details><summary>Fix their details</summary><div class="row">' +
+            '<div><label>Contact</label><input id="callContact" maxlength="120" value="' + esc(e.contact_name || '') + '"></div>' +
+            '<div><label>Phone</label><input id="callPhone" maxlength="50" value="' + esc(e.phone || '') + '"></div></div>' +
+            '<div class="row"><div><label>Email</label><input id="callEmail" maxlength="200" value="' + esc(e.email || '') + '"></div>' +
+            '<div><label>Website</label><input id="callWebsite" maxlength="300" value="' + esc(e.website || '') + '"></div></div>' +
+          '</details>' +
+          '<div class="actions"><button type="button" class="btn secondary" id="callSkip">Skip for now</button></div>' +
+        '</div>');
+
+  $('callDone').addEventListener('click', async () => {
+    if(state.callEntry) await post('/call-list-entries/' + state.callEntry.id + '/release', {}).catch(() => {});
+    state.callingList = null; state.callEntry = null;
+    await renderCalls();
+  });
+  if(!e) return;
+
+  $('callSkip').addEventListener('click', async () => {
+    await post('/call-list-entries/' + e.id + '/release', {}).catch(() => {});
+    state.callEntry = null;
+    await renderCaller();
+  });
+
+  box.querySelectorAll('[data-outcome]').forEach((b) => b.addEventListener('click', async () => {
+    const outcome = b.dataset.outcome;
+    // A callback is the one outcome that needs something more before it can
+    // be saved, so it asks rather than guessing a time.
+    if(outcome === 'callback' && !$('callExtra').querySelector('#callBackAt')){
+      $('callExtra').innerHTML = '<label>When should they be called back?</label>' +
+        '<input type="datetime-local" id="callBackAt">' +
+        '<div class="actions"><button type="button" class="btn" id="callBackSave">Save the callback</button></div>';
+      $('callBackSave').addEventListener('click', () => saveOutcome(e, 'callback'));
+      return;
+    }
+    await saveOutcome(e, outcome);
+  }));
+}
+
+async function saveOutcome(e, outcome){
+  const body = { outcome };
+  const note = ($('callNote').value || '').trim();
+  if(note) body.note = note;
+  const at = $('callBackAt');
+  if(outcome === 'callback'){
+    if(!at || !at.value) return flash('Pick a day and time to call back.');
+    body.call_back_at = new Date(at.value).toISOString();
+  }
+  ['contact','phone','email','website'].forEach((f) => {
+    const el = $('call' + f.charAt(0).toUpperCase() + f.slice(1));
+    if(!el) return;
+    const key = f === 'contact' ? 'contact_name' : f;
+    const was = e[key] || '';
+    if(el.value.trim() !== was) body[key] = el.value.trim() || null;
+  });
+  try{
+    const out = await post('/call-list-entries/' + e.id + '/outcome', body);
+    flash(out.lead_id ? 'Saved — and added to Leads.' : 'Saved.', true);
+    state.callEntry = null;
+    // The totals on the card behind this are now out of date.
+    const { lists } = await api('/call-lists');
+    state.callLists = lists;
+    await renderCaller();
+  }catch(err){ flash(err.message); }
+}
+
 async function renderCompany(year){
   const d = await api('/reports/company' + (year ? '?year=' + year : ''));
   state.company = d;
