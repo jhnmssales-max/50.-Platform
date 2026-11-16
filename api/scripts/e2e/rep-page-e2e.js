@@ -1413,7 +1413,11 @@ async function main() {
     });
 
     await check('Back on the list, the progress is what actually happened', async () => {
+      // Coming back to the tab resumes the call she was on, which is what a
+      // caller wants; getting to the lists means leaving it deliberately.
       await repPage.click('[data-tab=calls]');
+      await repPage.waitForSelector('#callDone', { timeout: 10000 });
+      await repPage.click('#callDone');
       await repPage.waitForSelector('#tab-calls tbody tr', { timeout: 10000 });
       const row = (await repPage.textContent('#tab-calls tbody tr')).replace(/\s+/g, ' ');
       assert(/1 of 3/.test(row), `expected one finished: ${row}`);
