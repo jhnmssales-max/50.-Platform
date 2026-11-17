@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Referral Incentive</title>
+<link rel="manifest" href="manifest.webmanifest">
+<!-- The name an installed shortcut keeps. A browser freezes this when the
+     shortcut is created and never updates it from document.title, so a
+     shortcut made on one company's dashboard would otherwise carry that
+     company's name into every other company's window. It is deliberately
+     neutral: one manifest serves every tenant, and the tenant's own name
+     goes where it can be kept correct -- the page, and document.title. -->
+<meta name="application-name" content="50. Referral Platform">
+<meta name="apple-mobile-web-app-title" content="50. Referral Platform">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>

@@ -26,5 +26,9 @@
 # PDF in the Supabase brand-uploads bucket, not a page in this repo.)
 /settings  /fifty-settings.html  200
 
+# manifest.webmanifest is served from the repo root as itself -- no rule
+# needed, noted here only because start_url is "/login", which does need the
+# rewrite above it to exist.
+
 # /reps -> fifty-reps.html: the sales-rep admin page (50. staff only; the API enforces it).
 /reps  /fifty-reps.html  200
