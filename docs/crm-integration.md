@@ -11,7 +11,8 @@ referral leads back out to the CRM is the other half and is not built yet.
 
 ## Getting a key
 
-An admin on the dealer's account creates one under Settings → API keys. It is
+Anyone with a login on the dealer's account creates one under Settings →
+Connect your CRM (the gear at the foot of the dashboard). It is
 shown **once**, at creation, and never again — only a hash of it is stored, so
 nobody can recover it, us included. Lost keys are revoked and replaced, not
 retrieved.

@@ -172,8 +172,9 @@ async function main() {
 
   const { mintKey } = require(path.join(API_DIR, 'src', 'lib', 'apiKeys'));
 
-  // Two dealers, each with an integration account, plus a real person on the
-  // first -- the three identities every assertion below is about.
+  // Two dealers, each with an integration account, plus an admin and a
+  // salesperson on the first -- the identities every assertion below is
+  // about.
   const ids = await withClient(dbUrl(DB), async (c) => {
     const { rows: [gss] } = await c.query("select id from tenants where slug = 'good-steward-structures'");
     // Activated, because the activation gate would otherwise answer 402
@@ -193,6 +194,9 @@ async function main() {
     const gssIntegration = await makeUser(gss.id, `integration+gss.${RUN}@integrations.referwith50.com`, 'staff');
     const otherIntegration = await makeUser(other.id, `integration+other.${RUN}@integrations.referwith50.com`, 'staff');
     const person = await makeUser(gss.id, `person.${RUN}@goodstewardstructures.com`, 'admin');
+    // A salesperson, not an admin and not a key: the identity the settings
+    // routes were opened to.
+    const sales = await makeUser(gss.id, `sales.${RUN}@goodstewardstructures.com`, 'staff');
 
     const gssKey = mintKey();
     const otherKey = mintKey();
@@ -212,7 +216,7 @@ async function main() {
       [other.id]
     );
 
-    return { gss: gss.id, other: other.id, gssIntegration, person, gssKeyRow: gssKeyRow.id,
+    return { gss: gss.id, other: other.id, gssIntegration, person, sales, gssKeyRow: gssKeyRow.id,
              gssKey: gssKey.key, otherKey: otherKey.key, theirCustomer: theirCustomer.id };
   });
 
@@ -342,17 +346,25 @@ async function main() {
       const theirs = (await c.query('select count(*)::int n from customers where id = $1', [ids.theirCustomer])).rows[0].n;
       const tenants = (await c.query('select count(*)::int n from tenants')).rows[0].n;
       const keys = (await c.query('select count(*)::int n from api_keys')).rows[0].n;
+      const ownKeys = (await c.query(
+        'select count(*)::int n from api_keys where tenant_id = (select tenant_id from users where id = $1)',
+        [ids.gssIntegration])).rows[0].n;
       let writeBlocked = false;
       try {
         await c.query("insert into customers (tenant_id, name, email) values ($1, 'Smuggled', 'smuggled@example.com')", [ids.other]);
       } catch (err) { writeBlocked = /row-level security/i.test(err.message); }
       await c.query('rollback');
-      return { theirs, tenants, keys, writeBlocked };
+      return { theirs, tenants, keys, ownKeys, writeBlocked };
     });
     check("cannot read another dealer's customer by id", isolation.theirs === 0);
     check('cannot enumerate other dealers', isolation.tenants === 1, `${isolation.tenants} visible`);
-    check('cannot read any api_keys row', isolation.keys === 0,
-      `${isolation.keys} visible — a key is staff, and only admins may list keys`);
+    // Its own company's keys and no others. Any login on a company may now
+    // list that company's keys (20261117000000_dealer_settings_any_login),
+    // and a key's identity is a login on it -- so this is the cross-tenant
+    // guarantee, not an admin one. What a key's own account may never do is
+    // manage keys through the API; that is checked below, at the route.
+    check('cannot read another dealer\'s api_keys rows', isolation.keys === isolation.ownKeys,
+      `${isolation.keys} visible, ${isolation.ownKeys} of them its own`);
     check("cannot write into another dealer's list", isolation.writeBlocked);
 
     // The two halves of a key row cannot disagree. Checked at the database,
@@ -381,9 +393,24 @@ async function main() {
       (listed.body?.api_keys || []).every((k) => k.name !== 'Their CRM'),
       (listed.body?.api_keys || []).map((k) => k.name).join(', '));
 
-    check('a non-admin cannot list keys', (await request('/api/tenant/api-keys', { credential: staffToken })).status === 403);
-    check('a non-admin cannot create a key',
+    // staffToken is a token for the account a KEY acts as -- which cannot
+    // exist in production (an integration account is created passwordless
+    // and can never be signed into), so this is the second lock on that
+    // door. The rule it checks is the one that matters: a leaked key must
+    // not be able to mint a replacement that outlives revoking it, or
+    // rewrite what this company's customers read.
+    check('a key\'s own account cannot list keys',
+      (await request('/api/tenant/api-keys', { credential: staffToken })).status === 403);
+    check('a key\'s own account cannot create a key',
       (await request('/api/tenant/api-keys', { method: 'POST', credential: staffToken, body: { name: 'Sneaky' } })).status === 403);
+    check('a key\'s own account cannot rewrite the company\'s wording',
+      (await request('/api/tenant/brand', { method: 'PATCH', credential: staffToken, body: { copy: { inviteSubject: 'Mine now' } } })).status === 403);
+
+    // And a salesperson, who is a person, can -- the gate that moved.
+    const salesToken = tokenOutput(ids.sales);
+    const asSales = await request('/api/tenant/api-keys', { credential: salesToken });
+    check('a salesperson can list their company\'s keys',
+      asSales.status === 200 && Array.isArray(asSales.body?.api_keys), `status ${asSales.status}`);
 
     // Revoking through the API, then proving the revoked key is really dead.
     const toRevoke = (listed.body?.api_keys || []).find((k) => k.name === 'Velocity');
