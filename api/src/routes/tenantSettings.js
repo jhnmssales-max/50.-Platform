@@ -7,6 +7,8 @@ const { encryptionKey } = require('../lib/tenantCredentials');
 const supabaseAdmin = require('../lib/supabaseAdmin');
 const { mintKey } = require('../lib/apiKeys');
 const { nanoid } = require('nanoid');
+const tenantCopy = require('../lib/tenantCopy');
+const storage = require('../lib/supabaseStorage');
 
 const router = express.Router();
 
@@ -22,6 +24,50 @@ async function requireAdminCtx(client, userId) {
   const ctx = await getCallerContext(client, userId);
   if (!ctx) throw forbidden('No staff account found for this user');
   if (!ctx.is_admin) throw forbidden('Admin access required');
+  return ctx;
+}
+
+// Anyone with a login on this company, admin or not.
+//
+// Most dealers have one login and it is a salesperson, not an "admin" in any
+// sense they would recognise -- the roles exist for 50.'s side of the house,
+// not theirs. A settings screen only an admin could open would therefore be a
+// settings screen almost no dealer could open, which is the opposite of the
+// point. The tenant is still the wall: every query below is scoped to
+// ctx.tenant_id, and RLS refuses to reach past it regardless.
+async function requireStaffCtx(client, userId) {
+  const ctx = await getCallerContext(client, userId);
+  if (!ctx) throw forbidden('No staff account found for this user');
+  return ctx;
+}
+
+// A person on the company, and specifically not the account an API key acts
+// as.
+//
+// Creating a key creates a `users` row for it to be (see the api-keys section
+// below), and that row's role is 'staff' -- so opening these routes to staff
+// would, on its own, let a key's own identity manage keys and rewrite the
+// company's wording. In production it cannot reach here anyway: these routes
+// are `requireAuth`, which verifies a Supabase access token, and an
+// integration account is created passwordless with no way to sign in, so no
+// token for it exists. This is the second lock on that door rather than the
+// only one -- a leaked key must not be able to mint a replacement that
+// outlives revoking it, and that should not rest on one middleware choice at
+// one mount point staying as it is.
+//
+// `exists` over api_keys, not a column on users: the question is "is this
+// account a key's identity", a revoked key still answers yes, and nothing
+// has to be kept in sync. RLS confines the lookup to this tenant, which is
+// the only tenant whose answer could be yes.
+async function requireHumanStaffCtx(client, userId) {
+  const ctx = await requireStaffCtx(client, userId);
+  const { rows: [row] } = await client.query(
+    'select exists(select 1 from api_keys where user_id = $1) as is_integration',
+    [userId]
+  );
+  if (row && row.is_integration) {
+    throw forbidden('An API key cannot manage keys or settings. Sign in as a person on the account.');
+  }
   return ctx;
 }
 
@@ -135,9 +181,12 @@ router.delete('/tenant/tremendous-credentials', requireAuth, async (req, res, ne
 // ---------------------------------------------------------------------------
 // API keys — what a dealer's CRM authenticates with.
 //
-// Admin only, on all three. A key can add a customer to this company's list
-// and send that customer an email over the company's name, which is not
-// something any staff member should be able to hand out.
+// Any login on the company, on all three. These were admin-only, which read
+// as caution but in practice meant nobody: a dealer's single login is created
+// as whatever 50. made it, and the person who has to hand a key to their CRM
+// installer is the same person who signs in every morning. A key is scoped to
+// one endpoint on one tenant and cannot read anything, so the risk it carries
+// is adding a customer to a list its holder can already add a customer to.
 //
 // Creating one makes a staff account for it to act as, rather than borrowing
 // the admin's: see the migration. That account is a real users row with a
@@ -153,7 +202,7 @@ const createApiKeySchema = z.object({
 router.get('/tenant/api-keys', requireAuth, async (req, res, next) => {
   try {
     const keys = await withUserTransaction(req.userId, async (client) => {
-      await requireAdminCtx(client, req.userId);
+      await requireHumanStaffCtx(client, req.userId);
       // key_hash is deliberately not selected -- nothing signed in ever needs
       // it, and the RLS policy exists so this route cannot reach past its own
       // tenant even if this query were wrong.
@@ -179,12 +228,12 @@ router.post('/tenant/api-keys', requireAuth, async (req, res, next) => {
   const { name } = parsed.data;
 
   try {
-    // Who is asking, and whether they may -- before anything else, including
-    // the configuration check below. A staff member who is not an admin gets
-    // "no", not a report on whether the platform's service-role key is set:
-    // that is operational detail, and the answer to someone who should not be
-    // asking must not depend on it.
-    const ctx = await withUserTransaction(req.userId, (client) => requireAdminCtx(client, req.userId));
+    // Who is asking -- before anything else, including the configuration
+    // check below. Somebody with no login on any company gets "no", not a
+    // report on whether the platform's service-role key is set: that is
+    // operational detail, and the answer to someone who should not be asking
+    // must not depend on it.
+    const ctx = await withUserTransaction(req.userId, (client) => requireHumanStaffCtx(client, req.userId));
 
     if (!supabaseAdmin.isConfigured()) {
       return res.status(503).json({
@@ -258,7 +307,7 @@ router.delete('/tenant/api-keys/:id', requireAuth, async (req, res, next) => {
 
   try {
     const revoked = await withUserTransaction(req.userId, async (client) => {
-      await requireAdminCtx(client, req.userId);
+      await requireHumanStaffCtx(client, req.userId);
       const { rows: [row] } = await client.query(
         `update api_keys set revoked_at = now()
           where id = $1 and revoked_at is null
@@ -272,6 +321,200 @@ router.delete('/tenant/api-keys/:id', requireAuth, async (req, res, next) => {
     // answer to "make sure this key cannot be used".
     if (!revoked) return res.status(404).json({ error: 'No live API key with that id' });
     res.json({ revoked });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A company's own look and wording, edited by the company itself.
+//
+// Both of these already existed for 50.'s side of the house
+// (routes/reps.js's /rep-dealers/:tenantId/brand), where a platform admin can
+// fix any dealer's logo or rewrite any dealer's sentences. That is the only
+// way it could be done, which means every "change 'shed' to 'garage' on my
+// invite email" is a message to Joseph and an evening of his time.
+//
+// These are the same two operations with the tenant taken from the caller
+// instead of the URL. There is no :tenantId to pass and no way to name
+// another company: ctx.tenant_id is read from the login, so the worst a
+// crafted request can do is edit the sender's own wording.
+//
+// What is deliberately NOT here: the reward amount, anything on the billing
+// columns, send-from addresses, reward_fulfillment, and the company's name.
+// Those either cost money, affect deliverability, or are what 50. sells --
+// they stay where a conversation has to happen first.
+// ---------------------------------------------------------------------------
+const TENANT_BRAND_COLORS = ['primaryColor', 'primaryDark', 'secondary', 'accentColor', 'accentDark', 'bg', 'taglineColor'];
+const tenantHexColor = z.string().regex(/^#[0-9a-fA-F]{3,8}$/, 'Use a hex color like #C9974B');
+
+// Only a key the platform itself defines can be written, and only within its
+// own length limit. A record of arbitrary strings would let a dealer put
+// anything of any size into the jsonb every public page reads.
+const copyShape = z
+  .object(Object.fromEntries(tenantCopy.COPY_FIELDS.map((f) => [f.key, z.string().max(f.max).optional()])))
+  .strict();
+
+const tenantBrandBody = z
+  .object({
+    logoUrl: z
+      .union([
+        z.string().trim().regex(/^https:\/\/[^\s"'<>]+$/i, 'A logo URL must start with https://'),
+        z.string().trim().regex(/^\/[^\s"'<>]*$/, 'A relative logo path must start with /'),
+        z.null(),
+      ])
+      .optional(),
+    tagline: z.string().trim().max(80).nullable().optional(),
+    ...Object.fromEntries(TENANT_BRAND_COLORS.map((k) => [k, tenantHexColor.nullable().optional()])),
+    copy: copyShape.optional(),
+  })
+  .strict()
+  .refine((b) => Object.keys(b).length > 0, { message: 'Nothing to change' });
+
+router.get('/tenant/brand', requireAuth, async (req, res, next) => {
+  try {
+    const out = await withUserTransaction(req.userId, async (client) => {
+      const ctx = await requireHumanStaffCtx(client, req.userId);
+      // Read through the caller's own transaction, so RLS is what decides
+      // which tenants row comes back rather than a tenant id in a variable.
+      const { rows: [row] } = await client.query(
+        'select id, name, slug, branding from tenants where id = $1',
+        [ctx.tenant_id]
+      );
+      return row;
+    });
+    if (!out) throw forbidden('No company found for this login');
+
+    // The field list travels with the values, so the page renders whatever
+    // the platform currently defines instead of carrying its own copy of a
+    // list that drifts every time a key is added. `generic` is what runs when
+    // a box is left empty -- shown as the placeholder, so an empty box reads
+    // as "this is what your customers get" rather than as missing.
+    res.json({
+      ...out,
+      copy_fields: tenantCopy.COPY_FIELDS.map((f) => ({
+        key: f.key,
+        label: f.label,
+        where: f.where,
+        stage: f.stage,
+        max: f.max,
+        multiline: !!f.multiline,
+        generic: tenantCopy.GENERIC_COPY[f.key] || '',
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/tenant/brand', requireAuth, async (req, res, next) => {
+  const parsed = tenantBrandBody.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid request', details: parsed.error.flatten() });
+  }
+  const body = parsed.data;
+
+  try {
+    // Who is asking, under their own transaction and their own RLS -- then the
+    // write itself as the service role.
+    //
+    // `authenticated` has no UPDATE on tenants.branding on purpose: the
+    // activation-gate migration revoked table-wide UPDATE and granted back
+    // only the handful of columns the API writes as the signed-in user,
+    // because PostgREST accepts the same login token this page holds and a
+    // table-wide grant would let a dealer PATCH their own billing columns
+    // directly. Granting branding back would also reach only admins
+    // (tenants_update_own_admin), and the whole point here is the
+    // salesperson. So the tenant id is resolved from the login first and the
+    // service role writes one column on that one row -- the same shape
+    // routes/reps.js already uses, with nothing taken from the request but
+    // the values being saved.
+    const ctx = await withUserTransaction(req.userId, (client) => requireHumanStaffCtx(client, req.userId));
+
+    const out = await withServiceRole(async (client) => {
+      const { rows: [t] } = await client.query('select branding from tenants where id = $1', [ctx.tenant_id]);
+      if (!t) throw forbidden('No company found for this login');
+
+      // Merged, not replaced, and one level down for `copy` as well: saving
+      // the wording step somebody just edited must not clear the colors, and
+      // saving one sentence must not clear the other thirty-five. An explicit
+      // null deletes a key, which is how a wrong value gets cleared rather
+      // than only overwritten -- and for a copy key, clearing it is what puts
+      // the platform's own generic wording back.
+      const next = { ...(t.branding || {}) };
+      for (const [key, value] of Object.entries(body)) {
+        if (key === 'copy') {
+          const merged = { ...(next.copy || {}) };
+          for (const [ck, cv] of Object.entries(value)) {
+            if (cv === '') delete merged[ck];
+            else merged[ck] = cv;
+          }
+          next.copy = merged;
+          continue;
+        }
+        if (value === null) delete next[key];
+        else next[key] = value;
+      }
+
+      const { rows: [row] } = await client.query(
+        'update tenants set branding = $2 where id = $1 returning id, name, branding',
+        [ctx.tenant_id, JSON.stringify(next)]
+      );
+      return row;
+    });
+
+    console.log(`TENANT BRAND: ${out.name} (${out.id}) updated by ${req.userId} — ${Object.keys(body).join(', ')}`);
+    res.json(out);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// The logo file itself, uploaded by the company. Same raw-body approach as
+// the rep-side upload in routes/reps.js, and the same bucket; the difference
+// is that the tenant comes from the login rather than the URL.
+const tenantUploadBody = express.raw({ type: () => true, limit: storage.MAX_BYTES + 1024 });
+
+router.post('/tenant/logo', requireAuth, tenantUploadBody, async (req, res, next) => {
+  try {
+    const contentType = String(req.headers['content-type'] || '').split(';')[0].trim();
+
+    if (!storage.isConfigured()) {
+      return res.status(503).json({
+        error: 'This platform cannot store files yet: SUPABASE_SERVICE_ROLE_KEY is not set on the API service.',
+        code: 'uploads_not_configured',
+      });
+    }
+    if (!Buffer.isBuffer(req.body) || !req.body.length) {
+      return res.status(400).json({ error: 'There was nothing in that file' });
+    }
+    if (!storage.extensionFor(contentType) || contentType === 'application/pdf') {
+      return res.status(400).json({ error: 'A logo has to be a PNG, JPG, WEBP, GIF or SVG image' });
+    }
+
+    // Who this is, before anything is stored: a refusal afterwards would
+    // leave a file in the bucket that nothing points at.
+    const ctx = await withUserTransaction(req.userId, (client) => requireHumanStaffCtx(client, req.userId));
+
+    const stored = await storage.upload({ tenantId: ctx.tenant_id, bytes: req.body, contentType });
+
+    try {
+      const out = await withServiceRole(async (client) => {
+        const { rows: [row] } = await client.query(
+          `update tenants
+              set branding = coalesce(branding, '{}'::jsonb) || jsonb_build_object('logoUrl', $2::text)
+            where id = $1
+            returning id, name, branding`,
+          [ctx.tenant_id, stored.publicUrl]
+        );
+        return row;
+      });
+      res.status(201).json(out);
+    } catch (err) {
+      // A stored file the branding does not point at is litter nobody finds.
+      await storage.remove(stored.storagePath);
+      throw err;
+    }
   } catch (err) {
     next(err);
   }

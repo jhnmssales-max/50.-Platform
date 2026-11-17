@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Settings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* The company's own settings, kept on its own page rather than bolted to
+     the bottom of the dashboard.
+     The dashboard is one screen with one job -- add a customer, see the list --
+     and three settings sections inside it would bury that under things nobody
+     touches twice a year. This page shares the dashboard's session (the same
+     localStorage key), its API helper, its colour variables and its row and
+     button vocabulary, so it reads as the same product rather than a second
+     one with a link to it.
+
+     Everything here is scoped to the signed-in company by the server: the
+     tenant comes from the login, never from this page, so there is nothing to
+     put in a URL and nothing this page could ask about another company. */
+  :root{
+    --primary:#1C2B33; --primary-dark:#33475A; --secondary:#7C9FBB;
+    --accent:#C9974B; --accent-dark:#8B6B2E; --bg:#F7F4EE; --charcoal:#1B1B1B; --muted:#6B6A63;
+    --line:#E4DED3;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;font-family:'Inter',sans-serif;color:var(--charcoal);background:var(--primary);
+    display:flex;flex-direction:column;align-items:center;gap:14px;padding:24px;
+    min-height:100vh;min-height:100dvh;
+  }
+  .card{
+    background:var(--bg);border-radius:18px;max-width:620px;width:100%;
+    padding:30px 28px 26px;box-shadow:0 20px 60px rgba(0,0,0,.35);
+  }
+
+  .top{display:flex;align-items:center;gap:12px;padding-bottom:16px;border-bottom:1px solid var(--line);}
+  .top img{width:42px;height:auto;display:block;flex-shrink:0;}
+  .top .who{min-width:0;}
+  .top .who .name{font-family:'Fraunces',serif;font-weight:600;font-size:18px;color:var(--primary);line-height:1.2;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .top .who .kind{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);font-weight:700;margin-top:3px;}
+  .top .back{margin-left:auto;flex-shrink:0;}
+
+  a.ghost,button.ghost{
+    display:inline-block;border:1px solid var(--muted);color:var(--muted);background:none;
+    border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;
+    text-decoration:none;cursor:pointer;font-family:'Inter';white-space:nowrap;
+  }
+  a.ghost:hover,button.ghost:hover{border-color:var(--primary);color:var(--primary);}
+
+  h1{font-family:'Fraunces',serif;font-weight:500;font-size:19px;color:var(--primary);margin:20px 0 6px;}
+  p.lede{font-size:13px;color:var(--muted);margin:0 0 18px;line-height:1.55;}
+
+  nav.tabs{display:flex;gap:6px;margin:18px 0 20px;}
+  nav.tabs button{
+    flex:1;min-width:0;padding:9px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;
+    font-family:'Inter',sans-serif;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:.15s;
+  }
+  nav.tabs button:hover{border-color:#d2c9b6;}
+  nav.tabs button.on{background:var(--primary);border-color:var(--primary);color:#fff;}
+
+  .msg{font-size:13px;padding:11px 14px;border-radius:8px;margin-bottom:16px;display:none;line-height:1.5;}
+  .msg.show{display:block;}
+  .msg.err{background:#FCEBEB;color:#791F1F;}
+  .msg.ok{background:#EEF3EE;color:#1F5133;}
+  .msg.info{background:#fff;border:1px solid var(--line);color:var(--muted);}
+
+  label{display:block;font-size:11px;font-weight:700;color:var(--primary);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em;}
+  input[type=text],input[type=password],textarea{
+    width:100%;padding:11px 12px;border:1px solid #ddd6c8;border-radius:9px;
+    font-family:'Inter';font-size:14px;background:#fff;color:var(--charcoal);
+  }
+  textarea{min-height:76px;resize:vertical;line-height:1.5;}
+  input:focus,textarea:focus{outline:2px solid var(--secondary);outline-offset:1px;}
+
+  button.send{
+    width:100%;background:var(--primary);color:#fff;border:none;border-radius:10px;
+    padding:14px;font-size:14px;font-weight:700;cursor:pointer;font-family:'Inter';
+  }
+  button.send:hover{background:var(--primary-dark);}
+  button.send:disabled{opacity:.55;cursor:not-allowed;}
+
+  /* ---- Wording ------------------------------------------------------- */
+  /* One block per place the sentences come out, in the order a customer
+     meets them: the email, then the page it lands on, then the friend's
+     page, then the cards. The grouping is the server's own `stage` on each
+     field, so a field added to the platform appears here with no change to
+     this page -- and a field whose stage nobody thought about still shows up
+     rather than silently becoming uneditable. */
+  .stage{margin-bottom:8px;border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden;}
+  .stage > summary{
+    list-style:none;cursor:pointer;padding:14px 16px;display:flex;align-items:center;gap:10px;
+  }
+  .stage > summary::-webkit-details-marker{display:none;}
+  .stage > summary .st{font-size:13.5px;font-weight:700;color:var(--primary);}
+  .stage > summary .ct{margin-left:auto;font-size:11px;font-weight:700;color:var(--muted);white-space:nowrap;}
+  .stage > summary .ct.edited{color:var(--accent-dark);}
+  .stage > summary:hover{background:#fcfbf8;}
+  .stage[open] > summary{border-bottom:1px solid var(--line);}
+  .stagebody{padding:4px 16px 16px;}
+
+  .fld{padding:14px 0;border-bottom:1px solid #f1ece2;}
+  .fld:last-child{border-bottom:none;}
+  .fld .where{font-size:11.5px;color:var(--muted);line-height:1.5;margin:0 0 7px;}
+  .fld .under{display:flex;align-items:center;gap:10px;margin-top:6px;}
+  .fld .count{font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums;}
+  .fld .count.near{color:var(--accent-dark);font-weight:700;}
+  .fld .reset{
+    margin-left:auto;background:none;border:none;padding:0;font-family:'Inter';
+    font-size:11px;font-weight:600;color:var(--accent-dark);text-decoration:underline;cursor:pointer;
+  }
+  .fld .reset[hidden]{display:none;}
+
+  /* Thirty-six sentences across seven groups is more than anybody will page
+     through to find the one that says "shed". This searches the labels, the
+     help text, what they have written and the standard wording underneath
+     it, and opens whichever groups hold a match -- so the way to change a
+     word is to type that word. */
+  .wordfind{position:relative;margin-bottom:12px;}
+  .wordfind input{padding-right:70px;}
+  .wordfind .clear{
+    position:absolute;right:8px;top:50%;transform:translateY(-50%);
+    background:none;border:none;font-family:'Inter';font-size:11px;font-weight:600;
+    color:var(--accent-dark);text-decoration:underline;cursor:pointer;padding:4px 6px;
+  }
+  .wordfind .clear[hidden]{display:none;}
+  .nomatch{font-size:12.5px;color:var(--muted);text-align:center;padding:18px 0;}
+  .nomatch[hidden]{display:none;}
+
+  /* The save bar follows them down a long form: the wording tab is forty
+     boxes tall, and a button at the bottom of it is a button nobody finds. */
+  .savebar{
+    position:sticky;bottom:0;background:var(--bg);padding:14px 0 2px;margin-top:10px;
+    border-top:1px solid var(--line);
+  }
+  .savebar .state{font-size:11.5px;color:var(--muted);text-align:center;margin-top:8px;line-height:1.4;}
+
+  /* ---- Your look ----------------------------------------------------- */
+  .logorow{display:flex;align-items:center;gap:14px;margin-bottom:8px;}
+  .logobox{
+    width:72px;height:72px;border-radius:12px;background:#fff;border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:8px;
+  }
+  .logobox img{max-width:100%;max-height:100%;display:block;}
+  .logorow .lhelp{font-size:11.5px;color:var(--muted);line-height:1.5;}
+  .colorgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:4px 0 6px;}
+  .cell{background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 12px;}
+  .cell label{margin-bottom:6px;}
+  .cell .pick{display:flex;align-items:center;gap:8px;}
+  .cell input[type=color]{
+    width:38px;height:34px;padding:0;border:1px solid #ddd6c8;border-radius:7px;background:#fff;cursor:pointer;flex-shrink:0;
+  }
+  .cell input[type=text]{padding:8px 9px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  .cell .note{font-size:10.5px;color:var(--muted);margin-top:6px;line-height:1.45;}
+
+  /* Their own share page, in miniature, drawn from the same variables the
+     pickers write. Colours chosen against a swatch look nothing like colours
+     chosen against the page they land on. */
+  .preview{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:14px 0 6px;}
+  .preview .pbar{
+    font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:700;color:var(--muted);
+    background:#fff;padding:8px 12px;border-bottom:1px solid var(--line);
+  }
+  .preview .pbody{background:var(--pv-primary,#1C2B33);padding:20px 16px;}
+  .preview .pcard{background:var(--pv-bg,#F7F4EE);border-radius:12px;padding:18px 16px;text-align:center;}
+  .preview .pcard .pn{font-family:'Fraunces',serif;font-weight:600;font-size:15px;color:var(--pv-primary,#1C2B33);}
+  .preview .pcard .pt{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;color:var(--pv-accent,#C9974B);margin-top:2px;}
+  .preview .pcard hr{border:none;border-top:1px solid rgba(0,0,0,.08);margin:12px 0;}
+  .preview .pcard .ph{font-size:13px;font-weight:700;color:var(--pv-primary,#1C2B33);}
+  .preview .pcard .pp{font-size:11.5px;color:#6B6A63;margin:5px 0 12px;line-height:1.5;}
+  .preview .pcard .pb{
+    background:var(--pv-primary,#1C2B33);color:#fff;border-radius:8px;padding:11px;font-size:12px;font-weight:700;
+  }
+  .preview .pcard .pl{font-size:10.5px;color:var(--pv-accent,#C9974B);margin-top:9px;font-weight:600;}
+
+  /* ---- CRM keys ------------------------------------------------------ */
+  .keyrow{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:12px 0;border-bottom:1px solid #efe9dc;
+  }
+  .keyrow:last-child{border-bottom:none;}
+  .keyrow .kname{font-size:13px;font-weight:700;color:var(--primary);}
+  .keyrow .kmeta{font-size:11.5px;color:var(--muted);margin-top:2px;}
+  .keyrow .kmeta code{font-size:11px;color:var(--primary-dark);}
+  .keyrow .kunused{color:var(--accent-dark);font-weight:600;}
+  .keyempty{font-size:12.5px;color:var(--muted);padding:10px 0;}
+  .rowbtn{
+    padding:6px 10px;border:1px solid var(--line);border-radius:7px;background:#fff;
+    font-family:'Inter',sans-serif;font-size:11.5px;font-weight:600;color:var(--primary);
+    cursor:pointer;white-space:nowrap;flex-shrink:0;
+  }
+  .rowbtn:hover:not(:disabled){border-color:#d2c9b6;}
+  .rowbtn:disabled{opacity:.5;cursor:not-allowed;}
+  .rowbtn.done{border-color:var(--secondary);color:var(--secondary);}
+  .rowbtn.failed{border-color:#B3261E;color:#B3261E;}
+  .keybox{display:none;margin:14px 0;padding-top:14px;border-top:1px solid var(--line);}
+  .keybox.show{display:block;}
+  .keybox .headline{font-size:13.5px;font-weight:700;color:var(--primary);margin-bottom:9px;}
+  .linkbox{
+    background:#fff;border:1px dashed var(--accent);border-radius:8px;padding:12px 13px;
+    font-size:12px;color:var(--primary-dark);word-break:break-all;
+    display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;
+  }
+  .linkbox code{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;}
+  .copybtn{
+    background:none;border:1px solid var(--primary);color:var(--primary);border-radius:6px;
+    padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Inter';flex-shrink:0;
+  }
+  .copybtn:hover{background:var(--primary);color:var(--bg);}
+  .fine{font-size:11.5px;color:var(--muted);line-height:1.5;}
+
+  /* ---- Playbook ------------------------------------------------------ */
+  .pbcard{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px 16px;}
+  .pbcard h3{font-family:'Fraunces',serif;font-weight:600;font-size:15px;color:var(--primary);margin:0 0 6px;}
+  .pbcard p{font-size:13px;color:var(--muted);line-height:1.6;margin:0 0 12px;}
+  .pbcard ul{margin:0 0 14px;padding-left:20px;}
+  .pbcard li{font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:4px;}
+  .pbcard .acts{display:flex;gap:8px;flex-wrap:wrap;}
+  a.primarybtn{
+    display:inline-block;background:var(--primary);color:#fff;border-radius:9px;padding:11px 16px;
+    font-size:13px;font-weight:700;text-decoration:none;
+  }
+  a.primarybtn:hover{background:var(--primary-dark);}
+
+  .poweredBy{display:flex;align-items:center;gap:6px;color:rgba(255,255,255,.55);font-size:11px;}
+  .poweredBy strong{font-weight:700;color:rgba(255,255,255,.78);}
+  .poweredBy img{flex-shrink:0;display:block;width:20px;height:auto;}
+
+  @media (max-width:560px){
+    body{padding:14px 10px 28px;}
+    .card{padding:22px 18px 20px;}
+    .colorgrid{grid-template-columns:1fr;}
+    .top{flex-wrap:wrap;}
+    .top .back{margin-left:0;width:100%;}
+    .top .back a{display:block;text-align:center;}
+    nav.tabs{flex-wrap:wrap;}
+    nav.tabs button{flex:1 1 44%;}
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="top">
+    <!-- onerror, because a stored logoUrl can go dead (a dealer moves their
+           site, an image is renamed) and a broken-image icon beside their own
+           name is worse than 50.'s mark. this.onerror is cleared first so a
+           missing fallback cannot loop. -->
+      <img data-tenant-logo src="assets/50-platform-logo.png" alt="logo"
+           onerror="this.onerror=null;this.src='assets/50-platform-logo.png';" />
+    <div class="who">
+      <div class="name" data-tenant-name>Your company</div>
+      <div class="kind">Settings</div>
+    </div>
+    <div class="back"><a class="ghost" href="fifty-template-dealer.html">Back to dashboard</a></div>
+  </div>
+
+  <div id="bootMsg" class="msg info show" style="margin-top:18px;">Loading your settings…</div>
+
+  <div id="settingsArea" hidden>
+    <nav class="tabs">
+      <button type="button" class="on" data-tab="wording">Your wording</button>
+      <button type="button" data-tab="look">Your look</button>
+      <button type="button" data-tab="crm">Connect your CRM</button>
+      <button type="button" data-tab="playbook">Playbook</button>
+    </nav>
+
+    <!-- ---------------- Wording ---------------- -->
+    <section data-panel="wording">
+      <h1>The words your customers read</h1>
+      <p class="lede">
+        Every sentence on your emails and pages is yours to change. Leave a box empty and the
+        standard wording runs instead — so an empty box is never something missing, it is what
+        your customers get today. Changes are live the moment you save.
+      </p>
+      <div id="wordMsg" class="msg"></div>
+      <div class="wordfind">
+        <input type="text" id="wordSearch" placeholder="Find a word — try &ldquo;gift card&rdquo;, &ldquo;thank&rdquo;, &ldquo;subject&rdquo;" autocomplete="off" spellcheck="false" />
+        <button type="button" class="clear" id="wordSearchClear" hidden>Clear</button>
+      </div>
+      <div id="stages"></div>
+      <div class="nomatch" id="wordNoMatch" hidden>Nothing here says that. Try a shorter word.</div>
+      <div class="savebar">
+        <button type="button" class="send" id="saveWording" disabled>Save wording</button>
+        <div class="state" id="wordState">Nothing changed yet.</div>
+      </div>
+    </section>
+
+    <!-- ---------------- Your look ---------------- -->
+    <section data-panel="look" hidden>
+      <h1>Your logo and colours</h1>
+      <p class="lede">
+        These run on every page and email your customers see, including this one. The preview
+        below is your share page as they would see it.
+      </p>
+      <div id="lookMsg" class="msg"></div>
+
+      <label>Your logo</label>
+      <div class="logorow">
+        <div class="logobox"><img id="logoPreview" alt="your logo"
+             onerror="this.onerror=null;this.src='assets/50-platform-logo.png';" /></div>
+        <div class="lhelp">
+          PNG, JPG, WEBP, GIF or SVG, up to 5MB. A square-ish logo on a transparent or white
+          background works best — it is shown small, beside your name.
+          <div style="margin-top:9px;">
+            <button type="button" class="ghost" id="logoPickBtn">Upload a new logo</button>
+            <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" hidden />
+          </div>
+        </div>
+      </div>
+
+      <div class="preview">
+        <div class="pbar">Your share page, as a customer sees it</div>
+        <div class="pbody" id="pvBody">
+          <div class="pcard">
+            <div class="pn" data-tenant-name>Your company</div>
+            <div class="pt">Referral Program</div>
+            <hr />
+            <div class="ph">Thanks again, Dana</div>
+            <div class="pp">Send your link to anyone who might need us — you both get an e-gift card.</div>
+            <div class="pb">Share my referral link</div>
+            <div class="pl">go.referwith50.com/r/dana-8T4kW2</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="colorgrid" id="colorGrid"></div>
+
+      <div class="savebar">
+        <button type="button" class="send" id="saveLook" disabled>Save colours</button>
+        <div class="state" id="lookState">Nothing changed yet.</div>
+      </div>
+    </section>
+
+    <!-- ---------------- CRM ---------------- -->
+    <section data-panel="crm" hidden>
+      <h1>Connect your CRM</h1>
+      <p class="lede">
+        A key lets your CRM add a customer and send their referral link automatically when an
+        order closes, instead of you entering them here. Hand it to whoever sets up the
+        connection — it works on one endpoint and cannot read anything.
+      </p>
+      <div id="keyMsg" class="msg"></div>
+
+      <div class="keybox" id="newKeyBox">
+        <div class="headline">Copy this key now</div>
+        <div class="linkbox">
+          <code id="newKeyValue"></code>
+          <button class="copybtn" id="copyKeyBtn">Copy</button>
+        </div>
+        <p class="fine">
+          This is the only time it can be shown. We store a one-way hash of it, not the key, so
+          nobody can look it up later — us included. If it is lost, revoke it and make another.
+        </p>
+      </div>
+
+      <div id="apiKeyList"></div>
+
+      <form id="apiKeyForm" style="margin-top:16px;">
+        <label for="apiKeyName">Name a new key</label>
+        <input type="text" id="apiKeyName" placeholder="Velocity360" autocomplete="off" maxlength="80" style="margin-bottom:12px;" />
+        <button type="submit" class="send" id="apiKeyBtn">Create a key</button>
+      </form>
+    </section>
+
+    <!-- ---------------- Playbook ---------------- -->
+    <section data-panel="playbook" hidden>
+      <h1>Your referral playbook</h1>
+      <p class="lede">
+        How to actually get referrals out of this — written for whoever is standing in front of
+        the customer. It opens in your own branding, so you can print it and hand it to a new
+        salesperson on their first morning.
+      </p>
+      <div class="pbcard">
+        <h3>What's in it</h3>
+        <ul>
+          <li>The whole program in five steps</li>
+          <li>What to say at the handoff, word for word</li>
+          <li>Which follow-ups are worth your time, and which the system does for you</li>
+          <li>What to do the day a referral comes in</li>
+          <li>Two habits that move the numbers more than anything else</li>
+        </ul>
+        <div class="acts">
+          <a class="primarybtn" href="fifty-playbook.html">Open the playbook</a>
+          <a class="ghost" href="fifty-playbook.html#print" id="printLink">Print or save as PDF</a>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div class="poweredBy">
+  <img src="assets/50-platform-logo.png" width="20" height="20" alt="50." />
+  <span>Powered by <strong>50.</strong></span>
+</div>
+
+<script>
+// Same two constants as the dashboard, and the same session key, so arriving
+// here from the dashboard needs no second sign-in.
+const API_BASE = "https://five0-platform.onrender.com/api";
+const DASHBOARD = 'fifty-template-dealer.html';
+
+const DEFAULT_LOGO = 'assets/50-platform-logo.png';
+
+function getSession(){
+  try{ return JSON.parse(localStorage.getItem('fifty:session') || 'null'); }catch(e){ return null; }
+}
+function setSession(s){
+  if(s) localStorage.setItem('fifty:session', JSON.stringify(s));
+  else localStorage.removeItem('fifty:session');
+}
+
+// A 401 gets one retry after a refresh, exactly as the dashboard does. If the
+// refresh fails there is nothing useful to show on a settings page, so this
+// hands them back to the sign-in screen rather than inventing a second one.
+async function refreshSession(){
+  const s = getSession();
+  if(!s || !s.refresh_token) return false;
+  try{
+    const res = await fetch("https://jzjmuttqbtandwjmwwfn.supabase.co/auth/v1/token?grant_type=refresh_token", {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: "sb_publishable_RE92j36ZEVFvSBwV-Rl8hg_JyfxRT6a" },
+      body: JSON.stringify({ refresh_token: s.refresh_token })
+    });
+    if(!res.ok) return false;
+    const d = await res.json();
+    setSession({ access_token: d.access_token, refresh_token: d.refresh_token });
+    return true;
+  }catch(e){ return false; }
+}
+
+function toSignIn(){
+  setSession(null);
+  window.location.replace(DASHBOARD);
+}
+
+async function apiFetch(path, options={}, retried){
+  const session = getSession();
+  const isRaw = options.raw === true;
+  const res = await fetch(API_BASE + path, {
+    method: options.method || 'GET',
+    body: options.body,
+    headers: {
+      ...(isRaw ? {} : { 'Content-Type': 'application/json' }),
+      ...(session ? { 'Authorization': 'Bearer ' + session.access_token } : {}),
+      ...(options.headers || {})
+    }
+  });
+  if(res.status === 401 && !retried && await refreshSession()) return apiFetch(path, options, true);
+  let body = null;
+  try{ body = await res.json(); }catch(e){ /* no body */ }
+  if(!res.ok){
+    const err = new Error((body && body.error) || ('Request failed (' + res.status + ')'));
+    err.status = res.status;
+    err.code = body && body.code;
+    throw err;
+  }
+  return body;
+}
+
+function esc(s){
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function msg(id, text, kind){
+  const el = document.getElementById(id);
+  el.textContent = text || '';
+  el.className = text ? ('msg show ' + (kind || 'err')) : 'msg';
+}
+
+function fmtDate(iso){ return new Date(iso).toLocaleDateString(undefined,{month:'short',day:'numeric'}); }
+
+// Same clipboard pair as the dashboard: navigator.clipboard is undefined on
+// plain http and can refuse even on https, and the hidden-textarea path is
+// what actually runs for some dealers.
+async function copyText(text){
+  try{
+    if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(text); return; }
+  }catch(e){ /* fall through */ }
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('readonly',''); ta.style.position='fixed'; ta.style.top='-1000px';
+  document.body.appendChild(ta); ta.select();
+  let ok = false;
+  try{ ok = document.execCommand('copy'); }catch(e){ ok = false; }
+  document.body.removeChild(ta);
+  if(!ok) throw new Error('This browser would not let the page copy it.');
+}
+
+function flashButton(btn, label, cls){
+  const original = btn.dataset.label || btn.textContent;
+  btn.dataset.label = original;
+  btn.textContent = label;
+  btn.classList.remove('done','failed');
+  if(cls) btn.classList.add(cls);
+  clearTimeout(Number(btn.dataset.flashTimer));
+  btn.dataset.flashTimer = String(setTimeout(() => {
+    btn.textContent = btn.dataset.label;
+    btn.classList.remove('done','failed');
+  }, 2000));
+}
+
+// ---------------------------------------------------------------------
+// Branding — this page wears the company's own colours too, because a
+// settings page in somebody else's palette is a poor place to pick colours.
+// ---------------------------------------------------------------------
+const BRAND_KEYS = [
+  { key:'primaryColor', css:'--primary',      label:'Main colour',
+    note:'The page behind every card, your headings, and your buttons.' },
+  { key:'primaryDark',  css:'--primary-dark', label:'Main colour, pressed',
+    note:'What a button goes when somebody hovers or taps it. A shade darker than the main colour.' },
+  { key:'bg',           css:'--bg',           label:'Card background',
+    note:'The paper your words sit on. Keep it very light, or text stops being readable.' },
+  { key:'accentColor',  css:'--accent',       label:'Highlight colour',
+    note:'Small emphasis — the line under your name, the dashed link box.' },
+  { key:'accentDark',   css:'--accent-dark',  label:'Highlight, darker',
+    note:'The same highlight where it has to sit on white and still be readable.' },
+  { key:'secondary',    css:'--secondary',    label:'Outline colour',
+    note:'Focus rings and the quieter confirmations.' }
+];
+
+let me = null;        // GET /api/me
+let brand = null;     // GET /api/tenant/brand
+let fields = [];      // brand.copy_fields
+let savedCopy = {};   // what is on the server right now
+let savedColors = {}; // likewise, for the six above
+
+function applyBranding(){
+  const t = (brand && brand.branding) || {};
+  const r = document.documentElement.style;
+  BRAND_KEYS.forEach(({ key, css }) => { if(t[key]) r.setProperty(css, t[key]); });
+  const name = (brand && brand.name) || (me && me.tenant_name) || 'Your company';
+  document.title = name + ' — Settings';
+  document.querySelectorAll('[data-tenant-name]').forEach(el => { el.textContent = name; });
+  const logo = t.logoUrl || DEFAULT_LOGO;
+  document.querySelectorAll('[data-tenant-logo]').forEach(el => { el.src = logo; });
+  document.getElementById('logoPreview').src = logo;
+}
+
+// ---------------------------------------------------------------------
+// Wording
+// ---------------------------------------------------------------------
+function stagesFromFields(){
+  // Server order, preserved: it is the order a customer meets the words in.
+  const out = [];
+  const byStage = new Map();
+  fields.forEach((f) => {
+    const stage = f.stage || 'Everywhere else';
+    if(!byStage.has(stage)){ byStage.set(stage, []); out.push({ stage, fields: byStage.get(stage) }); }
+    byStage.get(stage).push(f);
+  });
+  return out;
+}
+
+function fieldHtml(f){
+  const value = savedCopy[f.key] || '';
+  const tag = f.multiline
+    ? '<textarea data-ck="' + esc(f.key) + '" maxlength="' + f.max + '" placeholder="' + esc(f.generic) + '">' + esc(value) + '</textarea>'
+    : '<input type="text" data-ck="' + esc(f.key) + '" maxlength="' + f.max + '" placeholder="' + esc(f.generic) + '" value="' + esc(value) + '" />';
+  return '<div class="fld" data-fld="' + esc(f.key) + '">' +
+    '<label>' + esc(f.label) + '</label>' +
+    '<p class="where">' + esc(f.where || '') + '</p>' +
+    tag +
+    '<div class="under">' +
+      '<span class="count" data-count="' + esc(f.key) + '"></span>' +
+      '<button type="button" class="reset" data-reset="' + esc(f.key) + '"' + (value ? '' : ' hidden') + '>Use the standard wording</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderWording(){
+  const html = stagesFromFields().map((s, i) => {
+    const edited = s.fields.filter((f) => savedCopy[f.key]).length;
+    return '<details class="stage"' + (i === 0 ? ' open' : '') + ' data-stage="' + esc(s.stage) + '">' +
+      '<summary>' +
+        '<span class="st">' + esc(s.stage) + '</span>' +
+        '<span class="ct' + (edited ? ' edited' : '') + '" data-stagecount="' + esc(s.stage) + '">' +
+          (edited ? edited + ' of ' + s.fields.length + ' in your words' : s.fields.length + ' standard') +
+        '</span>' +
+      '</summary>' +
+      '<div class="stagebody">' + s.fields.map(fieldHtml).join('') + '</div>' +
+    '</details>';
+  }).join('');
+  document.getElementById('stages').innerHTML = html;
+  fields.forEach((f) => updateCount(f.key));
+  // A save re-renders the groups, which would otherwise throw away whatever
+  // they were in the middle of searching for.
+  applyWordFilter();
+  wordingChanged();
+}
+
+function boxFor(key){ return document.querySelector('[data-ck="' + key + '"]'); }
+
+// Matches on everything a dealer might remember about a sentence: what it is
+// called, where it comes out, what they wrote, and -- the one that matters
+// most -- the standard wording running in its place, which is the text they
+// are actually reading in their own email when they come here to change it.
+function fieldMatches(f, q){
+  const box = boxFor(f.key);
+  const haystack = [f.label, f.where, f.stage, f.key, f.generic, box ? box.value : '']
+    .join(' ').toLowerCase();
+  return haystack.indexOf(q) >= 0;
+}
+
+function applyWordFilter(){
+  const raw = document.getElementById('wordSearch').value.trim();
+  const q = raw.toLowerCase();
+  document.getElementById('wordSearchClear').hidden = !raw;
+
+  if(!q){
+    // Back to how the tab opens: every box present, the first group open.
+    document.querySelectorAll('#stages .fld').forEach((el) => { el.hidden = false; });
+    document.querySelectorAll('#stages .stage').forEach((d, i) => { d.hidden = false; d.open = i === 0; });
+    document.getElementById('wordNoMatch').hidden = true;
+    return;
+  }
+
+  let hits = 0;
+  document.querySelectorAll('#stages .stage').forEach((d) => {
+    let here = 0;
+    d.querySelectorAll('.fld').forEach((el) => {
+      const f = fields.find((x) => x.key === el.dataset.fld);
+      const show = f ? fieldMatches(f, q) : false;
+      el.hidden = !show;
+      if(show) here++;
+    });
+    d.hidden = here === 0;
+    // Opened, not just revealed: a match inside a closed group is a match
+    // nobody can see.
+    if(here) d.open = true;
+    hits += here;
+  });
+  document.getElementById('wordNoMatch').hidden = hits > 0;
+}
+
+document.getElementById('wordSearch').addEventListener('input', applyWordFilter);
+document.getElementById('wordSearchClear').addEventListener('click', () => {
+  const box = document.getElementById('wordSearch');
+  box.value = '';
+  applyWordFilter();
+  box.focus();
+});
+
+function updateCount(key){
+  const f = fields.find((x) => x.key === key);
+  const box = boxFor(key);
+  const out = document.querySelector('[data-count="' + key + '"]');
+  if(!f || !box || !out) return;
+  const n = box.value.length;
+  if(!n){
+    out.textContent = 'Standard wording';
+    out.className = 'count';
+  } else {
+    out.textContent = n + ' / ' + f.max;
+    out.className = 'count' + (n > f.max - 20 ? ' near' : '');
+  }
+  const reset = document.querySelector('[data-reset="' + key + '"]');
+  if(reset) reset.hidden = !n;
+}
+
+// Only what actually changed is sent. An empty box means "put the standard
+// wording back", which the server reads as deleting the key -- so a cleared
+// box has to be sent, and an untouched empty box must not be.
+function wordingDiff(){
+  const out = {};
+  fields.forEach((f) => {
+    const box = boxFor(f.key);
+    if(!box) return;
+    const now = box.value.trim();
+    const was = savedCopy[f.key] || '';
+    if(now !== was) out[f.key] = now;
+  });
+  return out;
+}
+
+function wordingChanged(){
+  const diff = wordingDiff();
+  const n = Object.keys(diff).length;
+  document.getElementById('saveWording').disabled = n === 0;
+  document.getElementById('wordState').textContent = n === 0
+    ? 'Nothing changed yet.'
+    : n + (n === 1 ? ' sentence' : ' sentences') + ' changed, not saved yet.';
+}
+
+document.getElementById('stages').addEventListener('input', (e) => {
+  const key = e.target.dataset.ck;
+  if(!key) return;
+  updateCount(key);
+  wordingChanged();
+});
+
+document.getElementById('stages').addEventListener('click', (e) => {
+  const reset = e.target.closest('[data-reset]');
+  if(!reset) return;
+  const box = boxFor(reset.dataset.reset);
+  if(!box) return;
+  box.value = '';
+  updateCount(reset.dataset.reset);
+  wordingChanged();
+  box.focus();
+});
+
+document.getElementById('saveWording').addEventListener('click', async () => {
+  const diff = wordingDiff();
+  if(!Object.keys(diff).length) return;
+  const btn = document.getElementById('saveWording');
+  btn.disabled = true;
+  const before = btn.textContent;
+  btn.textContent = 'Saving…';
+  msg('wordMsg', '');
+  try{
+    const out = await apiFetch('/tenant/brand', { method:'PATCH', body: JSON.stringify({ copy: diff }) });
+    brand.branding = out.branding || {};
+    savedCopy = { ...(brand.branding.copy || {}) };
+    // Re-rendered rather than patched: the per-stage "in your words" tallies
+    // and every reset link have to agree with what the server now holds.
+    renderWording();
+    const n = Object.keys(diff).length;
+    msg('wordMsg', 'Saved. ' + (n === 1 ? 'That sentence is' : 'Those ' + n + ' sentences are') +
+      ' live on your emails and pages from now on.', 'ok');
+  }catch(err){
+    if(err.status === 401) return toSignIn();
+    msg('wordMsg', err.message || 'Could not save that. Try again.', 'err');
+  }finally{
+    btn.textContent = before;
+    wordingChanged();
+  }
+});
+
+// ---------------------------------------------------------------------
+// Your look
+// ---------------------------------------------------------------------
+function normHex(v){
+  const s = String(v || '').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(s) ? s.toLowerCase() : null;
+}
+
+function currentColor(key){
+  const t = (brand && brand.branding) || {};
+  return normHex(t[key]) ||
+    // Whatever is actually on screen for that variable, so a company that has
+    // never set a colour starts from the one it is already using rather than
+    // from black.
+    normHex(getComputedStyle(document.documentElement)
+      .getPropertyValue((BRAND_KEYS.find((b) => b.key === key) || {}).css).trim()) ||
+    '#1c2b33';
+}
+
+function renderLook(){
+  document.getElementById('colorGrid').innerHTML = BRAND_KEYS.map((b) => {
+    const v = currentColor(b.key);
+    return '<div class="cell">' +
+      '<label>' + esc(b.label) + '</label>' +
+      '<div class="pick">' +
+        '<input type="color" data-color="' + b.key + '" value="' + v + '" aria-label="' + esc(b.label) + '" />' +
+        '<input type="text" data-hex="' + b.key + '" value="' + v + '" maxlength="7" spellcheck="false" />' +
+      '</div>' +
+      '<div class="note">' + esc(b.note) + '</div>' +
+    '</div>';
+  }).join('');
+  savedColors = {};
+  BRAND_KEYS.forEach((b) => { savedColors[b.key] = currentColor(b.key); });
+  paintPreview();
+  lookChanged();
+}
+
+function pickedColors(){
+  const out = {};
+  BRAND_KEYS.forEach((b) => {
+    const el = document.querySelector('[data-color="' + b.key + '"]');
+    if(el) out[b.key] = normHex(el.value) || savedColors[b.key];
+  });
+  return out;
+}
+
+// The preview reads its own variables, not the page's, so a half-picked
+// palette never makes the settings page itself unreadable while they work.
+function paintPreview(){
+  const c = pickedColors();
+  const s = document.querySelector('.preview').style;
+  s.setProperty('--pv-primary', c.primaryColor);
+  s.setProperty('--pv-bg', c.bg);
+  s.setProperty('--pv-accent', c.accentColor);
+}
+
+function lookDiff(){
+  const now = pickedColors();
+  const out = {};
+  BRAND_KEYS.forEach((b) => { if(now[b.key] !== savedColors[b.key]) out[b.key] = now[b.key]; });
+  return out;
+}
+
+function lookChanged(){
+  const n = Object.keys(lookDiff()).length;
+  document.getElementById('saveLook').disabled = n === 0;
+  document.getElementById('lookState').textContent = n === 0
+    ? 'Nothing changed yet.'
+    : n + (n === 1 ? ' colour' : ' colours') + ' changed, not saved yet.';
+}
+
+document.getElementById('colorGrid').addEventListener('input', (e) => {
+  const picked = e.target.dataset.color;
+  const typed = e.target.dataset.hex;
+  if(picked){
+    const hex = document.querySelector('[data-hex="' + picked + '"]');
+    if(hex) hex.value = e.target.value.toLowerCase();
+  } else if(typed){
+    const hex = normHex(e.target.value);
+    if(!hex) return; // half-typed; wait for the rest
+    const swatch = document.querySelector('[data-color="' + typed + '"]');
+    if(swatch) swatch.value = hex;
+  } else return;
+  paintPreview();
+  lookChanged();
+});
+
+document.getElementById('saveLook').addEventListener('click', async () => {
+  const diff = lookDiff();
+  if(!Object.keys(diff).length) return;
+  const btn = document.getElementById('saveLook');
+  btn.disabled = true;
+  const before = btn.textContent;
+  btn.textContent = 'Saving…';
+  msg('lookMsg', '');
+  try{
+    const out = await apiFetch('/tenant/brand', { method:'PATCH', body: JSON.stringify(diff) });
+    brand.branding = out.branding || {};
+    applyBranding();
+    renderLook();
+    msg('lookMsg', 'Saved. Your pages and emails use these from now on.', 'ok');
+  }catch(err){
+    if(err.status === 401) return toSignIn();
+    msg('lookMsg', err.message || 'Could not save that. Try again.', 'err');
+  }finally{
+    btn.textContent = before;
+    lookChanged();
+  }
+});
+
+document.getElementById('logoPickBtn').addEventListener('click', () => document.getElementById('logoFile').click());
+
+document.getElementById('logoFile').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = ''; // so picking the same file twice still fires
+  if(!file) return;
+  if(file.size > 5 * 1024 * 1024){
+    msg('lookMsg', 'That file is ' + Math.round(file.size / 1024 / 1024) + 'MB. The limit is 5MB.', 'err');
+    return;
+  }
+  const btn = document.getElementById('logoPickBtn');
+  btn.disabled = true;
+  const before = btn.textContent;
+  btn.textContent = 'Uploading…';
+  msg('lookMsg', '');
+  try{
+    // Raw bytes with the file's own content type, the way the API reads it.
+    const out = await apiFetch('/tenant/logo', {
+      method: 'POST', raw: true, body: file,
+      headers: { 'Content-Type': file.type || 'application/octet-stream' }
+    });
+    brand.branding = out.branding || {};
+    applyBranding();
+    msg('lookMsg', 'Saved. That logo is on your pages and emails from now on.', 'ok');
+  }catch(err){
+    if(err.status === 401) return toSignIn();
+    msg('lookMsg', err.message || 'Could not upload that. Try again.', 'err');
+  }finally{
+    btn.disabled = false;
+    btn.textContent = before;
+  }
+});
+
+// ---------------------------------------------------------------------
+// CRM keys — moved here from the dashboard, where it sat under the customer
+// list as a third section nobody scrolled to.
+// ---------------------------------------------------------------------
+function apiKeyRowHtml(k){
+  const used = k.last_used_at
+    ? 'Last used ' + esc(fmtDate(k.last_used_at))
+    : '<span class="kunused">Never used</span>';
+  return '<div class="keyrow" data-key-row="' + esc(k.id) + '">' +
+    '<div>' +
+      '<div class="kname">' + esc(k.name) + '</div>' +
+      '<div class="kmeta"><code>' + esc(k.key_prefix) + '…</code> · Created ' + esc(fmtDate(k.created_at)) + ' · ' + used + '</div>' +
+    '</div>' +
+    '<button type="button" class="rowbtn" data-revoke-key="' + esc(k.id) + '">Revoke</button>' +
+  '</div>';
+}
+
+async function loadApiKeys(){
+  const result = await apiFetch('/tenant/api-keys');
+  const keys = result.api_keys || [];
+  document.getElementById('apiKeyList').innerHTML = keys.length
+    ? keys.map(apiKeyRowHtml).join('')
+    : '<div class="keyempty">No keys yet. Create one when you are ready to connect a CRM.</div>';
+}
+
+document.getElementById('apiKeyForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const nameInput = document.getElementById('apiKeyName');
+  const name = nameInput.value.trim();
+  if(!name){ msg('keyMsg', 'Give the key a name so you can tell it apart later.', 'err'); return; }
+  const btn = document.getElementById('apiKeyBtn');
+  btn.disabled = true;
+  const before = btn.textContent;
+  btn.textContent = 'Creating…';
+  msg('keyMsg', '');
+  try{
+    const result = await apiFetch('/tenant/api-keys', { method:'POST', body: JSON.stringify({ name }) });
+    // textContent, not innerHTML: this is a credential, and it goes in as
+    // text or not at all.
+    document.getElementById('newKeyValue').textContent = result.key;
+    document.getElementById('newKeyBox').classList.add('show');
+    nameInput.value = '';
+    await loadApiKeys();
+    document.getElementById('newKeyBox').scrollIntoView({ behavior:'smooth', block:'center' });
+  }catch(err){
+    if(err.status === 401) return toSignIn();
+    msg('keyMsg', err.message || 'Could not create a key. Try again.', 'err');
+  }finally{
+    btn.disabled = false;
+    btn.textContent = before;
+  }
+});
+
+document.getElementById('copyKeyBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('copyKeyBtn');
+  const value = document.getElementById('newKeyValue').textContent;
+  try{
+    await copyText(value);
+    flashButton(btn, 'Copied', 'done');
+  }catch(err){
+    flashButton(btn, 'Select it', 'failed');
+    window.prompt('Copy this key:', value);
+  }
+});
+
+document.getElementById('apiKeyList').addEventListener('click', async (e) => {
+  const target = e.target.closest('[data-revoke-key]');
+  if(!target || target.disabled) return;
+  const row = target.closest('[data-key-row]');
+  const name = row ? (row.querySelector('.kname')?.textContent || 'this key') : 'this key';
+  if(!window.confirm('Revoke ' + name + '? Any CRM using it stops working immediately, and it cannot be un-revoked.')) return;
+  target.disabled = true;
+  const before = target.textContent;
+  target.textContent = 'Revoking…';
+  try{
+    await apiFetch('/tenant/api-keys/' + encodeURIComponent(target.dataset.revokeKey), { method:'DELETE' });
+    msg('keyMsg', name + ' is revoked. Anything using it now gets turned away.', 'ok');
+    document.getElementById('newKeyBox').classList.remove('show');
+    await loadApiKeys();
+  }catch(err){
+    target.disabled = false;
+    target.textContent = before;
+    if(err.status === 401) return toSignIn();
+    msg('keyMsg', err.message || 'Could not revoke that key. Try again.', 'err');
+  }
+});
+
+// ---------------------------------------------------------------------
+// Tabs, and the one warning worth giving: leaving with unsaved wording.
+// ---------------------------------------------------------------------
+function showTab(name){
+  document.querySelectorAll('nav.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === name));
+  document.querySelectorAll('[data-panel]').forEach((p) => { p.hidden = p.dataset.panel !== name; });
+  try{ localStorage.setItem('fifty:settingsTab', name); }catch(e){ /* a remembered tab is a nicety */ }
+}
+
+document.querySelector('nav.tabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-tab]');
+  if(btn) showTab(btn.dataset.tab);
+});
+
+document.getElementById('printLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  window.location.href = 'fifty-playbook.html';
+});
+
+window.addEventListener('beforeunload', (e) => {
+  const dirty = Object.keys(wordingDiff()).length || Object.keys(lookDiff()).length;
+  if(!dirty) return;
+  e.preventDefault();
+  e.returnValue = '';
+});
+
+// ---------------------------------------------------------------------
+async function init(){
+  if(!getSession()) return toSignIn();
+  try{
+    me = await apiFetch('/me');
+  }catch(err){
+    if(err.status === 401) return toSignIn();
+    // 402 lands here too: an account that has not finished activation has no
+    // settings to edit yet, and the dashboard is where that gets paid.
+    msg('bootMsg', 'Settings are not available yet. Opening your dashboard…', 'info');
+    setTimeout(() => window.location.replace(DASHBOARD), 1400);
+    return;
+  }
+  try{
+    brand = await apiFetch('/tenant/brand');
+  }catch(err){
+    if(err.status === 401) return toSignIn();
+    msg('bootMsg', err.status === 402
+      ? 'Settings open once your account is activated. Opening your dashboard…'
+      : 'Could not load your settings. Check your connection and reload.', 'info');
+    if(err.status === 402) setTimeout(() => window.location.replace(DASHBOARD), 1600);
+    return;
+  }
+
+  fields = brand.copy_fields || [];
+  savedCopy = { ...((brand.branding || {}).copy || {}) };
+  applyBranding();
+  renderWording();
+  renderLook();
+
+  document.getElementById('bootMsg').className = 'msg';
+  document.getElementById('settingsArea').hidden = false;
+
+  let remembered = null;
+  try{ remembered = localStorage.getItem('fifty:settingsTab'); }catch(e){ /* fine */ }
+  const asked = (location.hash || '').replace(/^#/, '');
+  const wanted = ['wording','look','crm','playbook'].indexOf(asked) >= 0 ? asked
+    : (['wording','look','crm','playbook'].indexOf(remembered) >= 0 ? remembered : 'wording');
+  showTab(wanted);
+
+  // Fire-and-forget: a key list that fails to load must not stop somebody
+  // editing their wording.
+  loadApiKeys().catch(() => {});
+}
+
+init();
+</script>
+
+</body>
+</html>

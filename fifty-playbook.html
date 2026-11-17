@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Referral Playbook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* Deliberately its own page rather than a section of the dashboard: this is
+     the one thing here somebody reads end to end, prints, and hands to a new
+     salesperson on their first morning. It takes the signed-in company's own
+     name, logo and colours (GET /api/me, exactly as the dashboard does), so
+     what gets printed is their playbook, not 50.'s. */
+  :root{
+    --primary:#1C2B33; --primary-dark:#33475A; --secondary:#7C9FBB;
+    --accent:#C9974B; --accent-dark:#8B6B2E; --bg:#F7F4EE; --charcoal:#1B1B1B; --muted:#6B6A63;
+    --line:#E4DED3;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;font-family:'Inter',sans-serif;color:var(--charcoal);background:var(--primary);
+    padding:24px 16px 48px;
+  }
+  .sheet{
+    background:var(--bg);border-radius:18px;max-width:760px;margin:0 auto;
+    padding:40px 34px 34px;box-shadow:0 20px 60px rgba(0,0,0,.35);
+  }
+  .top{display:flex;align-items:center;gap:14px;padding-bottom:20px;border-bottom:1px solid var(--line);}
+  .top img{width:52px;height:auto;display:block;flex-shrink:0;}
+  .top .who .name{font-family:'Fraunces',serif;font-weight:600;font-size:20px;color:var(--primary);line-height:1.2;}
+  .top .who .kind{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);font-weight:700;margin-top:3px;}
+  .top .back{margin-left:auto;}
+  a.ghost{
+    display:inline-block;border:1px solid var(--muted);color:var(--muted);border-radius:8px;
+    padding:8px 13px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;
+  }
+  a.ghost:hover{border-color:var(--primary);color:var(--primary);}
+  button.ghost{
+    border:1px solid var(--muted);color:var(--muted);background:none;border-radius:8px;
+    padding:8px 13px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter';white-space:nowrap;
+  }
+  button.ghost:hover{border-color:var(--primary);color:var(--primary);}
+
+  h1{font-family:'Fraunces',serif;font-weight:500;font-size:26px;color:var(--primary);margin:26px 0 8px;line-height:1.25;}
+  p.lede{font-size:14px;color:var(--muted);margin:0 0 6px;line-height:1.6;}
+
+  h2{
+    font-family:'Fraunces',serif;font-weight:600;font-size:17px;color:var(--primary);
+    margin:34px 0 10px;padding-top:22px;border-top:1px solid var(--line);
+  }
+  h3{font-size:13px;font-weight:700;color:var(--primary);margin:20px 0 6px;text-transform:uppercase;letter-spacing:.05em;}
+  p{font-size:14px;line-height:1.65;margin:0 0 12px;}
+  ul,ol{margin:0 0 12px;padding-left:22px;}
+  li{font-size:14px;line-height:1.65;margin-bottom:7px;}
+  strong{color:var(--primary);}
+
+  /* A line to actually say out loud. Set apart because it is read differently
+     from the paragraph above it -- it is a script, not an explanation. */
+  .say{
+    background:#fff;border-left:3px solid var(--accent);border-radius:0 9px 9px 0;
+    padding:14px 16px;margin:0 0 14px;font-size:14px;line-height:1.6;color:var(--primary-dark);
+  }
+  .say .tag{
+    display:block;font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--accent-dark);font-weight:700;margin-bottom:6px;
+  }
+  .steps{counter-reset:s;list-style:none;padding:0;margin:0 0 14px;}
+  .steps li{
+    counter-increment:s;position:relative;padding-left:34px;margin-bottom:12px;
+  }
+  .steps li:before{
+    content:counter(s);position:absolute;left:0;top:1px;
+    width:23px;height:23px;border-radius:50%;background:var(--primary);color:#fff;
+    font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;
+  }
+  .note{
+    background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:0 0 14px;
+    font-size:13px;line-height:1.6;color:var(--muted);
+  }
+  .note b{color:var(--primary);}
+  table{width:100%;border-collapse:collapse;margin:0 0 14px;}
+  th,td{text-align:left;font-size:13.5px;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:700;}
+  td:first-child{font-weight:700;color:var(--primary);white-space:nowrap;}
+
+  .foot{margin-top:34px;padding-top:18px;border-top:1px solid var(--line);display:flex;align-items:center;gap:8px;}
+  .foot .credit{font-size:11.5px;color:var(--muted);}
+  .foot .credit strong{color:var(--primary);}
+  .foot img{width:18px;height:auto;display:block;}
+
+  @media (max-width:560px){
+    body{padding:14px 10px 32px;}
+    .sheet{padding:26px 20px 22px;border-radius:14px;}
+    h1{font-size:22px;}
+    .top{flex-wrap:wrap;}
+    .top .back{margin-left:0;width:100%;display:flex;gap:8px;}
+  }
+
+  /* Printed, this is the handout. The page background, the card shadow and
+     the two buttons are screen furniture and have no business on paper. */
+  @media print{
+    body{background:#fff;padding:0;}
+    .sheet{box-shadow:none;border-radius:0;max-width:none;padding:0;background:#fff;}
+    .noprint{display:none !important;}
+    h2{break-after:avoid;page-break-after:avoid;}
+    .say,.note,table,.steps li{break-inside:avoid;page-break-inside:avoid;}
+    a{color:inherit;text-decoration:none;}
+  }
+</style>
+</head>
+<body>
+
+<div class="sheet">
+  <div class="top">
+    <!-- onerror, because a stored logoUrl can go dead (a dealer moves their
+           site, an image is renamed) and a broken-image icon beside their own
+           name is worse than 50.'s mark. this.onerror is cleared first so a
+           missing fallback cannot loop. -->
+      <img data-tenant-logo src="assets/50-platform-logo.png" alt="logo"
+           onerror="this.onerror=null;this.src='assets/50-platform-logo.png';" />
+    <div class="who">
+      <div class="name" data-tenant-name>Your company</div>
+      <div class="kind">Referral Playbook</div>
+    </div>
+    <div class="back noprint">
+      <a class="ghost" href="fifty-settings.html">Back to settings</a>
+      <button type="button" class="ghost" id="printBtn">Print / Save PDF</button>
+    </div>
+  </div>
+
+  <h1>How to actually get referrals out of this</h1>
+  <p class="lede">
+    The program runs itself once a customer has their link. Everything in here is about the
+    ninety seconds before that — the handoff — and the handful of habits that turn a quiet
+    month into a steady one. Read it once, then keep the two scripts.
+  </p>
+
+  <h2>The whole thing in five steps</h2>
+  <ol class="steps">
+    <li><strong>You finish a job.</strong> A happy customer is the only raw material this needs.</li>
+    <li><strong>You add them on the dashboard</strong> — name, email, phone. That sends them their
+      own referral link by email, over your name, immediately.</li>
+    <li><strong>They pass the link to somebody.</strong> A text, a Facebook comment, a neighbour
+      over the fence. The link is theirs and it does not expire.</li>
+    <li><strong>That person fills in the short form</strong> on the other end of the link, and lands
+      in your list as a new inquiry with the referrer's name attached.</li>
+    <li><strong>You close it, then mark the referral paid.</strong> Two e-gift cards go out — one to
+      the customer who referred, one to the person who bought.</li>
+  </ol>
+  <div class="note">
+    <b>The only step that needs a human is step 2.</b> Every month that underperforms, it is
+    because somebody finished a job and never added the customer — not because the referral
+    offer was not good enough.
+  </div>
+
+  <h2>Say it out loud at the handoff</h2>
+  <p>
+    The email does the explaining. Your job is to make sure it is opened, and that takes one
+    sentence at the moment they are happiest — standing there looking at the finished work, not
+    three weeks later.
+  </p>
+  <div class="say">
+    <span class="tag">At the handoff</span>
+    "One more thing before I go — I'm going to email you a referral link. If you send somebody
+    our way and they end up buying, you both get an e-gift card. Takes you one text. Watch for
+    it in the next few minutes so it doesn't get buried."
+  </div>
+  <p>
+    Three things are doing work in there: <strong>both</strong> get a card, it costs them
+    <strong>one text</strong>, and it is arriving <strong>now</strong> so they should look for it.
+    Say it in your own words, keep those three.
+  </p>
+
+  <h3>If they say "sure, send it"</h3>
+  <p>Add them on the dashboard before you get in the truck. Not at the end of the day.</p>
+
+  <h3>If they hesitate</h3>
+  <div class="say">
+    <span class="tag">No pressure version</span>
+    "No obligation at all — it just sits in your inbox. If somebody asks who did the work,
+    you'll have something to send them."
+  </div>
+
+  <h2>The follow-up that actually matters</h2>
+  <p>
+    A customer who shared their link within the first week usually shares it again. A customer
+    who never opened the email never will, and that is the one worth a phone call.
+  </p>
+  <p>
+    Open <strong>People you've invited</strong> on the dashboard. Two flags are worth acting on
+    the day you see them:
+  </p>
+  <table>
+    <tr><th>What you see</th><th>What to do</th></tr>
+    <tr>
+      <td>Bounced</td>
+      <td>The address is wrong, so nothing you send arrives. Get the right email and add them
+        again — it is one minute and it recovers a referral you had already earned.</td>
+    </tr>
+    <tr>
+      <td>Unsubscribed</td>
+      <td>They asked to stop being emailed. Respect it. Their link still works, so copy it and
+        text it to them if you have that kind of relationship. Nothing further is sent.</td>
+    </tr>
+  </table>
+  <p>
+    Everyone else: the system sends its own reminder later, so you do not have to chase. If you
+    want to, <strong>Resend</strong> on their row sends the same link again with nothing lost.
+  </p>
+
+  <h2>When a referral comes in</h2>
+  <ol class="steps">
+    <li><strong>Call them the same day.</strong> They were sent by somebody they trust, which
+      makes this the warmest lead you will get all week and the easiest one to let go cold.</li>
+    <li><strong>Mention the referrer by name.</strong> "Dana said you might be looking" opens a
+      conversation that "I'm following up on a web inquiry" does not.</li>
+    <li><strong>Quote it like any other job.</strong> The gift cards are not a discount and do not
+      come out of your price.</li>
+    <li><strong>Mark it paid once it closes</strong> — on the Referrals list, flip the switch on
+      that row. That is what sends both cards.</li>
+  </ol>
+  <div class="note">
+    <b>Marking paid cannot be undone,</b> and it is what triggers the cards and any fee on your
+    account. Flip it when the job is actually sold, not when it looks likely.
+  </div>
+
+  <h2>Two habits that double the numbers</h2>
+  <h3>1. Add everybody, not the ones you think will refer</h3>
+  <p>
+    The referrals that close come from the customers nobody expected. It costs nothing to add
+    somebody who never shares, and the one who surprises you pays for the whole program.
+  </p>
+  <h3>2. Put it where customers already are</h3>
+  <p>
+    Your link page is yours to point at. Mention the program on the invoice, in your email
+    signature, on the yard sign, in the Facebook post with the finished photos. The customers
+    who already recommend you by word of mouth are the ones who will use it — they are simply
+    not being handed anything to send.
+  </p>
+
+  <h2>What to say when somebody asks how it works</h2>
+  <div class="say">
+    <span class="tag">In one breath</span>
+    "You get a link. Send it to anybody who might need what we do. If they buy, you get an
+    e-gift card and so do they. That's the whole thing."
+  </div>
+  <p>
+    If they want the fine print, every page has a terms link at the bottom with your own
+    eligibility wording on it. You can change that wording — and every other sentence your
+    customers read — from <strong>Settings → Your wording</strong>, any time, without asking
+    anybody.
+  </p>
+
+  <div class="foot">
+    <img src="assets/50-platform-logo.png" width="18" height="18" alt="50." />
+    <span class="credit">Powered by <strong>50.</strong> · referwith50.com</span>
+  </div>
+</div>
+
+<script>
+// Same two constants and the same /api/me read as the dashboard, so the
+// printed handout carries the company's own name, logo and colours rather
+// than 50.'s. Not signed in is not an error here: this page says nothing
+// confidential, so it simply renders in 50.'s own neutral branding.
+const API_BASE = "https://five0-platform.onrender.com/api";
+
+function getSession(){
+  try{ return JSON.parse(localStorage.getItem('fifty:session') || 'null'); }catch(e){ return null; }
+}
+
+function applyBrand(me){
+  const t = (me && me.tenant_branding) || {};
+  const r = document.documentElement.style;
+  const set = (name, value) => { if(value) r.setProperty(name, value); };
+  set('--primary', t.primaryColor);
+  set('--primary-dark', t.primaryDark);
+  set('--secondary', t.secondary);
+  set('--accent', t.accentColor);
+  set('--accent-dark', t.accentDark);
+  set('--bg', t.bg);
+  if(me && me.tenant_name){
+    document.title = me.tenant_name + ' — Referral Playbook';
+    document.querySelectorAll('[data-tenant-name]').forEach(el => { el.textContent = me.tenant_name; });
+  }
+  if(t.logoUrl){
+    document.querySelectorAll('[data-tenant-logo]').forEach(el => { el.src = t.logoUrl; });
+  }
+}
+
+(async () => {
+  const session = getSession();
+  if(!session) return;
+  try{
+    const res = await fetch(API_BASE + '/me', { headers: { 'Authorization': 'Bearer ' + session.access_token } });
+    if(!res.ok) return;
+    applyBrand(await res.json());
+  }catch(e){ /* the generic playbook is still the playbook */ }
+})();
+
+document.getElementById('printBtn').addEventListener('click', () => window.print());
+</script>
+
+</body>
+</html>

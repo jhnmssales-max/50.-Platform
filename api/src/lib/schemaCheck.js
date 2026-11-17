@@ -48,6 +48,19 @@ const REQUIRED_COLUMNS = [
   ['integration_requests', 'response_body', '20261112000000_crm_integration_api_keys'],
 ];
 
+// Policies, checked the same way and reported differently — see below.
+//
+// A migration that only moves an RLS policy adds no column, so the list
+// above cannot see it, and the failure it causes is the quiet kind: a
+// salesperson opens Connect your CRM, the policy still says admins only,
+// and they get an empty list and a key that vanishes the moment they create
+// it. Nothing errors. Nothing is logged. The screen simply looks broken.
+const REQUIRED_POLICIES = [
+  // 20261117000000_dealer_settings_any_login
+  ['api_keys', 'api_keys_select_own_tenant', '20261117000000_dealer_settings_any_login'],
+  ['api_keys', 'api_keys_update_own_tenant', '20261117000000_dealer_settings_any_login'],
+];
+
 // Returns the entries this database does not have, in the order listed.
 async function findMissingColumns(pool, required = REQUIRED_COLUMNS) {
   const { rows } = await pool.query(
@@ -61,6 +74,20 @@ async function findMissingColumns(pool, required = REQUIRED_COLUMNS) {
   );
   const have = new Set(rows.map((r) => `${r.table_name}.${r.column_name}`));
   return required.filter(([t, c]) => !have.has(`${t}.${c}`));
+}
+
+async function findMissingPolicies(pool, required = REQUIRED_POLICIES) {
+  const { rows } = await pool.query(
+    `select tablename, policyname
+       from pg_policies
+      where schemaname = 'public'
+        and (tablename, policyname) in (
+          select * from unnest($1::text[], $2::text[])
+        )`,
+    [required.map((r) => r[0]), required.map((r) => r[1])]
+  );
+  const have = new Set(rows.map((r) => `${r.tablename}.${r.policyname}`));
+  return required.filter(([t, p]) => !have.has(`${t}.${p}`));
 }
 
 // Checked once, at boot. Three outcomes, deliberately different:
@@ -84,9 +111,40 @@ async function assertSchemaUpToDate(pool, { exit = () => process.exit(1) } = {})
     return { ran: false, missing: [] };
   }
 
+  // Policies are warned about, not died on, and the difference is
+  // deliberate. A missing column is read inside the transaction that marks a
+  // referral paid, after 50.'s fee has been charged — starting without it is
+  // not the safe option. A missing policy hides one screen from one kind of
+  // login. Refusing to boot over that would take the whole platform down to
+  // protect a settings tab, which is the wrong trade; a loud line in the
+  // deploy log is the right one.
+  let missingPolicies = [];
+  try {
+    missingPolicies = await findMissingPolicies(pool);
+  } catch (err) {
+    console.error(`SCHEMA CHECK could not read the RLS policies: ${err.message}. Carrying on.`);
+  }
+  if (missingPolicies.length) {
+    const byMig = new Map();
+    for (const [table, policy, migration] of missingPolicies) {
+      if (!byMig.has(migration)) byMig.set(migration, []);
+      byMig.get(migration).push(`${table}.${policy}`);
+    }
+    console.error(
+      'SCHEMA CHECK: the database is missing RLS policies this code expects.\n' +
+        [...byMig].map(([m, ps]) => `  supabase/migrations/${m}.sql\n` + ps.map((p) => `      ${p}`).join('\n')).join('\n') +
+        '\nUntil those are applied, the screens behind them look broken rather than\n' +
+        'failing: rows a policy still hides simply do not appear. Starting anyway —\n' +
+        'everything else works.'
+    );
+  }
+
   if (!missing.length) {
-    console.log(`Schema check: all ${REQUIRED_COLUMNS.length} required columns present.`);
-    return { ran: true, missing: [] };
+    console.log(
+      `Schema check: all ${REQUIRED_COLUMNS.length} required columns present` +
+        (missingPolicies.length ? `, ${missingPolicies.length} RLS policies missing (see above).` : '.')
+    );
+    return { ran: true, missing: [], missingPolicies };
   }
 
   const byMigration = new Map();
@@ -111,4 +169,10 @@ async function assertSchemaUpToDate(pool, { exit = () => process.exit(1) } = {})
   return exit();
 }
 
-module.exports = { assertSchemaUpToDate, findMissingColumns, REQUIRED_COLUMNS };
+module.exports = {
+  assertSchemaUpToDate,
+  findMissingColumns,
+  findMissingPolicies,
+  REQUIRED_COLUMNS,
+  REQUIRED_POLICIES,
+};
