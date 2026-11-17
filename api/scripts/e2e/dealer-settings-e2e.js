@@ -92,7 +92,7 @@ process.on('exit',teardown);process.on('uncaughtException',e=>{console.error('TH
 
   // Every page in the feature, served together so the links between them work.
   const PAGES=['fifty-template-dealer.html','fifty-settings.html'];
-  const MANIFEST=fs.readFileSync(path.join(ROOT,'manifest.webmanifest'),'utf8');
+  const MANIFEST=fs.readFileSync(path.join(ROOT,'manifest.json'),'utf8');
   const served={};
   for(const f of PAGES){
     served[f]=fs.readFileSync(path.join(ROOT,f),'utf8')
@@ -102,7 +102,7 @@ process.on('exit',teardown);process.on('uncaughtException',e=>{console.error('TH
   http.createServer((rq,rs)=>{
     const name=(rq.url||'').split('?')[0].replace(/^\//,'');
     if(served[name]){ rs.writeHead(200,{'Content-Type':'text/html'}); return rs.end(served[name]); }
-    if(name==='manifest.webmanifest'){ rs.writeHead(200,{'Content-Type':'application/manifest+json'}); return rs.end(MANIFEST); }
+    if(name==='manifest.json'){ rs.writeHead(200,{'Content-Type':'application/json'}); return rs.end(MANIFEST); }
     rs.writeHead(200,{'Content-Type':'text/plain'}); rs.end('');
   }).listen(P.page);
 

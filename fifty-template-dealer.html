@@ -4,7 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Referral Incentive</title>
-<link rel="manifest" href="manifest.webmanifest">
+<!-- .json, not .webmanifest: Render serves an unknown extension as
+     binary/octet-stream, and a manifest a browser will not parse is a
+     manifest that cannot name the installed app. Checked live. -->
+<link rel="manifest" href="manifest.json">
 <!-- The name an installed shortcut keeps. A browser freezes this when the
      shortcut is created and never updates it from document.title, so a
      shortcut made on one company's dashboard would otherwise carry that
