@@ -16,16 +16,43 @@
     --accent:#E8A828; --accent-bright:#F5BE4E; --accent-dark:#B8810C;
     --bg:#F8F8F8; --charcoal:#3C4A63; --ink:#16284F; --muted:#7C89A3;
     --line:#E2E6EE; --card:#FFFFFF; --danger:#A12B2B; --ok:#1F7A5C; --warn-bg:#FBF3DC;
-    --tintbg:#EEF1F6;
+    --tintbg:#EEF1F6; --on-navy:#D7DEEC; --on-navy-dim:#9CAAC6;
   }
   *{box-sizing:border-box;}
-  body{margin:0;font-family:'Inter',system-ui,sans-serif;color:var(--charcoal);background:var(--bg);font-size:15px;line-height:1.45;}
-  h1,h2,h3{font-weight:800;letter-spacing:-.02em;color:var(--primary);margin:0;}
+  /* The website's own background, rule for rule: a navy gradient that stays
+     put while the page scrolls, with the 50. monogram tiled over it at 170px.
+     The tile is served from the marketing site so the two can never drift
+     apart; if it ever fails to load the gradient underneath still reads
+     correctly, which is why the colour is on body and the tile is a layer
+     above it rather than one shorthand. */
+  body{margin:0;font-family:'Inter',system-ui,sans-serif;color:var(--on-navy);
+    background:linear-gradient(170deg,#1A3366 0%,#1A3366 38%,#0C1E48 100%) fixed;
+    font-size:15px;line-height:1.45;}
+  body::before{content:'';position:fixed;inset:-240px;z-index:-1;pointer-events:none;
+    background:url('https://referwith50.com/assets/monogram.svg') repeat;background-size:170px 170px;}
+  h1,h2,h3{font-weight:800;letter-spacing:-.02em;margin:0;}
   h2{font-size:21px;} h3{font-size:17px;}
   button,input,select,textarea{font:inherit;color:inherit;}
   .hide{display:none!important;}
   .muted{color:var(--muted);font-size:13px;}
   .num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;}
+
+  /* ---- two colour contexts -------------------------------------------
+     Everything now sits on navy, so text has two homes: straight on the
+     page, where it must be light, and inside a white surface, where it
+     must be dark. Rather than chase every selector, the page default is
+     the light one and each surface puts the dark one back. A new card
+     anywhere inherits the right behaviour without being listed here. */
+  .panel,.card,details.card,.tablewrap,.stat,.due,.notice,.callcard,.calgrid,
+  dialog,.duelist,.wiz .wstage{color:var(--charcoal);}
+  h1,h2,h3{color:#FFFFFF;}
+  .panel h1,.panel h2,.panel h3,.card h2,.card h3,.tablewrap h3,.callcard h3,
+  .notice h3,dialog h1,dialog h2,dialog h3,.wiz .wh,.stagehead,
+  details.card > summary{color:var(--primary);}
+  .muted{color:var(--on-navy-dim);}
+  .panel .muted,.card .muted,.tablewrap .muted,.due .muted,.notice .muted,
+  .callcard .muted,.calgrid .muted,dialog .muted,.stat span,.due .what p,
+  .hint,.wiz .wsub,.wiz .wstrip{color:var(--muted);}
 
   /* sign-in */
   #loginBox{max-width:380px;margin:12vh auto 0;padding:0 16px;}
@@ -36,7 +63,8 @@
   header.top img{height:38px;background:transparent;border-radius:0;padding:0;}
   .brand .tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-dark);font-weight:700;}
   label{display:block;font-size:13px;font-weight:600;margin:12px 0 4px;}
-  input,select,textarea{width:100%;padding:9px 11px;border:1px solid #C9D2E2;border-radius:8px;background:#fff;}
+  input,select,textarea{width:100%;padding:9px 11px;border:1px solid #C9D2E2;border-radius:8px;
+    background:#fff;color:var(--charcoal);}
   input:focus,select:focus,textarea:focus{outline:2px solid var(--secondary);outline-offset:1px;}
   .btn{display:inline-block;border:0;border-radius:8px;padding:9px 16px;font-weight:700;cursor:pointer;
     background:var(--accent);color:var(--ink);transition:background .12s ease;}
@@ -61,9 +89,13 @@
   header.top{background:var(--primary);color:#fff;padding:12px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
     header.top .who{margin-left:auto;font-size:13px;opacity:.92;}
   header.top button{background:transparent;border:1px solid rgba(255,255,255,.55);color:#fff;border-radius:8px;padding:5px 10px;cursor:pointer;}
-  nav.tabs{display:flex;gap:4px;padding:10px 16px 0;border-bottom:1px solid var(--line);background:var(--card);overflow-x:auto;}
-  nav.tabs button{border:0;background:none;padding:10px 16px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;}
-  nav.tabs button.on{color:var(--primary);border-bottom-color:var(--accent);}
+  /* The tab strip carries on from the navy header rather than cutting it off
+     with a white band, which is how the site's own nav sits over its hero. */
+  nav.tabs{display:flex;gap:4px;padding:10px 16px 0;border-bottom:1px solid rgba(215,222,236,.18);
+    background:rgba(10,24,54,.55);overflow-x:auto;}
+  nav.tabs button{border:0;background:none;padding:10px 16px;font-weight:600;color:var(--on-navy-dim);cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;}
+  nav.tabs button:hover{color:#fff;}
+  nav.tabs button.on{color:#FFFFFF;border-bottom-color:var(--accent);}
   main{max-width:1080px;margin:0 auto;padding:18px 16px 60px;}
   .row{display:flex;gap:12px;flex-wrap:wrap;}
   .row > *{flex:1 1 180px;min-width:0;}
@@ -138,7 +170,11 @@
   tr:last-child td{border-bottom:0;}
   td select{padding:6px 8px;min-width:140px;}
   td input.startdate{min-width:140px;}
-  .pill{display:inline-block;font-size:12px;font-weight:600;border-radius:99px;padding:2px 9px;background:var(--tintbg);color:var(--primary);}
+  /* nowrap: "can sign in" and "no login" were breaking into three stacked
+     words inside the pill, which made the Login column three lines tall on
+     every row. They are status words, never long enough to need a column. */
+  .pill{display:inline-block;font-size:12px;font-weight:600;border-radius:99px;padding:2px 9px;
+    background:var(--tintbg);color:var(--primary);white-space:nowrap;}
   .pill.open{background:#E6F0FA;color:#1F4E7A;} .pill.won{background:#E3F3EA;color:var(--ok);} .pill.lost{background:#F1E6E6;color:var(--danger);}
   .pill.off{background:#EEE;color:#777;}
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:16px;}
@@ -164,13 +200,34 @@
   .calgrid .day.today .dnum{color:var(--primary);font-weight:700;}
   /* A chip has to stay inside its column at every width, so it wraps rather
      than pushing the grid wider — min-width:0 on the cell is what allows it. */
-  .chip{font-size:12px;line-height:1.3;border-radius:6px;padding:2px 6px;text-align:left;
+  /* One line each, cut with an ellipsis. Wrapping is what made the month
+     unreadable: "Hill Country Barns" became three stacked fragments and a
+     day with four companies in it ran 350px tall while its neighbours sat
+     empty. The full name is on the title attribute, and the day dialog has
+     it in full. */
+  .daydots{display:flex;flex-direction:column;gap:3px;min-width:0;}
+  .chip{display:block;font-size:12px;line-height:1.35;border-radius:6px;padding:2px 6px;text-align:left;
     border:0;cursor:pointer;background:#E6F0FA;color:#1F4E7A;font-weight:600;
-    overflow-wrap:anywhere;width:100%;}
+    width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .chip.more{background:transparent;color:var(--muted);font-weight:600;padding-left:6px;
+    text-decoration:underline;}
+  .chip.more:hover{color:var(--primary);}
   .chip.done{background:var(--tintbg);color:var(--muted);text-decoration:line-through;font-weight:500;}
   .chip.late{background:#F8E7DA;color:#8A5A2B;}
   .chip.mile{background:var(--tintbg);color:var(--muted);font-weight:500;cursor:default;}
   .chip.mile.won{background:#E3F3EA;color:var(--ok);}
+  /* What the marks mean. A key beats the paragraph of explanation that used
+     to sit at the bottom of the tab. */
+  .callegend{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;margin:10px 2px 0;font-size:12.5px;}
+  .callegend span{display:flex;align-items:center;gap:7px;}
+  .callegend .k{width:11px;height:11px;border-radius:3px;flex:0 0 auto;display:inline-block;}
+  .callegend .k.fu{background:#E6F0FA;border:1px solid #1F4E7A;}
+  .callegend .k.late{background:#F8E7DA;border:1px solid #8A5A2B;}
+  .callegend .k.mile{background:var(--tintbg);border:1px solid #9AA6BC;}
+  .callegend .k.won{background:#E3F3EA;border:1px solid var(--ok);}
+  /* One day, in full, when the cell could only show the first few. */
+  .daylist{display:flex;flex-direction:column;gap:6px;margin:4px 0 14px;}
+  .daylist > div{padding:7px 10px;background:var(--tintbg);border-radius:8px;font-size:14px;}
   /* The actionable list under the grid. */
   .duelist{display:flex;flex-direction:column;gap:8px;margin:6px 0 0;}
   .due{display:flex;gap:10px;align-items:flex-start;background:var(--card);border:1px solid var(--line);
@@ -594,9 +651,13 @@
   .searchbox{flex:1 1 260px;max-width:420px;min-width:0;padding:9px 12px;border:1px solid var(--line);
     border-radius:10px;background:var(--card);font:inherit;color:var(--charcoal);}
   .searchbox:focus{outline:2px solid var(--secondary);outline-offset:-1px;}
-  .linkish{background:none;border:0;padding:0;font:inherit;cursor:pointer;color:var(--primary);
-    font-weight:600;border-bottom:1px solid var(--line);}
-  .linkish:hover{border-bottom-color:var(--primary);}
+  .linkish{background:none;border:0;padding:0;font:inherit;cursor:pointer;color:var(--accent);
+    font-weight:600;border-bottom:1px solid rgba(232,168,40,.45);}
+  .linkish:hover{border-bottom-color:var(--accent);}
+  .panel .linkish,.card .linkish,.tablewrap .linkish,dialog .linkish{color:var(--primary);
+    border-bottom-color:var(--line);}
+  .panel .linkish:hover,.card .linkish:hover,.tablewrap .linkish:hover,
+  dialog .linkish:hover{border-bottom-color:var(--primary);}
   .reads{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;
     margin:6px 0 0;font-size:13px;}
   .reads b{font-weight:600;}
@@ -1048,6 +1109,40 @@ function calChip(it){
     + (it.at_time ? esc(clockOf(it.at_time)) + ' ' : '') + esc(it.title) + '</button>';
 }
 
+// A day's items, in the order they are worth seeing, and with the noise taken
+// out of them.
+//
+// Two things made the month unreadable. A company that signed up, had its
+// dashboard built and went live on the same day produced three separate marks
+// with the same name on it — three lines saying "Hill Country Barns" and no
+// more information than one. And a bulk import drops every lead on one date,
+// so a single cell grew to fifteen marks and 350px tall while the other
+// thirty-four sat empty.
+//
+// So: one mark per company per day, carrying everything that happened to it,
+// and only the first few are drawn. Follow-ups come first because they are
+// the only thing on this screen anyone has to act on.
+const CAL_MAX_CHIPS = 3;
+function calDayItems(items){
+  const followups = items.filter((it) => it.kind === 'followup');
+  const byCompany = new Map();
+  for(const it of items){
+    if(it.kind === 'followup') continue;
+    const key = (it.title || '').toLowerCase();
+    const seen = byCompany.get(key);
+    if(seen) seen.kinds.push(it.kind);
+    else byCompany.set(key, { title: it.title, kinds: [it.kind] });
+  }
+  return { followups, milestones: [...byCompany.values()] };
+}
+
+function calMilestoneChip(m){
+  const verbs = m.kinds.map((k) => (CAL_KINDS[k] || { verb: k }).verb);
+  // Green is reserved for the good news in the group: signed up, or live.
+  const good = m.kinds.some((k) => (CAL_KINDS[k] || {}).cls === 'won');
+  return '<span class="chip mile' + (good ? ' won' : '') + '" title="' + esc(m.title + ' — ' + verbs.join(', ')) + '">' + esc(m.title) + '</span>';
+}
+
 function calGrid(gridFrom){
   const [y, m] = calMonthStart().split('-').map(Number);
   const byDay = {};
@@ -1062,9 +1157,19 @@ function calGrid(gridFrom){
     if(i >= 35 && !inMonth && !(byDay[iso] || []).length) continue;
     // The chips live in their own box so that at phone width, where each one
     // is a dot, they flow as a row under the date rather than a column.
+    const { followups, milestones } = calDayItems(byDay[iso] || []);
+    // Follow-ups are never hidden behind "more" — they are the actionable
+    // half, and a day with four of them must not bury the fourth.
+    const room = Math.max(CAL_MAX_CHIPS - followups.length, 0);
+    const shownMiles = milestones.slice(0, room);
+    const hidden = milestones.length - shownMiles.length;
     cells += '<div class="day' + (inMonth ? '' : ' out') + (iso === today ? ' today' : '') + '">'
       + '<span class="dnum">' + Number(iso.split('-')[2]) + '</span>'
-      + '<div class="daydots">' + (byDay[iso] || []).map(calChip).join('') + '</div>'
+      + '<div class="daydots">'
+        + followups.map(calChip).join('')
+        + shownMiles.map(calMilestoneChip).join('')
+        + (hidden > 0 ? '<button type="button" class="chip more" data-calday="' + iso + '">+' + hidden + ' more</button>' : '')
+      + '</div>'
       + '</div>';
   }
   return '<div class="calgrid">' + cells + '</div>';
@@ -1098,6 +1203,31 @@ function dueList(){
   }).join('') + '</div>';
 }
 
+// Everything that happened on one day, in full, for when the cell could only
+// show the first few.
+function calDayDialog(iso){
+  const items = state.calItems.filter((it) => it.on_date === iso);
+  const { followups, milestones } = calDayItems(items);
+  openDialog(
+    '<h3>' + esc(prettyDay(iso)) + '</h3>'
+    + (followups.length
+      ? '<p class="muted">Your follow-ups</p><div class="daylist">'
+        + followups.map((f) => '<div><b>' + esc(f.title) + '</b>'
+          + (f.at_time ? ' <span class="muted">' + esc(clockOf(f.at_time)) + '</span>' : '')
+          + (f.done ? ' <span class="muted">— done</span>' : '') + '</div>').join('')
+        + '</div>'
+      : '')
+    + (milestones.length
+      ? '<p class="muted">' + (state.isRep ? 'Your companies' : 'Companies') + '</p><div class="daylist">'
+        + milestones.map((m) => '<div><b>' + esc(m.title) + '</b> <span class="muted">'
+          + esc(m.kinds.map((k) => (CAL_KINDS[k] || { verb: k }).verb).join(' · ')) + '</span></div>').join('')
+        + '</div>'
+      : '')
+    + '<div class="actions"><button type="button" class="btn secondary" id="calDayClose">Close</button></div>'
+  );
+  $('calDayClose').addEventListener('click', closeDialog);
+}
+
 async function renderCalendar(){
   const { gridFrom } = await loadCalendar();
   const [y, m] = calMonthStart().split('-').map(Number);
@@ -1111,17 +1241,25 @@ async function renderCalendar(){
     + '<button type="button" class="btn small" id="calAdd">Add a follow-up</button>'
     + '</div>'
     + calGrid(gridFrom)
+    // What the marks mean, as a key rather than a paragraph underneath that
+    // nobody reads twice.
+    + '<p class="callegend">'
+      + '<span><i class="k fu"></i>Your follow-up</span>'
+      + '<span><i class="k late"></i>Overdue</span>'
+      + '<span><i class="k mile"></i>Lead added · dashboard built</span>'
+      + '<span><i class="k won"></i>Signed up · went live</span>'
+      + '<span class="muted">' + (state.isRep ? 'Your companies.' : 'Every company’s.') + ' Follow-ups are only ever your own.</span>'
+    + '</p>'
     + '<h3 style="margin:22px 0 2px;">What is left to do</h3>'
     + '<p class="muted">Your own follow-ups. A digest of whatever is due goes to '
     + esc(state.me && state.me.email ? state.me.email : 'your email') + ' at 7am on the day.</p>'
-    + dueList()
-    + '<p class="muted" style="margin-top:18px;">The marks on the month are things that already happened — a lead signing up, a dashboard being built, a dealer going live. '
-    + (state.isRep ? 'Yours only.' : 'Every company’s.') + ' Follow-ups are only ever your own. On a phone each one is a dot.</p>';
+    + dueList();
 
   $('calPrev').addEventListener('click', () => { shiftMonth(-1); renderCalendar().catch((e) => flash(e.message)); });
   $('calNext').addEventListener('click', () => { shiftMonth(1); renderCalendar().catch((e) => flash(e.message)); });
   $('calToday').addEventListener('click', () => { state.calMonth = null; renderCalendar().catch((e) => flash(e.message)); });
   $('calAdd').addEventListener('click', () => followupDialog(null));
+  $('tab-calendar').querySelectorAll('[data-calday]').forEach((b) => b.addEventListener('click', () => calDayDialog(b.dataset.calday)));
   $('tab-calendar').querySelectorAll('[data-fu]').forEach((b) => b.addEventListener('click', () => followupDialog(b.dataset.fu)));
   $('tab-calendar').querySelectorAll('[data-tick]').forEach((b) => b.addEventListener('click', () => tickFollowup(b.dataset.tick, b)));
 }
