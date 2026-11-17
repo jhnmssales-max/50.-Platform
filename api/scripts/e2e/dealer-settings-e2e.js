@@ -92,6 +92,7 @@ process.on('exit',teardown);process.on('uncaughtException',e=>{console.error('TH
 
   // Every page in the feature, served together so the links between them work.
   const PAGES=['fifty-template-dealer.html','fifty-settings.html'];
+  const MANIFEST=fs.readFileSync(path.join(ROOT,'manifest.webmanifest'),'utf8');
   const served={};
   for(const f of PAGES){
     served[f]=fs.readFileSync(path.join(ROOT,f),'utf8')
@@ -101,6 +102,7 @@ process.on('exit',teardown);process.on('uncaughtException',e=>{console.error('TH
   http.createServer((rq,rs)=>{
     const name=(rq.url||'').split('?')[0].replace(/^\//,'');
     if(served[name]){ rs.writeHead(200,{'Content-Type':'text/html'}); return rs.end(served[name]); }
+    if(name==='manifest.webmanifest'){ rs.writeHead(200,{'Content-Type':'application/manifest+json'}); return rs.end(MANIFEST); }
     rs.writeHead(200,{'Content-Type':'text/plain'}); rs.end('');
   }).listen(P.page);
 
@@ -140,6 +142,25 @@ process.on('exit',teardown);process.on('uncaughtException',e=>{console.error('TH
   ok('the dashboard itself still works', await page.locator('#sendForm').isVisible());
   await go('fifty-template-dealer.html', ids.admin);
   ok('an admin sees the same one row, not a second screen', await page.locator('#settingsRow').isVisible());
+
+  // The name in the window, which is not document.title.
+  //
+  // Joseph found his dashboard window titled "Good Steward Structures" while
+  // North Mountain Structures was signed in. That name was never on this
+  // platform -- a browser freezes the name into a desktop shortcut when the
+  // shortcut is made and never updates it again, and his was made on an older
+  // standalone page. The manifest is the only thing that decides it, so it has
+  // to be neutral: one file serves every tenant.
+  ok('the page carries a manifest', (await page.locator('link[rel=manifest]').count())===1);
+  const mf = await page.evaluate(async () => {
+    const href = document.querySelector('link[rel=manifest]').getAttribute('href');
+    return (await fetch(href)).json();
+  });
+  ok('an installed shortcut is named for the platform, never a company',
+     mf.name === '50. Referral Platform' && !/steward|mountain/i.test(JSON.stringify(mf)), mf.name);
+  ok('and it opens on the dashboard', mf.start_url === '/login', mf.start_url);
+  ok('the tab title is this company, not another one',
+     (await page.title()) === 'Good Steward Structures — Referral Incentive', await page.title());
   await page.locator('#settingsRow').screenshot({path:'/var/tmp/settings-row.png',scale:'css'});
 
   // =====================================================================
