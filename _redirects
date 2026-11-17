@@ -19,12 +19,12 @@
 # are redirected on to the lead page. See api/src/routes/sharePreview.js.
 /r/*  https://five0-platform.onrender.com/r/:splat  200
 
-# /settings and /playbook: the two pages behind the gear at the foot of the
-# dealer dashboard. Both are linked from inside the app by their .html names,
-# so they work without these rules -- these are the short URLs to add in the
-# dashboard when somebody needs to be sent straight to one.
+# /settings: the page behind the gear at the foot of the dealer dashboard.
+# Linked from inside the app by its .html name, so it works without this rule
+# -- this is the short URL to add in the dashboard when somebody needs to be
+# sent straight to it. (There is no /playbook rule: the playbook is 50.'s own
+# PDF in the Supabase brand-uploads bucket, not a page in this repo.)
 /settings  /fifty-settings.html  200
-/playbook  /fifty-playbook.html  200
 
 # /reps -> fifty-reps.html: the sales-rep admin page (50. staff only; the API enforces it).
 /reps  /fifty-reps.html  200

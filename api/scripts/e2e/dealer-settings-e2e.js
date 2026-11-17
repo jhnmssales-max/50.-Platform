@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Verification of the dealer Settings feature — the gear at the foot of
 // fifty-template-dealer.html, the page behind it (fifty-settings.html), and
-// the playbook it links to (fifty-playbook.html).
+// the playbook it links to (50.'s own PDF, hosted in the Supabase bucket).
 //
 //   node scripts/e2e/dealer-settings-e2e.js
 //
@@ -91,7 +91,7 @@ process.on('exit',teardown);process.on('uncaughtException',e=>{console.error('TH
   for(let i=0;i<60;i++){try{await new Promise((r,j)=>http.get(`http://127.0.0.1:${P.api}/api/health`,r).on('error',j));break}catch{await new Promise(r=>setTimeout(r,200))}}
 
   // Every page in the feature, served together so the links between them work.
-  const PAGES=['fifty-template-dealer.html','fifty-settings.html','fifty-playbook.html'];
+  const PAGES=['fifty-template-dealer.html','fifty-settings.html'];
   const served={};
   for(const f of PAGES){
     served[f]=fs.readFileSync(path.join(ROOT,f),'utf8')
@@ -153,94 +153,128 @@ process.on('exit',teardown);process.on('uncaughtException',e=>{console.error('TH
   await page.locator('.card').screenshot({path:'/var/tmp/settings-wording.png',scale:'css'});
 
   // =====================================================================
-  section('Wording');
-  const stages=await page.locator('.stage').count();
-  ok('the sentences are grouped by where they come out', stages>=5, `${stages} groups`);
-  const boxes=await page.locator('[data-ck]').count();
-  const fieldCount=require('../../src/lib/tenantCopy').COPY_FIELDS.length;
-  ok('every field the platform defines has a box', boxes===fieldCount, `${boxes} boxes / ${fieldCount} fields`);
-  const ph=await page.locator('[data-ck="shareGreeting"]').getAttribute('placeholder');
-  ok('an untouched box shows the standard wording as its placeholder', Boolean(ph && ph.length>5), (ph||'').slice(0,46));
-  const already=await page.locator('[data-ck="inviteSubject"]').inputValue();
-  ok('a sentence already set comes back in its box', already==='A thank-you from Good Steward', already);
-  const tally=(await page.locator('[data-stagecount]').first().textContent())||'';
-  ok('each group says how many are in their own words', /in your words|standard/.test(tally), tally.trim());
+  section('Wording — the wizard, same one the Reps page uses');
+  const steps = await page.locator('[data-wstep]').count();
+  ok('one step per page a customer actually sees', steps >= 6, `${steps} steps`);
+  const boxes = await page.locator('[data-wkey]').count();
+  const fieldCount = require('../../src/lib/tenantCopy').COPY_FIELDS.length;
+  ok('every field the platform defines has a box', boxes === fieldCount, `${boxes} boxes / ${fieldCount} fields`);
+
+  // The point of the wizard: the boxes sit inside a drawing of the real page,
+  // so "the line after the link" is a line somebody can see.
+  ok('the first step draws the invite email as a Gmail window',
+     await page.locator('[data-wpane="0"] .gmail').isVisible());
+  ok('the box for the opening line sits inside that email',
+     await page.locator('[data-wpane="0"] .gm-body [data-wkey="inviteOpening"]').count() === 1);
+  const titles = await page.locator('.wpane .wh').allTextContents();
+  ok('each step is named for the page it draws', titles.some((t) => /email/i.test(t)) && titles.some((t) => /share page/i.test(t)),
+     titles.join(' · ').slice(0, 90));
+
+  const ph = await page.locator('[data-wkey="shareGreeting"]').getAttribute('placeholder');
+  ok('an untouched box shows the standard wording as its placeholder', Boolean(ph && ph.length > 5), (ph || '').slice(0, 46));
+  const already = await page.locator('[data-wkey="inviteSubject"]').inputValue();
+  ok('a sentence already set comes back in its box', already === 'A thank-you from Good Steward', already);
   ok('save is off until something changes', await page.locator('#saveWording').isDisabled());
 
-  // Finding a sentence. Seven collapsed groups is the whole reason this box
-  // exists: a dealer comes here because their email says "shed" and their
-  // customers buy garages, and the way to change that word is to type it.
-  const shownBoxes=async()=>page.locator('#stages .fld:not([hidden])').count();
-  await page.fill('#wordSearch','gift card'); await page.waitForTimeout(300);
-  const shedHits=await shownBoxes();
-  ok('searching a word in the standard wording finds its sentence', shedHits>0 && shedHits<fieldCount,
-     `${shedHits} of ${fieldCount} boxes`);
-  ok('and opens the group it is hiding in',
-     await page.locator('#stages .stage:not([hidden])').first().evaluate(d=>d.open));
-  ok('groups with no match are put away',
-     (await page.locator('#stages .stage[hidden]').count())>0);
-  await page.fill('#wordSearch','subject'); await page.waitForTimeout(300);
-  ok('searching a label works too', (await shownBoxes())>0 && (await shownBoxes())<=4, `${await shownBoxes()} boxes`);
-  await page.fill('#wordSearch','xyzzy'); await page.waitForTimeout(300);
+  // Finding a line. Hits are listed rather than filtered — a box drawn inside
+  // a Gmail window cannot be hidden without wrecking the window around it.
+  const hitCount = async () => page.locator('#wordHits [data-gokey]').count();
+  await page.fill('#wordSearch', 'gift card'); await page.waitForTimeout(350);
+  const cardHits = await hitCount();
+  ok('searching a word in the standard wording finds its line', cardHits > 0 && cardHits < fieldCount,
+     `${cardHits} of ${fieldCount}`);
+  ok('each hit says which page that line lives on',
+     /—/.test((await page.locator('#wordHits .h').first().textContent()) || ''),
+     ((await page.locator('#wordHits .h').first().textContent()) || '').slice(0, 60));
+  ok('and shows the word in the line it was found in',
+     (await page.locator('#wordHits .w b').count()) > 0);
+  ok('with the name above the line, not run together with it', await page.locator('#wordHits [data-gokey]').first().evaluate((el) => {
+    const h = el.querySelector('.h').getBoundingClientRect(), w = el.querySelector('.w').getBoundingClientRect();
+    return w.top >= h.bottom - 1;
+  }));
+  await page.fill('#wordSearch', 'xyzzy'); await page.waitForTimeout(300);
   ok('a word nothing says says so', await page.locator('#wordNoMatch').isVisible());
-  await page.click('#wordSearchClear'); await page.waitForTimeout(300);
-  ok('clearing puts every sentence back', (await shownBoxes())===fieldCount, `${await shownBoxes()} boxes`);
+  ok('and lists nothing', (await hitCount()) === 0);
 
-  // Reached the way a dealer reaches it, rather than by opening all seven.
-  await page.fill('#wordSearch','shareGreeting'); await page.waitForTimeout(300);
-  await page.locator('[data-ck="shareGreeting"]').fill('Thanks for trusting us with your build, {name}');
-  await page.waitForTimeout(250);
+  // Pressing a hit goes to the step that line lives on and puts the cursor in it.
+  await page.fill('#wordSearch', 'shareGreeting'); await page.waitForTimeout(350);
+  await page.locator('#wordHits [data-gokey="shareGreeting"]').click();
+  await page.waitForTimeout(600);
+  ok('pressing a hit opens the step that line lives on',
+     await page.locator('[data-wkey="shareGreeting"]').isVisible());
+  ok('and puts the cursor in that box',
+     (await page.evaluate(() => (document.activeElement || {}).dataset?.wkey)) === 'shareGreeting');
+
+  await page.locator('[data-wkey="shareGreeting"]').fill('Thanks for trusting us with your build, {name}');
+  await page.waitForTimeout(300);
   ok('typing turns save on', !(await page.locator('#saveWording').isDisabled()));
-  ok('and says how much is unsaved', ((await page.locator('#wordState').textContent())||'').includes('1 sentence'),
-     ((await page.locator('#wordState').textContent())||'').trim());
-  await page.click('#saveWording'); await page.waitForTimeout(1200);
-  let b=await branding();
-  ok('saving writes that sentence to the company', b.copy.shareGreeting==='Thanks for trusting us with your build, {name}',
-     String(b.copy.shareGreeting).slice(0,48));
-  ok('and leaves the sentence that was already there alone', b.copy.inviteSubject==='A thank-you from Good Steward');
-  ok('and leaves the colours alone', b.primaryColor==='#1c2b33' && b.bg==='#f7f4ee');
-  ok('it says so on screen', ((await page.locator('#wordMsg').textContent())||'').includes('live'),
-     ((await page.locator('#wordMsg').textContent())||'').trim().slice(0,60));
+  ok('and says how much is unsaved', ((await page.locator('#wordState').textContent()) || '').includes('1 line'),
+     ((await page.locator('#wordState').textContent()) || '').trim());
+  await page.locator('.card').screenshot({ path: '/var/tmp/settings-wording.png', scale: 'css' });
+
+  await page.click('#saveWording'); await page.waitForTimeout(1400);
+  let b = await branding();
+  ok('saving writes that line to the company', b.copy.shareGreeting === 'Thanks for trusting us with your build, {name}',
+     String(b.copy.shareGreeting).slice(0, 48));
+  ok('and leaves the line that was already there alone', b.copy.inviteSubject === 'A thank-you from Good Steward');
+  ok('and leaves the colours alone', b.primaryColor === '#1c2b33' && b.bg === '#f7f4ee');
+  ok('it says so on screen', ((await page.locator('#wordMsg').textContent()) || '').includes('live'),
+     ((await page.locator('#wordMsg').textContent()) || '').trim().slice(0, 60));
   ok('and save goes back off', await page.locator('#saveWording').isDisabled());
+  ok('a search survives a save', (await page.locator('#wordSearch').inputValue()) === 'shareGreeting');
 
-  // Clearing a box is how a dealer puts the standard wording back.
-  await page.fill('#wordSearch','subject'); await page.waitForTimeout(300);
-  await page.locator('[data-ck="inviteSubject"]').fill('');
+  // A step is marked done once one of its boxes holds the company's own words.
+  const donePane = await page.evaluate(() => {
+    const el = document.querySelector('[data-wkey="shareGreeting"]');
+    return Number(el.closest('[data-wpane]').dataset.wpane);
+  });
+  ok('the step holding it is marked done once you leave it', await page.evaluate((i) => {
+    const bar = document.querySelectorAll('[data-wstep]');
+    // Move off that step, which is when the bar re-reads what is filled in.
+    bar[i === 0 ? 1 : 0].click();
+    return bar[i].classList.contains('done');
+  }, donePane));
+
+  // The strip under the wizard puts the standard wording back, which is how a
+  // company undoes an edit without having to remember what was there.
+  await page.locator('#wordHits [data-gokey="shareGreeting"]').click();
+  await page.waitForTimeout(500);
+  await page.locator('[data-wkey="shareGreeting"]').focus();
   await page.waitForTimeout(200);
-  await page.click('#saveWording'); await page.waitForTimeout(1200);
-  b=await branding();
-  ok('clearing a box removes the override entirely', !('inviteSubject' in b.copy), JSON.stringify(Object.keys(b.copy)));
-  await page.fill('#wordSearch','shareGreeting'); await page.waitForTimeout(300);
-  ok('the other sentence survived that', b.copy.shareGreeting.startsWith('Thanks for trusting'));
+  ok('the strip offers to clear a box that has their words in it',
+     ((await page.locator('[data-wuse]').textContent()) || '').trim() === 'Clear it');
+  await page.locator('[data-wuse]').dispatchEvent('mousedown');
+  await page.waitForTimeout(300);
+  ok('pressing it empties the box', (await page.locator('[data-wkey="shareGreeting"]').inputValue()) === '');
+  ok('and then offers the standard wording back',
+     ((await page.locator('[data-wuse]').textContent()) || '').trim() === 'Use the standard wording');
+  // That button sets the value in script, which raises no input event — so
+  // without a listener of its own, clearing a line left Save greyed out and
+  // the change unsaveable.
+  ok('clearing from the strip turns Save on', !(await page.locator('#saveWording').isDisabled()));
 
-  ok('a search survives a save', (await page.locator('#wordSearch').inputValue())==='shareGreeting');
-
-  // The reset link is the same thing without typing.
-  await page.locator('[data-ck="shareGreeting"]').scrollIntoViewIfNeeded();
-  ok('an edited box offers to go back to standard',
-     await page.locator('[data-reset="shareGreeting"]').isVisible());
-  await page.click('[data-reset="shareGreeting"]'); await page.waitForTimeout(200);
-  ok('pressing it empties the box', (await page.locator('[data-ck="shareGreeting"]').inputValue())==='');
-  ok('and an empty box no longer offers it',
-     !(await page.locator('[data-reset="shareGreeting"]').isVisible()));
+  await page.click('#saveWording'); await page.waitForTimeout(1400);
+  b = await branding();
+  ok('clearing a box removes the override entirely', !('shareGreeting' in b.copy), JSON.stringify(Object.keys(b.copy)));
+  ok('the other line survived that', b.copy.inviteSubject === 'A thank-you from Good Steward');
 
   // The API's own wall, not the page's.
-  const rejected=await page.evaluate(async (port)=>{
-    const t=JSON.parse(localStorage.getItem('fifty:session')).access_token;
-    const r=await fetch(`http://127.0.0.1:${port}/api/tenant/brand`,{method:'PATCH',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+t},
-      body:JSON.stringify({copy:{somethingInvented:'x'}})});
+  const rejected = await page.evaluate(async (port) => {
+    const t = JSON.parse(localStorage.getItem('fifty:session')).access_token;
+    const r = await fetch(`http://127.0.0.1:${port}/api/tenant/brand`, { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + t },
+      body: JSON.stringify({ copy: { somethingInvented: 'x' } }) });
     return r.status;
-  },P.api);
-  ok('the API refuses a copy key it does not define', rejected===400, `status ${rejected}`);
-  const tooLong=await page.evaluate(async (port)=>{
-    const t=JSON.parse(localStorage.getItem('fifty:session')).access_token;
-    const r=await fetch(`http://127.0.0.1:${port}/api/tenant/brand`,{method:'PATCH',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+t},
-      body:JSON.stringify({copy:{inviteSubject:'x'.repeat(5000)}})});
+  }, P.api);
+  ok('the API refuses a copy key it does not define', rejected === 400, `status ${rejected}`);
+  const tooLong = await page.evaluate(async (port) => {
+    const t = JSON.parse(localStorage.getItem('fifty:session')).access_token;
+    const r = await fetch(`http://127.0.0.1:${port}/api/tenant/brand`, { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + t },
+      body: JSON.stringify({ copy: { inviteSubject: 'x'.repeat(5000) } }) });
     return r.status;
-  },P.api);
-  ok('and a sentence past its limit', tooLong===400, `status ${tooLong}`);
+  }, P.api);
+  ok('and a line past its limit', tooLong === 400, `status ${tooLong}`);
 
   // =====================================================================
   section('Nobody can edit another company');
@@ -257,7 +291,8 @@ process.on('exit',teardown);process.on('uncaughtException',e=>{console.error('TH
   ok('a smuggled tenant id is refused outright', cross===400, `status ${cross}`);
   ok('the other company is untouched either way', JSON.stringify(await branding(ids.otherTenant))===before);
   const mine=await branding();
-  ok('and the edit did not land on the sender either', mine.copy.inviteSubject===undefined);
+  ok('and the edit did not land on the sender either — the whole request was refused',
+     mine.copy.inviteSubject==='A thank-you from Good Steward', String(mine.copy.inviteSubject));
 
   // =====================================================================
   section('Your look');
@@ -287,8 +322,8 @@ process.on('exit',teardown);process.on('uncaughtException',e=>{console.error('TH
   b=await branding();
   ok('saving writes the colours to the company', b.accentColor==='#e8a828' && b.bg==='#fbf8f2',
      `${b.accentColor} / ${b.bg}`);
-  ok('and the wording they saved is still there afterwards',
-     b.copy.shareGreeting==='Thanks for trusting us with your build, {name}', JSON.stringify(b.copy));
+  ok('and the wording is still there afterwards',
+     b.copy.inviteSubject==='A thank-you from Good Steward', JSON.stringify(b.copy));
   ok('the page itself re-skins to the new colour',
      (await page.evaluate(()=>getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()))==='#e8a828');
   await page.locator('.card').screenshot({path:'/var/tmp/settings-look.png',scale:'css'});
@@ -336,22 +371,23 @@ process.on('exit',teardown);process.on('uncaughtException',e=>{console.error('TH
   // =====================================================================
   section('The playbook');
   await page.click('nav.tabs button[data-tab="playbook"]'); await page.waitForTimeout(300);
-  const link=page.locator('a.primarybtn');
-  ok('the playbook tab offers to open it', (await link.getAttribute('href'))==='fifty-playbook.html');
-  await go('fifty-playbook.html', ids.staff);
-  ok('the playbook opens', (await page.locator('h1').count())===1);
-  ok('in the company’s own name', ((await page.locator('.top .name').textContent())||'').includes('Good Steward'),
-     (await page.locator('.top .name').textContent())||'');
-  ok('with the colour they just picked',
-     (await page.evaluate(()=>getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()))==='#e8a828');
-  const body=(await page.locator('.sheet').textContent())||'';
-  ok('it says what to do at the handoff', /handoff/i.test(body));
-  ok('it has a script to read out', (await page.locator('.say').count())>=3, `${await page.locator('.say').count()} scripts`);
-  ok('and it tells them marking paid cannot be undone', /cannot be undone/i.test(body));
-  ok('print is offered but never printed on paper',
-     await page.locator('#printBtn').isVisible() &&
-     served['fifty-playbook.html'].includes('.noprint{display:none !important;}'));
-  await page.locator('.sheet').screenshot({path:'/var/tmp/playbook.png',scale:'css'});
+  const open = page.locator('#playbookOpen');
+  const dl = page.locator('#playbookDownload');
+  const href = await open.getAttribute('href');
+  // Hosted in the bucket the platform already uses for logos, not committed
+  // to this repository, which is public.
+  ok('the playbook tab points at the hosted deck',
+     /^https:\/\/[a-z0-9]+\.supabase\.co\/storage\/v1\/object\/public\/brand-uploads\/.+\.pdf$/.test(href || ''),
+     href || '(none)');
+  ok('and offers it as a download too', (await dl.getAttribute('href'))===href);
+  ok('it opens in a new tab rather than replacing the settings page',
+     (await open.getAttribute('target'))==='_blank' && /noopener/.test((await open.getAttribute('rel'))||''));
+  ok('the deck is not in this repository',
+     !fs.existsSync(path.join(ROOT,'fifty-playbook.html')));
+  const pb=(await page.locator('[data-panel="playbook"]').textContent())||'';
+  ok('the tab says what is in it', /when to send/i.test(pb) && /reminders/i.test(pb),
+     pb.replace(/\s+/g,' ').trim().slice(0,70));
+  await page.locator('.card').screenshot({path:'/var/tmp/settings-playbook.png',scale:'css'});
 
   // =====================================================================
   section('Phone width, and the gate');
