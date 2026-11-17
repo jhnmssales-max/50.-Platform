@@ -6,16 +6,21 @@
 <meta name="robots" content="noindex, nofollow">
 <title>50. Reps</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
+  /* 50. brand, read off referwith50.com's own :root. The names are the ones
+     this page already used, so every rule below keeps working: only the
+     values moved, from the old beige/sage palette to navy and gold. */
   :root{
-    --primary:#1C2B33; --primary-dark:#33475A; --secondary:#7C9FBB;
-    --accent:#C9974B; --accent-dark:#8B6B2E; --bg:#F7F4EE; --charcoal:#1B1B1B; --muted:#6B6A63;
-    --line:#E4DED3; --card:#FFFFFF; --danger:#A12B2B; --ok:#2B6B5A; --warn-bg:#FFF4D6;
+    --primary:#0C1E48; --primary-dark:#1A3366; --secondary:#2B4780;
+    --accent:#E8A828; --accent-bright:#F5BE4E; --accent-dark:#B8810C;
+    --bg:#F8F8F8; --charcoal:#3C4A63; --ink:#16284F; --muted:#7C89A3;
+    --line:#E2E6EE; --card:#FFFFFF; --danger:#A12B2B; --ok:#1F7A5C; --warn-bg:#FBF3DC;
+    --tintbg:#EEF1F6;
   }
   *{box-sizing:border-box;}
   body{margin:0;font-family:'Inter',system-ui,sans-serif;color:var(--charcoal);background:var(--bg);font-size:15px;line-height:1.45;}
-  h1,h2,h3{font-family:'Fraunces',serif;font-weight:600;color:var(--primary);margin:0;}
+  h1,h2,h3{font-weight:800;letter-spacing:-.02em;color:var(--primary);margin:0;}
   h2{font-size:21px;} h3{font-size:17px;}
   button,input,select,textarea{font:inherit;color:inherit;}
   .hide{display:none!important;}
@@ -26,16 +31,26 @@
   #loginBox{max-width:380px;margin:12vh auto 0;padding:0 16px;}
   .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;}
   .brand{display:flex;align-items:baseline;gap:10px;margin-bottom:14px;}
-  .brand .mark{font-family:'Fraunces',serif;font-size:30px;font-weight:600;color:var(--primary);}
+  .brand .mark{font-size:30px;font-weight:900;letter-spacing:-.03em;color:var(--primary);}
   .brand img,header.top img{height:44px;width:auto;display:block;}
-  header.top img{height:38px;background:#fff;border-radius:50%;padding:2px;}
+  header.top img{height:38px;background:transparent;border-radius:0;padding:0;}
   .brand .tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-dark);font-weight:700;}
   label{display:block;font-size:13px;font-weight:600;margin:12px 0 4px;}
-  input,select,textarea{width:100%;padding:9px 11px;border:1px solid #CFC8BA;border-radius:8px;background:#fff;}
+  input,select,textarea{width:100%;padding:9px 11px;border:1px solid #C9D2E2;border-radius:8px;background:#fff;}
   input:focus,select:focus,textarea:focus{outline:2px solid var(--secondary);outline-offset:1px;}
-  .btn{display:inline-block;border:0;border-radius:8px;padding:9px 16px;font-weight:600;cursor:pointer;background:var(--primary);color:#fff;}
-  .btn:hover{background:var(--primary-dark);}
-  .btn.secondary{background:#fff;color:var(--primary);border:1px solid var(--primary);}
+  .btn{display:inline-block;border:0;border-radius:8px;padding:9px 16px;font-weight:700;cursor:pointer;
+    background:var(--accent);color:var(--ink);transition:background .12s ease;}
+  .btn:hover{background:var(--accent-bright);}
+  .btn.secondary{background:#fff;color:var(--primary);border:1px solid #C9D2E2;font-weight:600;}
+  .btn.secondary:hover{background:var(--tintbg);border-color:var(--secondary);}
+  /* Gold is the brand's call to action, and it only works while it is rare.
+     On a table it is on every row at once -- 200 gold buttons on a page of
+     leads, which is both loud and meaningless, since none of them is THE
+     action. Inside a table the primary button goes navy instead: still
+     clearly the one to press in its row, quiet enough to repeat. Gold stays
+     for the page's own actions and for the button that commits a dialog. */
+  .tablewrap td .btn:not(.secondary):not(.danger){background:var(--primary);color:#fff;}
+  .tablewrap td .btn:not(.secondary):not(.danger):hover{background:var(--primary-dark);}
   .btn.small{padding:5px 10px;font-size:13px;}
   .btn.danger{background:#fff;color:var(--danger);border:1px solid var(--danger);}
   .btn:disabled{opacity:.55;cursor:default;}
@@ -48,7 +63,7 @@
   header.top button{background:transparent;border:1px solid rgba(255,255,255,.55);color:#fff;border-radius:8px;padding:5px 10px;cursor:pointer;}
   nav.tabs{display:flex;gap:4px;padding:10px 16px 0;border-bottom:1px solid var(--line);background:var(--card);overflow-x:auto;}
   nav.tabs button{border:0;background:none;padding:10px 16px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;}
-  nav.tabs button.on{color:var(--primary);border-bottom-color:var(--primary);}
+  nav.tabs button.on{color:var(--primary);border-bottom-color:var(--accent);}
   main{max-width:1080px;margin:0 auto;padding:18px 16px 60px;}
   .row{display:flex;gap:12px;flex-wrap:wrap;}
   .row > *{flex:1 1 180px;min-width:0;}
@@ -119,16 +134,16 @@
     .tablewrap td input.startdate{min-width:118px;}
   }
   th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;}
-  td{padding:10px 12px;border-bottom:1px solid #F0EBE1;vertical-align:middle;}
+  td{padding:10px 12px;border-bottom:1px solid #EFF2F7;vertical-align:middle;}
   tr:last-child td{border-bottom:0;}
   td select{padding:6px 8px;min-width:140px;}
   td input.startdate{min-width:140px;}
-  .pill{display:inline-block;font-size:12px;font-weight:600;border-radius:99px;padding:2px 9px;background:#EDE8DD;}
+  .pill{display:inline-block;font-size:12px;font-weight:600;border-radius:99px;padding:2px 9px;background:var(--tintbg);color:var(--primary);}
   .pill.open{background:#E6F0FA;color:#1F4E7A;} .pill.won{background:#E3F3EA;color:var(--ok);} .pill.lost{background:#F1E6E6;color:var(--danger);}
   .pill.off{background:#EEE;color:#777;}
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:16px;}
   .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;}
-  .stat b{display:block;font-size:24px;font-family:'Fraunces',serif;color:var(--primary);font-variant-numeric:tabular-nums;}
+  .stat b{display:block;font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--primary);font-variant-numeric:tabular-nums;}
   .stat span{font-size:12px;color:var(--muted);}
   /* ---- calendar ----
      A month is a 7-column grid rather than a <table>: the cells are stacks of
@@ -143,7 +158,7 @@
   .calgrid .dow{background:var(--bg);padding:7px 8px;font-size:11px;letter-spacing:.07em;
     text-transform:uppercase;color:var(--muted);font-weight:700;text-align:center;}
   .calgrid .day{background:var(--card);min-height:84px;padding:6px 7px;display:flex;flex-direction:column;gap:3px;}
-  .calgrid .day.out{background:#FBF9F5;}
+  .calgrid .day.out{background:#F3F5F9;}
   .calgrid .day .dnum{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;}
   .calgrid .day.today{box-shadow:inset 0 0 0 2px var(--secondary);}
   .calgrid .day.today .dnum{color:var(--primary);font-weight:700;}
@@ -152,15 +167,15 @@
   .chip{font-size:12px;line-height:1.3;border-radius:6px;padding:2px 6px;text-align:left;
     border:0;cursor:pointer;background:#E6F0FA;color:#1F4E7A;font-weight:600;
     overflow-wrap:anywhere;width:100%;}
-  .chip.done{background:#EDE8DD;color:var(--muted);text-decoration:line-through;font-weight:500;}
+  .chip.done{background:var(--tintbg);color:var(--muted);text-decoration:line-through;font-weight:500;}
   .chip.late{background:#F8E7DA;color:#8A5A2B;}
-  .chip.mile{background:#EFEDE7;color:var(--muted);font-weight:500;cursor:default;}
+  .chip.mile{background:var(--tintbg);color:var(--muted);font-weight:500;cursor:default;}
   .chip.mile.won{background:#E3F3EA;color:var(--ok);}
   /* The actionable list under the grid. */
   .duelist{display:flex;flex-direction:column;gap:8px;margin:6px 0 0;}
   .due{display:flex;gap:10px;align-items:flex-start;background:var(--card);border:1px solid var(--line);
     border-radius:10px;padding:10px 12px;}
-  .due.overdue{border-color:#E8C9A8;background:#FFFAF4;}
+  .due.overdue{border-color:#EBDDB4;background:#FEF9EE;}
   .due .when{flex:0 0 112px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;}
   .due .what{flex:1 1 auto;min-width:0;}
   .due .what b{font-weight:600;}
@@ -296,7 +311,7 @@
   .wiz .wstep.on{background:var(--accent);}
   .wiz .wstep:focus-visible{outline:2px solid var(--secondary);outline-offset:2px;}
   .wiz .wpos{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
-  .wiz .wh{font-family:'Fraunces',serif;font-size:20px;font-weight:600;color:var(--primary);
+  .wiz .wh{font-size:20px;font-weight:800;letter-spacing:-.02em;color:var(--primary);
       margin:3px 0 3px;line-height:1.25;text-wrap:balance;}
   .wiz .wsub{font-size:12.5px;color:var(--muted);margin:0 0 13px;line-height:1.5;}
   .wiz .wpane{display:none;}
@@ -305,7 +320,7 @@
   /* The surface the drawing sits on. overflow-x on the stage, never on the
      page: the Gmail drawing has a minimum width and a rep on a phone scrolls
      the drawing sideways rather than the whole dialog. */
-  .wiz .wstage{background:#EDE8DF;border:1px solid var(--line);border-radius:14px;
+  .wiz .wstage{background:var(--tintbg);border:1px solid var(--line);border-radius:14px;
           padding:16px;display:flex;overflow-x:auto;
   /* `safe` centre, and flush-left for anything that does not understand it.
      A plainly centred flex child WIDER than the scroll box has its leading
@@ -339,7 +354,7 @@
           padding:0 2px;margin:0;width:100%;display:block;resize:none;overflow:hidden;}
   .wiz .e:hover{border-bottom-color:var(--accent);background:#FFF8E8;cursor:text;}
   .wiz .e:focus{outline:0;border-bottom-color:var(--accent);background:#FFF4D6;
-                box-shadow:0 0 0 3px rgba(201,151,75,.22);}
+                box-shadow:0 0 0 3px rgba(232,168,40,.26);}
   .wiz .e::placeholder{color:inherit;opacity:.6;}
   /* An optional slot with no default wording: a prompt, not a sentence. */
   .wiz .e.opt:placeholder-shown::placeholder{font-style:italic;opacity:.45;}
@@ -547,13 +562,13 @@
   .wiz .e.ondk:hover{background:rgba(255,255,255,.18);border-bottom-color:#fff;}
   .wiz .e.ondk:focus{background:rgba(255,255,255,.26);border-bottom-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.3);}
   .wiz .e.ondk::placeholder{color:#fff;opacity:.75;}
-  .stagehead{font-family:'Fraunces',serif;font-weight:600;color:var(--primary);font-size:14px;
+  .stagehead{font-weight:800;letter-spacing:-.01em;color:var(--primary);font-size:14px;
     margin:16px 0 0;padding-top:10px;border-top:1px solid var(--line);}
   .stagehead:first-of-type{border-top:0;padding-top:0;margin-top:8px;}
   .hint{color:var(--muted);font-size:12px;margin:4px 0 0;}
   /* The caller's card: one company, and a phone number readable at arm's
      length while the phone is already ringing. */
-  .callcard h3{font-family:'Fraunces',serif;font-size:26px;color:var(--primary);margin:4px 0 2px;}
+  .callcard h3{font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--primary);margin:4px 0 2px;}
   .callcard .who{font-size:15px;color:var(--primary-dark);margin:0 0 6px;}
   .callcard .bignum{margin:10px 0;}
   .callcard .bignum a{font-size:30px;font-weight:700;color:var(--primary);text-decoration:none;letter-spacing:.01em;}
@@ -567,6 +582,14 @@
   .pager .muted{font-variant-numeric:tabular-nums;}
   .pager button[disabled]{opacity:.45;cursor:default;}
 
+  /* Whose leads, and which stage. Sits above the search box because it is the
+     coarser cut: pick the person, then search inside them. */
+  .filterbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:0 0 12px;}
+  .filt{display:flex;flex-direction:column;gap:4px;margin:0;font-size:13px;font-weight:600;}
+  .filt > span{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);font-weight:700;}
+  .filt select{width:auto;min-width:180px;padding:8px 10px;border-radius:10px;}
+  .filterbar .linkish{margin-bottom:9px;}
+  @media (max-width:560px){ .filt,.filt select{width:100%;min-width:0;} }
   .searchrow{display:flex;align-items:center;gap:10px;margin:0 0 10px;}
   .searchbox{flex:1 1 260px;max-width:420px;min-width:0;padding:9px 12px;border:1px solid var(--line);
     border-radius:10px;background:var(--card);font:inherit;color:var(--charcoal);}
@@ -662,7 +685,7 @@ const SUPABASE_URL = "https://jzjmuttqbtandwjmwwfn.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_RE92j36ZEVFvSBwV-Rl8hg_JyfxRT6a";
 
 const TZ = 'America/New_York';
-const state = { me: null, isAdmin: false, isRep: false, myRepId: null, reps: [], leads: [], dealers: [], builds: [], company: null, money: null, month: null, tab: 'leads', settings: null, calMonth: null, calItems: [] };
+const state = { me: null, isAdmin: false, isRep: false, myRepId: null, reps: [], leads: [], dealers: [], builds: [], company: null, money: null, month: null, tab: 'leads', settings: null, calMonth: null, calItems: [], leadRep: '', leadStatus: '', leadByRep: [] };
 
 /* ---------- helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1994,6 +2017,47 @@ function leadPager(from, to, paged, q){
   '</div>';
 }
 
+// Whose leads, and which stage. Both go to the database, so they narrow
+// everything there is rather than the page that happens to be loaded.
+//
+// The reason this exists: with one agency adding thousands of leads a month,
+// "Leads" was a single undifferentiated list and there was no way to look at
+// one person's pipeline. The rep dropdown is the admin's view — a rep is only
+// ever shown their own leads, so for them it would be a dropdown with one
+// entry, and it is left out.
+function leadFilters(){
+  const counted = (id) => {
+    const hit = (state.leadByRep || []).find((r) => r.rep_id === id);
+    return hit ? hit.count : 0;
+  };
+  const totalShown = (state.leadByRep || []).reduce((n, r) => n + r.count, 0);
+  const unassigned = counted(null);
+
+  const repPicker = state.isRep ? '' :
+    '<label class="filt"><span>Whose leads</span><select id="leadRepFilter">' +
+      '<option value=""' + (state.leadRep ? '' : ' selected') + '>Everyone (' + totalShown + ')</option>' +
+      state.reps
+        // A rep with nothing in the current view is still worth listing while
+        // they are active: an empty pipeline is a thing you want to notice.
+        .filter((r) => r.active || counted(r.id) || r.id === state.leadRep)
+        .map((r) => '<option value="' + r.id + '"' + (r.id === state.leadRep ? ' selected' : '') + '>' +
+          esc(r.name) + (r.active ? '' : ' (inactive)') + ' (' + counted(r.id) + ')</option>').join('') +
+      (unassigned || state.leadRep === 'none'
+        ? '<option value="none"' + (state.leadRep === 'none' ? ' selected' : '') + '>Nobody yet (' + unassigned + ')</option>'
+        : '') +
+    '</select></label>';
+
+  const stage = '<label class="filt"><span>Stage</span><select id="leadStatusFilter">' +
+    [['', 'Any'], ['open', 'Open'], ['won', 'Won'], ['lost', 'Lost']].map(([v, l]) =>
+      '<option value="' + v + '"' + (state.leadStatus === v ? ' selected' : '') + '>' + l + '</option>').join('') +
+    '</select></label>';
+
+  const any = state.leadRep || state.leadStatus;
+  return '<div class="filterbar">' + repPicker + stage +
+    (any ? '<button type="button" class="linkish" id="leadClearFilters">Clear filters</button>' : '') +
+  '</div>';
+}
+
 async function renderLeads(opts){
   // Anything half-typed into the add-a-lead form, and whether it was open at
   // all, has to survive this redraw: the list reloads whenever a lead changes,
@@ -2018,6 +2082,10 @@ async function renderLeads(opts){
   const q = (SEARCH.leads || '').trim();
   const qs = new URLSearchParams({ limit: String(LEAD_PAGE), offset: String(state.leadOffset || 0) });
   if(q) qs.set('q', q);
+  // Whose, and which stage. Both are answered by the database, so they narrow
+  // the 10,000 rather than the 200 that happen to be on this page.
+  if(state.leadRep) qs.set('rep', state.leadRep);
+  if(state.leadStatus) qs.set('status', state.leadStatus);
 
   const [l, dl] = await Promise.all([api('/rep-leads?' + qs.toString()), api('/rep-dealers')]);
   state.leads = l.leads; state.dealers = dl.dealers;
@@ -2026,6 +2094,7 @@ async function renderLeads(opts){
   // is why nothing looked wrong until the 501st lead quietly stopped
   // existing.
   state.leadTotal = (typeof l.total === 'number') ? l.total : state.leads.length;
+  state.leadByRep = Array.isArray(l.by_rep) ? l.by_rep : [];
   const open = (typeof l.open_total === 'number') ? l.open_total : state.leads.filter((x) => x.status === 'open').length;
   // Deleting the last lead on the last page, or narrowing a search, can leave
   // the offset past the end. Step back rather than show an empty table under
@@ -2049,16 +2118,23 @@ async function renderLeads(opts){
   // it, a won lead is on no other screen a REP can reach, and the rep who
   // closed it is the person most likely to wonder where it went.
   const wonLeads = state.leads.filter((x) => x.status === 'won');
-  const shown = state.showWonLeads ? state.leads : state.leads.filter((x) => x.status !== 'won');
+  // Asking for Won in the stage filter is asking to see them: without this,
+  // picking Won returned the right rows from the database and then hid every
+  // one of them behind the toggle, leaving an empty table under a count that
+  // said there were plenty.
+  const showWon = state.showWonLeads || state.leadStatus === 'won';
+  const shown = showWon ? state.leads : state.leads.filter((x) => x.status !== 'won');
   // With no won leads on screen there is nothing for a "Won by" column to
   // say, so it goes too -- that is the column that did not fit.
-  const showWonBy = !state.isRep && state.showWonLeads;
+  const showWonBy = !state.isRep && showWon;
   captureSearch('tab-leads', 'leads');
   $('tab-leads').innerHTML =
     '<div class="head"><h2>Leads</h2><span class="muted">' +
       (q ? state.leadTotal + ' match' + (state.leadTotal === 1 ? 'es' : '') + ' \u201c' + esc(q) + '\u201d'
          : open + ' open \u00b7 ' + state.leadTotal + ' total') + '</span></div>' +
-    (wonLeads.length
+    // The toggle has nothing to say once the stage filter is already asking
+    // for won leads, so it steps aside rather than contradicting the filter.
+    (wonLeads.length && state.leadStatus !== 'won'
       ? '<p class="muted" style="margin:-6px 0 10px"><button type="button" class="linkish" id="toggleWon">' +
         (state.showWonLeads
           ? 'Hide won leads'
@@ -2086,6 +2162,7 @@ async function renderLeads(opts){
       '</details>' +
       '<div class="actions"><button class="btn" type="submit">Add lead</button></div></form>' +
       '<div id="dupBox"></div></details>' +
+    leadFilters() +
     searchBox('leads', state.isRep ? 'Search your leads \u2014 company, contact, email, phone' : 'Search leads \u2014 company, contact, email, phone') +
     leadPager(from, to, paged, q) +
     '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th>' + (state.isRep ? '' : '<th>Brought in by</th>') + '<th>Found</th><th>Status</th>' + (showWonBy ? '<th>Won by</th>' : '') + '<th></th></tr></thead><tbody>' +
@@ -2175,6 +2252,13 @@ async function renderLeads(opts){
   // who had typed wording looking at "If left empty: …" the moment the list
   // redrew behind them.
   wireWording($('tab-leads'));
+  // Changing a filter always goes back to the first page: staying on page 9
+  // of everyone's leads after picking one rep lands you past the end of what
+  // is left, which reads as "this rep has nothing".
+  const setFilter = (patch) => { Object.assign(state, patch); renderLeads({ offset: 0 }); };
+  if($('leadRepFilter')) $('leadRepFilter').addEventListener('change', (e) => setFilter({ leadRep: e.target.value }));
+  if($('leadStatusFilter')) $('leadStatusFilter').addEventListener('change', (e) => setFilter({ leadStatus: e.target.value }));
+  if($('leadClearFilters')) $('leadClearFilters').addEventListener('click', () => setFilter({ leadRep: '', leadStatus: '' }));
   wireServerSearch('tab-leads', 'leads', renderLeads);
   $('tab-leads').querySelectorAll('[data-leadpage]').forEach((b) => b.addEventListener('click', () => {
     const step = b.dataset.leadpage === 'next' ? LEAD_PAGE : -LEAD_PAGE;
@@ -2881,7 +2965,7 @@ function donut(slices, centreTop, centreSub){
   }
   return '<svg class="chart" style="min-width:0;max-width:' + size + 'px;margin:0 auto" viewBox="0 0 ' + size + ' ' + size + '" role="img">' +
     paths +
-    '<text x="' + c + '" y="' + (c - 2) + '" text-anchor="middle" style="font-family:Fraunces,serif;font-size:21px;fill:var(--primary)">' + esc(centreTop) + '</text>' +
+    '<text x="' + c + '" y="' + (c - 2) + '" text-anchor="middle" style="font-weight:800;font-size:21px;fill:var(--primary)">' + esc(centreTop) + '</text>' +
     '<text x="' + c + '" y="' + (c + 15) + '" text-anchor="middle">' + esc(centreSub) + '</text></svg>' +
     '<div class="legend" style="justify-content:center">' + slices.map((s) =>
       '<span><i style="background:' + s.color + '"></i>' + esc(s.label) + ' ' + s.value + '</span>').join('') + '</div>';
@@ -2977,7 +3061,7 @@ async function buildDialog(leadId){
       '<div id="previewBody" style="border:1px solid var(--line);border-radius:10px;overflow:hidden">' +
         '<div id="previewBar" style="padding:12px 14px;display:flex;align-items:center;gap:10px">' +
           (b.logoUrl ? '<img id="previewLogo" src="' + esc(b.logoUrl) + '" alt="" style="height:26px;width:auto;max-width:110px;object-fit:contain">' : '') +
-          '<b style="font-family:Fraunces,serif">' + esc(lead.company_name) + '</b>' +
+          '<b style="font-weight:800">' + esc(lead.company_name) + '</b>' +
           '<span id="previewAccent" style="margin-left:auto;border-radius:99px;padding:3px 12px;font-size:12px;font-weight:700;color:#fff">Refer a friend</span>' +
         '</div>' +
         '<div style="padding:14px"><span class="muted">Their customers see this, in their colours.</span></div>' +

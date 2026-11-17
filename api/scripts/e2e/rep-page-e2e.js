@@ -2672,6 +2672,133 @@ async function main() {
       }
     });
 
+    // ------------------------------------------------------------------
+    // Whose leads. One agency dropping thousands of rows into a single list
+    // is the thing these filters exist for: without them the Leads tab is a
+    // pile nobody can divide, and a rep's own pipeline cannot be looked at.
+    section('Leads: filtering by rep and by stage');
+    {
+      const [filterRep] = await sql(`insert into reps (name, email, active) values ('Filter Rep','filter@x.test', true) returning id`);
+      const [otherRep] = await sql(`insert into reps (name, email, active) values ('Other Rep','other@x.test', true) returning id`);
+      await sql(
+        `insert into rep_leads (company_name, brought_in_by_rep_id, status)
+         values ('Filterco Alpha', $1, 'open'), ('Filterco Beta', $1, 'open'),
+                ('Filterco Lost Co', $1, 'lost'),
+                ('Otherco Gamma', $2, 'open'),
+                ('Nobodyco Delta', null, 'open')`,
+        [filterRep.id, otherRep.id]
+      );
+
+      let fp;
+      const rowNames = async () => fp.evaluate(() =>
+        [...document.querySelectorAll('#tab-leads tbody tr')]
+          .map((r) => (r.querySelector('td b') || {}).textContent || '')
+          .filter(Boolean));
+
+      await check('The Leads tab offers a "whose leads" picker, with a count beside every rep', async () => {
+        fp = await newPage('filters');
+        await signIn(fp, USERS.admin);
+        await fp.click('[data-tab=leads]');
+        await fp.waitForSelector('#leadRepFilter', { timeout: 10000 });
+        const opts = await fp.$$eval('#leadRepFilter option', (o) => o.map((x) => x.textContent.trim()));
+        assert(opts.some((t) => /^Filter Rep \(3\)$/.test(t)), `no "Filter Rep (3)" in ${JSON.stringify(opts)}`);
+        assert(opts.some((t) => /^Other Rep \(1\)$/.test(t)), `no "Other Rep (1)" in ${JSON.stringify(opts)}`);
+        assert(opts.some((t) => /^Nobody yet \(\d+\)$/.test(t)), `no unassigned entry in ${JSON.stringify(opts)}`);
+        return opts.filter((t) => /\(\d+\)/.test(t)).slice(0, 4).join(' · ');
+      });
+
+      await check('Picking a rep shows that rep’s leads and nobody else’s', async () => {
+        await fp.selectOption('#leadRepFilter', filterRep.id);
+        await fp.waitForFunction(() =>
+          [...document.querySelectorAll('#tab-leads tbody tr')].length > 0 &&
+          ![...document.querySelectorAll('#tab-leads tbody tr')].some((r) => /Otherco|Nobodyco/.test(r.textContent)),
+          { timeout: 10000 });
+        const names = await rowNames();
+        assert(names.includes('Filterco Alpha') && names.includes('Filterco Beta'), `missing Filter Rep's leads: ${names}`);
+        assert(!names.some((n) => /Otherco|Nobodyco/.test(n)), `another rep's leads leaked through: ${names}`);
+        return `${names.length} rows, all Filter Rep's`;
+      });
+
+      await check('The rep counts stay whole while one rep is selected', async () => {
+        const opts = await fp.$$eval('#leadRepFilter option', (o) => o.map((x) => x.textContent.trim()));
+        assert(opts.some((t) => /^Other Rep \(1\)$/.test(t)),
+          `selecting one rep collapsed everyone else's count: ${JSON.stringify(opts)}`);
+        return 'Other Rep still reads (1)';
+      });
+
+      // Read the STATUS PILL, never the row's text: every open row carries a
+      // "Lost" button and a "Mark won" button, so matching the row text finds
+      // both words on rows that are neither.
+      const rowStatuses = async () => fp.evaluate(() =>
+        [...document.querySelectorAll('#tab-leads tbody tr')]
+          .map((r) => (r.querySelector('.pill') || {}).textContent || '')
+          .filter(Boolean));
+
+      await check('Stage narrows to Lost, and the Won stage actually shows won rows', async () => {
+        await fp.selectOption('#leadStatusFilter', 'lost');
+        await fp.waitForFunction(() => {
+          const s = [...document.querySelectorAll('#tab-leads tbody tr .pill')].map((p) => p.textContent.trim());
+          return s.length > 0 && s.every((x) => x === 'lost');
+        }, { timeout: 10000 });
+        const lost = await rowNames();
+        assert(lost.includes('Filterco Lost Co') && lost.length === 1, `lost filter gave ${lost}`);
+
+        // Won is the one that used to come back empty: the database returned
+        // the right rows and the page then hid every one behind the "show won
+        // leads" toggle.
+        await fp.selectOption('#leadRepFilter', '');
+        await fp.selectOption('#leadStatusFilter', 'won');
+        await fp.waitForFunction(() => {
+          const s = [...document.querySelectorAll('#tab-leads tbody tr .pill')].map((p) => p.textContent.trim());
+          return s.length > 0 && s.every((x) => x === 'won');
+        }, { timeout: 10000 });
+        const won = await rowStatuses();
+        assert(won.length > 0, 'the Won stage showed no rows at all');
+        assert(won.every((x) => x === 'won'), `the Won stage showed ${won}`);
+        return `lost: ${lost[0]} · won: ${won.length} row(s), all won`;
+      });
+
+      await check('Clear filters puts everybody’s leads back', async () => {
+        await fp.click('#leadClearFilters');
+        await fp.waitForFunction(() =>
+          [...document.querySelectorAll('#tab-leads tbody tr')].some((r) => /Otherco Gamma/.test(r.textContent)),
+          { timeout: 10000 });
+        eq(await fp.$eval('#leadRepFilter', (e) => e.value), '', 'the rep picker did not reset');
+        eq(await fp.$eval('#leadStatusFilter', (e) => e.value), '', 'the stage picker did not reset');
+        return 'both pickers back to their defaults, every rep’s leads on screen';
+      });
+
+      await check('A rep gets no "whose leads" picker — they only ever see their own', async () => {
+        const ap = await newPage('rep-filters');
+        await signIn(ap, { email: 'alice@x.test' });
+        await ap.click('[data-tab=leads]');
+        await ap.waitForSelector('#leadStatusFilter', { timeout: 10000 });
+        eq(await ap.locator('#leadRepFilter').count(), 0, 'a rep was shown a rep picker');
+        await ap.context().close();
+        return 'stage filter only';
+      });
+
+      await check('The dashboard wears the 50. brand, not the old beige', async () => {
+        const seen = await fp.evaluate(() => {
+          const v = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+          const btn = document.querySelector('#tab-leads .btn:not(.secondary)');
+          return {
+            primary: v('--primary'), accent: v('--accent'), bg: v('--bg'),
+            btnBg: btn ? getComputedStyle(btn).backgroundColor : '',
+            headFont: getComputedStyle(document.querySelector('#tab-leads h2')).fontFamily,
+          };
+        });
+        eq(seen.primary, '#0C1E48', 'primary is not the brand navy');
+        eq(seen.accent, '#E8A828', 'accent is not the brand gold');
+        eq(seen.bg, '#F8F8F8', 'the page background is not the brand paper');
+        eq(seen.btnBg, 'rgb(232, 168, 40)', 'the primary button is not gold');
+        assert(/Inter/.test(seen.headFont) && !/Fraunces/.test(seen.headFont), `headings still on ${seen.headFont}`);
+        return `navy ${seen.primary} · gold ${seen.accent} · buttons gold · headings Inter`;
+      });
+
+      await fp.context().close();
+    }
+
     await check('Phone width: the Reps page does not scroll sideways', async () => {
       const ctx = await browser.newContext({ viewport: { width: 400, height: 800 } });
       const p = await ctx.newPage();

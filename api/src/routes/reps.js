@@ -430,9 +430,16 @@ function leadSearchClauses(q, params) {
   });
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 router.get('/rep-leads', requireAuth, wrap(async (req, res) => {
   const status = req.query.status;
   if (status !== undefined && !['open', 'won', 'lost'].includes(status)) throw httpError(400, 'status must be open, won or lost');
+  // Whose leads. 'none' is its own answer, not a missing one: a lead nobody
+  // is credited with is exactly the pile worth finding, and it is what an
+  // agency import leaves behind when the rep field is skipped.
+  const rep = typeof req.query.rep === 'string' ? req.query.rep.trim() : '';
+  if (rep && rep !== 'none' && !UUID_RE.test(rep)) throw httpError(400, 'rep must be a rep id or none');
   const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 200) : '';
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || LEAD_PAGE, 1), LEAD_PAGE_MAX);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
@@ -447,10 +454,23 @@ router.get('/rep-leads', requireAuth, wrap(async (req, res) => {
     // people to "search to reach the rest" was advice that could not work.
     // Fine at a few hundred leads. An agency working a bought call list adds
     // 10,000+ a month.
+    // Two sets of conditions. The rep tally has to be built WITHOUT the rep
+    // filter, or picking a rep would leave the dropdown showing one name and
+    // make it impossible to see where everyone else's leads went.
     const params = [];
-    const where = [];
-    if (status) { params.push(status); where.push(`l.status = $${params.length}`); }
-    leadSearchClauses(q, params).forEach((c) => where.push(c));
+    const base = [];
+    if (status) { params.push(status); base.push(`l.status = $${params.length}`); }
+    leadSearchClauses(q, params).forEach((c) => base.push(c));
+    const baseSql = base.length ? `where ${base.join(' and ')}` : '';
+    const baseParams = params.slice();
+
+    const where = base.slice();
+    if (rep === 'none') {
+      where.push('l.brought_in_by_rep_id is null');
+    } else if (rep) {
+      params.push(rep);
+      where.push(`l.brought_in_by_rep_id = $${params.length}`);
+    }
     const whereSql = where.length ? `where ${where.join(' and ')}` : '';
 
     // The counts are of everything MATCHING, not of everything there is, so
@@ -461,21 +481,33 @@ router.get('/rep-leads', requireAuth, wrap(async (req, res) => {
          from rep_leads l ${whereSql}`,
       params
     );
+    // How many each rep is carrying, for the "whose leads" dropdown. RLS
+    // means a rep sees only their own row here, which is the right answer for
+    // them and costs nothing; Joseph sees everyone.
+    const { rows: byRep } = await client.query(
+      `select l.brought_in_by_rep_id as rep_id, count(*)::int as n
+         from rep_leads l ${baseSql}
+        group by l.brought_in_by_rep_id`,
+      baseParams
+    );
     const { rows } = await client.query(
       `select ${LEAD_COLUMNS}, ${LEAD_CAN_DELETE} from rep_leads l ${whereSql}
         order by l.found_on desc, l.created_at desc
         limit $${params.length + 1} offset $${params.length + 2}`,
       [...params, limit, offset]
     );
-    return { rows, counts };
+    return { rows, counts, byRep };
   });
   res.json({
     leads: rows.rows,
     total: rows.counts.total,
     open_total: rows.counts.open,
+    by_rep: rows.byRep.map((r) => ({ rep_id: r.rep_id, count: r.n })),
     limit,
     offset,
     q,
+    status: status || '',
+    rep,
   });
 }));
 
