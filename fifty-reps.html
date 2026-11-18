@@ -4715,7 +4715,7 @@ async function renderRecruits(){
       days.map((d) => {
         const ms = inWeek.filter((m) => rDayKey(m.meeting_at) === d.key);
         return '<div class="rday' + (d.key === today ? ' today' : '') + '"><span>' + esc(d.label) + '</span><div class="rslots">' +
-          ms.map((m) => '<div class="rslot" data-rid="' + m.id + '"><em>ZOOM</em><strong>' + esc(rTime(m.meeting_at).replace(/ [AP]M$/, '')) + '</strong><small>' + esc(m.name.split(' ')[0]) + '</small></div>').join('') +
+          ms.map((m) => '<div class="rslot" data-rid="' + m.id + '"><em>MEET</em><strong>' + esc(rTime(m.meeting_at).replace(/ [AP]M$/, '')) + '</strong><small>' + esc(m.name.split(' ')[0]) + '</small></div>').join('') +
           '</div></div>';
       }).join('') + '</div>';
 
