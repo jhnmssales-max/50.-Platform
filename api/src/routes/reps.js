@@ -2581,4 +2581,170 @@ router.post('/call-list-entries/:id/release', requireAuth, wrap(async (req, res)
   res.json({ ok: true });
 }));
 
+// ---------------------------------------------------------------------------
+// Recruits — Joseph's own board of people he is hiring as reps
+// (see the recruits migration). Admin only, end to end: RLS gives nobody else
+// a row, and these routes refuse the helper and reps with a plain 403.
+// ---------------------------------------------------------------------------
+const RECRUIT_STAGES = ['applied', 'contacted', 'replied', 'meeting', 'hired', 'not_a_fit'];
+const RECRUIT_SOURCES = ['wizehire', 'handshake', 'linkedin', 'referral', 'other'];
+const RECRUIT_COLS = `id, name, email, phone, location, source, stage, meeting_at, next_step, notes,
+  contacted_at, replied_at, hired_at, stage_changed_at, rep_id, created_at`;
+
+const recruitBody = z.object({
+  name: z.string().trim().min(1).max(120),
+  email: optText(200),
+  phone: optText(50),
+  location: optText(120),
+  source: z.enum(RECRUIT_SOURCES).optional(),
+  stage: z.enum(RECRUIT_STAGES).optional(),
+  meeting_at: z.string().datetime({ offset: true }).nullable().optional().or(z.literal('').transform(() => null)),
+  next_step: optText(80),
+  notes: optText(4000),
+});
+
+async function requireRecruitAdmin(client, userId) {
+  const ctx = await requirePlatform(client, userId);
+  if (!ctx.is_admin) throw httpError(403, 'Recruits are only visible to the 50. admin', 'admin_only');
+  return ctx;
+}
+
+// The table arrives by a hand-run migration. Until it has been run, say so in
+// words instead of a bare 500 — and, unlike the columns in schemaCheck, this
+// must not stop the whole API from booting, since nothing else depends on it.
+function recruitsMissing(err) {
+  if (err && err.code === '42P01') return httpError(503, 'The recruits table has not been added to the database yet (migration 20261118000000_recruits.sql).');
+  return err;
+}
+
+// First time a card reaches a stage, stamp it. Moving it back never clears a
+// stamp, so a week's counts do not shrink when a card is dragged around.
+function stageStamps(stage) {
+  const order = ['applied', 'contacted', 'replied', 'meeting', 'hired'];
+  const at = order.indexOf(stage);
+  const sets = [];
+  if (at >= 1) sets.push('contacted_at = coalesce(contacted_at, now())');
+  if (at >= 2) sets.push('replied_at = coalesce(replied_at, now())');
+  if (at >= 4) sets.push('hired_at = coalesce(hired_at, now())');
+  return sets;
+}
+
+router.get('/recruits', requireAuth, wrap(async (req, res) => {
+  const out = await withUserTransaction(req.userId, async (client) => {
+    await requireRecruitAdmin(client, req.userId);
+    try {
+      const { rows } = await client.query(`select ${RECRUIT_COLS} from recruits order by stage_changed_at desc`);
+      // "This week" is Monday 00:00 Eastern onward, the same week the rep
+      // meeting and the daily emails run on.
+      const { rows: [w] } = await client.query(
+        `with wk as (select (date_trunc('week', now() at time zone '${BILLING_TIME_ZONE}') at time zone '${BILLING_TIME_ZONE}') as start)
+         select wk.start as week_start,
+                (select count(*)::int from recruits, wk w2 where created_at >= w2.start) as applied,
+                (select count(*)::int from recruits, wk w2 where contacted_at >= w2.start) as contacted,
+                (select count(*)::int from recruits, wk w2 where replied_at >= w2.start) as replied,
+                (select count(*)::int from recruits, wk w2 where meeting_at >= w2.start and meeting_at < w2.start + interval '7 days') as meetings,
+                (select count(*)::int from recruits, wk w2 where hired_at >= w2.start) as hired
+           from wk`
+      );
+      return { recruits: rows, week: w };
+    } catch (err) { throw recruitsMissing(err); }
+  });
+  res.json(out);
+}));
+
+router.post('/recruits', requireAuth, wrap(async (req, res) => {
+  const body = parseOr400(recruitBody, req.body || {});
+  const r = await withUserTransaction(req.userId, async (client) => {
+    await requireRecruitAdmin(client, req.userId);
+    const stage = body.stage || (body.meeting_at ? 'meeting' : 'applied');
+    try {
+      const { rows: [row] } = await client.query(
+        `insert into recruits (name, email, phone, location, source, stage, meeting_at, next_step, notes)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id`,
+        [body.name, body.email || null, body.phone || null, body.location || null, body.source || 'other',
+          stage, body.meeting_at || null, body.next_step || null, body.notes || null]
+      );
+      const stamps = stageStamps(stage);
+      if (stamps.length) await client.query(`update recruits set ${stamps.join(', ')} where id = $1`, [row.id]);
+      const { rows: [full] } = await client.query(`select ${RECRUIT_COLS} from recruits where id = $1`, [row.id]);
+      return full;
+    } catch (err) { throw recruitsMissing(err); }
+  });
+  res.status(201).json(r);
+}));
+
+router.patch('/recruits/:id', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  const body = parseOr400(recruitBody.partial(), req.body || {});
+  const r = await withUserTransaction(req.userId, async (client) => {
+    await requireRecruitAdmin(client, req.userId);
+    const sets = [];
+    const vals = [id];
+    for (const key of ['name', 'email', 'phone', 'location', 'source', 'meeting_at', 'next_step', 'notes']) {
+      if (body[key] !== undefined) {
+        vals.push(body[key] === '' ? null : body[key]);
+        sets.push(`${key} = $${vals.length}`);
+      }
+    }
+    if (body.stage) {
+      vals.push(body.stage);
+      sets.push(`stage = $${vals.length}`);
+      sets.push(`stage_changed_at = case when stage is distinct from $${vals.length} then now() else stage_changed_at end`);
+      sets.push(...stageStamps(body.stage));
+    }
+    if (!sets.length) throw httpError(400, 'Nothing to change');
+    try {
+      const { rows: [row] } = await client.query(
+        `update recruits set ${sets.join(', ')} where id = $1 returning ${RECRUIT_COLS}`, vals
+      );
+      if (!row) throw httpError(404, 'No such recruit');
+      return row;
+    } catch (err) { throw recruitsMissing(err); }
+  });
+  res.json(r);
+}));
+
+router.delete('/recruits/:id', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  await withUserTransaction(req.userId, async (client) => {
+    await requireRecruitAdmin(client, req.userId);
+    try {
+      const { rowCount } = await client.query('delete from recruits where id = $1', [id]);
+      if (!rowCount) throw httpError(404, 'No such recruit');
+    } catch (err) { throw recruitsMissing(err); }
+  });
+  res.json({ ok: true });
+}));
+
+// Signing a recruit on: makes them an ordinary rep (no login yet — that is
+// still the Invite button on the Reps tab, where it always was) and moves the
+// card to Hired. Running it twice hands back the same rep, never a second one.
+router.post('/recruits/:id/make-rep', requireAuth, wrap(async (req, res) => {
+  const id = parseOr400(uuid, req.params.id);
+  const out = await withUserTransaction(req.userId, async (client) => {
+    await requireRecruitAdmin(client, req.userId);
+    try {
+      const { rows: [rc] } = await client.query(`select ${RECRUIT_COLS} from recruits where id = $1 for update`, [id]);
+      if (!rc) throw httpError(404, 'No such recruit');
+      let repId = rc.rep_id;
+      if (!repId) {
+        const { rows: [rep] } = await client.query(
+          `insert into reps (name, email, phone, notes) values ($1, $2, $3, $4) returning id`,
+          [rc.name, rc.email, rc.phone, rc.source !== 'other' ? `Recruited via ${rc.source}` : null]
+        );
+        repId = rep.id;
+      }
+      const { rows: [row] } = await client.query(
+        `update recruits set rep_id = $2, stage = 'hired',
+                stage_changed_at = case when stage <> 'hired' then now() else stage_changed_at end,
+                ${stageStamps('hired').join(', ')}
+          where id = $1 returning ${RECRUIT_COLS}`,
+        [id, repId]
+      );
+      return row;
+    } catch (err) { throw recruitsMissing(err); }
+  });
+  res.json(out);
+}));
+
 module.exports = router;

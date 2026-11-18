@@ -5,3 +5,4 @@ api/*-results.md
 # Regenerated whenever it is missing, and connected to no real project.
 api/scripts/e2e/.crm-integration-keypair.json
 api/scripts/e2e/.call-lists-keypair.json
+api/scripts/e2e/.recruits-keypair.json

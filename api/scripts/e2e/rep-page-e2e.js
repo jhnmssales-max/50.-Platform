@@ -356,7 +356,7 @@ async function main() {
     await check('Admin signs in and sees every one of his tabs', async () => {
       await signIn(page, USERS.admin);
       const t = await tabNames(page);
-      assert(JSON.stringify(t) === JSON.stringify(['Calendar', 'Leads', 'Calls', 'Reps', 'Companies', 'Build dashboards', 'Money', 'Finances']), `tabs: ${t}`);
+      assert(JSON.stringify(t) === JSON.stringify(['Calendar', 'Leads', 'Calls', 'Reps', 'Companies', 'Recruits', 'Build dashboards', 'Money', 'Finances']), `tabs: ${t}`);
       return `${await page.textContent('#who')}`;
     });
     await check('Add two reps (Alice, Bob) on the Reps tab', async () => {
