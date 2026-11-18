@@ -680,6 +680,60 @@
      December off both. */
   .reportgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,560px),1fr));gap:14px;align-items:start;}
   @media print{ header.top,nav.tabs,.noprint{display:none!important;} body{background:#fff;} }
+
+  /* ---- Recruits board (admin only) -----------------------------------
+     One white board, five stage columns and a gold week panel on the
+     right for booked meetings -- read left to right, the way a recruit
+     moves. Cards drag between columns; tapping one opens it. */
+  main.wide{max-width:1440px;}
+  .rboard{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;
+    color:var(--charcoal);display:flex;gap:12px;align-items:flex-start;box-shadow:0 18px 50px rgba(0,0,0,.25);}
+  .rcols{flex:1 1 auto;min-width:0;display:grid;grid-template-columns:repeat(5,minmax(165px,1fr));gap:12px;overflow-x:auto;}
+  .rboard > .rweek{flex:0 0 230px;}
+  .rcol{min-width:150px;display:flex;flex-direction:column;gap:8px;border-radius:12px;padding:4px;min-height:220px;transition:background .12s;}
+  .rcol.over{background:var(--tintbg);outline:2px dashed var(--secondary);outline-offset:-2px;}
+  .rhead{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;background:var(--primary);color:#fff;
+    border-radius:999px;padding:5px 12px 5px 5px;font-weight:700;font-size:13px;margin-bottom:4px;white-space:nowrap;}
+  .rhead b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--ink);font-size:11px;}
+  .rhead i{font-style:normal;font-weight:600;color:var(--on-navy-dim);}
+  .rcard{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;cursor:pointer;
+    box-shadow:0 2px 6px rgba(12,30,72,.06);transition:box-shadow .12s, transform .12s;}
+  .rcard:hover{box-shadow:0 6px 16px rgba(12,30,72,.14);transform:translateY(-1px);}
+  .rcard.dragging{opacity:.4;}
+  .rtop{display:flex;align-items:center;gap:8px;}
+  .ravatar{flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;
+    font-weight:800;font-size:12px;color:#fff;}
+  .rname{font-weight:700;color:var(--primary);font-size:14px;line-height:1.15;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .rsub{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .rchip{display:inline-block;margin-top:8px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;
+    background:var(--tintbg);color:var(--secondary);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .rchip.gold{background:var(--warn-bg);color:var(--accent-dark);}
+  .rchip.navy{background:var(--primary);color:#fff;}
+  .rchip.ok{background:#E3F3EA;color:var(--ok);}
+  .rempty{font-size:12px;color:var(--muted);text-align:center;padding:14px 6px;border:1px dashed var(--line);border-radius:10px;}
+  .rweek{background:var(--warn-bg);border:1px solid #EFD9A0;border-radius:14px;padding:10px;min-width:190px;}
+  .rweek .rhead{background:var(--accent);color:var(--ink);}
+  .rweek .rhead b{background:#fff;}
+  .rday{display:grid;grid-template-columns:38px 1fr;gap:8px;align-items:start;padding:7px 0;border-top:1px solid #EFD9A0;}
+  .rday:first-of-type{border-top:0;}
+  .rday > span{font-weight:700;font-size:13px;color:var(--charcoal);padding-top:4px;}
+  .rday.today > span{color:var(--accent-dark);}
+  .rslots{display:flex;flex-wrap:wrap;gap:6px;min-height:22px;}
+  .rslot{background:var(--primary);color:#fff;border-radius:8px;overflow:hidden;cursor:pointer;min-width:66px;}
+  .rslot em{display:block;font-style:normal;background:var(--accent);color:var(--ink);font-size:9px;font-weight:800;letter-spacing:.08em;padding:1px 6px;}
+  .rslot strong{display:block;font-size:16px;padding:2px 6px 0;font-variant-numeric:tabular-nums;}
+  .rslot small{display:block;font-size:11px;padding:0 6px 4px;color:var(--on-navy);}
+  .rstats{text-align:center;margin:16px 0 4px;}
+  .rstats .lbl{font-size:11px;letter-spacing:.14em;font-weight:800;color:var(--accent);text-transform:uppercase;}
+  .rstats .nums{display:flex;justify-content:center;gap:22px;flex-wrap:wrap;margin-top:6px;color:var(--on-navy);}
+  .rstats .nums b{color:#fff;font-size:20px;font-weight:800;margin-right:5px;}
+  /* On a phone the week's meetings come first and the stage columns
+     scroll sideways under them. */
+  @media (max-width:760px){
+    .rboard{flex-direction:column;align-items:stretch;padding:12px;}
+    .rboard > .rweek{order:-1;flex:none;}
+    .rcols{grid-template-columns:repeat(5,170px);}
+  }
 </style>
 </head>
 <body>
@@ -733,6 +787,7 @@
     <section id="tab-builds" class="hide"></section>
     <section id="tab-company" class="hide"></section>
     <section id="tab-calls" class="hide"></section>
+    <section id="tab-recruits" class="hide"></section>
   </main>
 </div>
 
@@ -988,7 +1043,7 @@ async function start(){
   const tabs = state.isRep
     ? [['calendar','Calendar'],['leads','My leads'],['calls','Calls'],['dealers','My dealers'],['mymoney','My money']]
     : [['calendar','Calendar'],['leads','Leads'],['calls','Calls'],['reps','Reps'],['dealers','Companies']];
-  if(state.isAdmin) tabs.push(['builds','Build dashboards'], ['money','Money'], ['company','Finances']);
+  if(state.isAdmin) tabs.push(['recruits','Recruits'], ['builds','Build dashboards'], ['money','Money'], ['company','Finances']);
   $('tabs').innerHTML = tabs.map(([k,l]) => '<button type="button" data-tab="' + k + '">' + l + '</button>').join('');
   $('tabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
   showTab(state.tab);
@@ -999,10 +1054,12 @@ async function loadReps(){ const d = await api('/reps'); state.reps = d.reps; st
 
 async function showTab(tab){
   state.tab = tab; clearFlash();
+  // The recruits board is six columns across; give it the room.
+  document.querySelector('main').classList.toggle('wide', tab === 'recruits');
   $('tabs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
   // Every tab's section, not just the ones that existed when this was
   // written: a key missing here renders its tab perfectly and never shows it.
-  for(const k of ['calendar','leads','calls','reps','dealers','money','mymoney','builds','company']) $('tab-' + k).classList.toggle('hide', k !== tab);
+  for(const k of ['calendar','leads','calls','reps','dealers','money','mymoney','builds','company','recruits']) $('tab-' + k).classList.toggle('hide', k !== tab);
   try{
     if(tab === 'calendar') await renderCalendar();
     if(tab === 'leads') await renderLeads();
@@ -1013,6 +1070,7 @@ async function showTab(tab){
     if(tab === 'builds') await renderBuilds();
     if(tab === 'company') await renderCompany();
     if(tab === 'calls') await renderCalls();
+    if(tab === 'recruits') await renderRecruits();
   }catch(err){ flash(err.message); }
 }
 
@@ -4579,6 +4637,193 @@ async function statementDialog(repId){
   }
   if(getSession()) { const ok = await start().then(() => true).catch(() => false); void ok; }
 })();
+
+/* ---------- Recruits (admin only) ---------- */
+// Joseph's own hiring board: everyone applying to be a 50. rep, from the
+// first application through to signed on. Read left to right; cards drag
+// between columns (or open a card and pick the stage, which is how it works
+// on a phone). The gold panel is the week's booked meetings. Nobody else
+// sees this tab -- the API and RLS both refuse anyone but the admin.
+const RSTAGES = [
+  ['applied', 'Applied'], ['contacted', 'Contacted'], ['replied', 'Replied'],
+  ['meeting', 'Meeting'], ['hired', 'Signed on'],
+];
+const RSOURCES = [['wizehire','Wizehire'],['handshake','Handshake'],['linkedin','LinkedIn'],['referral','Referral'],['other','Other']];
+const RAVATAR = ['#2B4780','#B8810C','#1F7A5C','#7A3E9D','#A12B2B','#0E7490','#3C4A63','#C2410C'];
+function rSource(k){ const x = RSOURCES.find((s) => s[0] === k); return x ? x[1] : 'Other'; }
+function rInitials(n){ return String(n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase(); }
+function rColor(n){ let h = 0; for(const c of String(n)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return RAVATAR[h % RAVATAR.length]; }
+function rDayKey(d){ return new Date(d).toLocaleDateString('en-CA', { timeZone: TZ }); }
+function rTime(d){ return new Date(d).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit', timeZone: TZ }); }
+function rShort(d){ return new Date(d).toLocaleString('en-US', { weekday:'short', hour:'numeric', minute:'2-digit', timeZone: TZ }); }
+// datetime-local wants "YYYY-MM-DDTHH:MM" in Eastern time.
+function rLocalInput(d){
+  if(!d) return '';
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23' })
+    .formatToParts(new Date(d)).map((x) => [x.type, x.value]));
+  return p.year + '-' + p.month + '-' + p.day + 'T' + p.hour + ':' + p.minute;
+}
+
+function rChip(r){
+  if(r.next_step) return '<span class="rchip">' + esc(r.next_step) + '</span>';
+  if(r.stage === 'meeting' && r.meeting_at) return '<span class="rchip navy">' + esc(rShort(r.meeting_at)) + '</span>';
+  if(r.stage === 'meeting') return '<span class="rchip gold">Set a time</span>';
+  if(r.stage === 'hired') return r.rep_id ? '<span class="rchip ok">Rep ✓</span>' : '<span class="rchip gold">Add as a rep</span>';
+  const since = r.stage === 'contacted' ? r.contacted_at : r.stage === 'replied' ? r.replied_at : r.created_at;
+  const days = since ? Math.max(0, Math.floor((Date.now() - Date.parse(since)) / 86400000)) : 0;
+  const verb = r.stage === 'applied' ? 'Applied' : r.stage === 'contacted' ? 'Waiting' : 'Replied';
+  return '<span class="rchip' + (r.stage === 'contacted' && days >= 3 ? ' gold' : '') + '">' + verb + ' · ' + (days ? 'day ' + days : 'today') + '</span>';
+}
+
+function rCard(r){
+  return '<div class="rcard" draggable="true" data-rid="' + r.id + '">' +
+    '<div class="rtop"><div class="ravatar" style="background:' + rColor(r.name) + '">' + esc(rInitials(r.name)) + '</div>' +
+    '<div style="min-width:0"><div class="rname">' + esc(r.name) + '</div>' +
+    '<div class="rsub">' + esc(rSource(r.source)) + (r.location ? ' · ' + esc(r.location) : '') + '</div></div></div>' +
+    rChip(r) + '</div>';
+}
+
+async function renderRecruits(){
+  const { recruits, week } = await api('/recruits');
+  state.recruits = recruits;
+  const off = state.recWeek || 0;
+  const start = new Date(Date.parse(week.week_start) + off * 7 * 86400000);
+  const days = [];
+  for(let i = 0; i < 6; i++){
+    // Noon, so a DST change inside the week never slides a day.
+    const d = new Date(start.getTime() + i * 86400000 + 12 * 3600000);
+    days.push({ key: rDayKey(d), label: d.toLocaleDateString('en-US', { weekday:'short', timeZone: TZ }), date: d.toLocaleDateString('en-US', { month:'numeric', day:'numeric', timeZone: TZ }) });
+  }
+  const today = rDayKey(new Date());
+  const meetings = recruits.filter((r) => r.meeting_at && r.stage !== 'not_a_fit')
+    .sort((a, b) => Date.parse(a.meeting_at) - Date.parse(b.meeting_at));
+  const inWeek = meetings.filter((m) => days.some((d) => d.key === rDayKey(m.meeting_at)));
+  const lost = recruits.filter((r) => r.stage === 'not_a_fit');
+
+  const cols = RSTAGES.map(([k, label], i) => {
+    const list = recruits.filter((r) => r.stage === k);
+    return '<div class="rcol" data-rstage="' + k + '"><div class="rhead"><b>' + (i + 1) + '</b>' + esc(label) + ' <i>' + list.length + '</i></div>' +
+      (list.length ? list.map(rCard).join('') : '<div class="rempty">Drop here</div>') + '</div>';
+  }).join('');
+
+  const weekLabel = off === 0 ? 'This week' : off === 1 ? 'Next week' : off === -1 ? 'Last week' : days[0].date + '–' + days[5].date;
+  const panel = '<div class="rweek"><div style="display:flex;align-items:center;justify-content:space-between;gap:6px">' +
+      '<div class="rhead"><b>★</b>Meetings · ' + inWeek.length + '</div>' +
+      '<span style="white-space:nowrap"><button type="button" class="btn small secondary" data-rweek="-1" title="Previous week">‹</button> ' +
+      '<button type="button" class="btn small secondary" data-rweek="1" title="Next week">›</button></span></div>' +
+      '<div class="muted" style="margin:2px 0 6px;font-size:12px">' + esc(weekLabel) + '</div>' +
+      days.map((d) => {
+        const ms = inWeek.filter((m) => rDayKey(m.meeting_at) === d.key);
+        return '<div class="rday' + (d.key === today ? ' today' : '') + '"><span>' + esc(d.label) + '</span><div class="rslots">' +
+          ms.map((m) => '<div class="rslot" data-rid="' + m.id + '"><em>ZOOM</em><strong>' + esc(rTime(m.meeting_at).replace(/ [AP]M$/, '')) + '</strong><small>' + esc(m.name.split(' ')[0]) + '</small></div>').join('') +
+          '</div></div>';
+      }).join('') + '</div>';
+
+  $('tab-recruits').innerHTML =
+    '<div class="head"><h2>Recruits</h2><span style="display:flex;gap:8px;align-items:center">' +
+      '<span class="muted">Only you can see this</span><button type="button" class="btn" id="rAdd">+ Add recruit</button></span></div>' +
+    '<div class="rboard"><div class="rcols">' + cols + '</div>' + panel + '</div>' +
+    '<div class="rstats"><div class="lbl">This week</div><div class="nums">' +
+      '<span><b>' + week.applied + '</b>applied</span><span><b>' + week.contacted + '</b>contacted</span>' +
+      '<span><b>' + week.replied + '</b>replied</span><span><b>' + week.meetings + '</b>meetings</span>' +
+      '<span><b>' + week.hired + '</b>signed on</span></div></div>' +
+    (lost.length
+      ? '<details class="card" style="margin-top:16px"><summary>Not a fit (' + lost.length + ')</summary><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-top:10px">' +
+        lost.map(rCard).join('') + '</div></details>'
+      : '');
+
+  const box = $('tab-recruits');
+  box.querySelector('#rAdd').addEventListener('click', () => recruitDialog(null));
+  box.querySelectorAll('[data-rweek]').forEach((b) => b.addEventListener('click', () => { state.recWeek = off + Number(b.dataset.rweek); renderRecruits().catch((e) => flash(e.message)); }));
+  box.querySelectorAll('.rcard, .rslot').forEach((c) => c.addEventListener('click', () => recruitDialog(c.dataset.rid)));
+  box.querySelectorAll('.rcard').forEach((c) => {
+    c.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', c.dataset.rid); e.dataTransfer.effectAllowed = 'move'; c.classList.add('dragging'); });
+    c.addEventListener('dragend', () => c.classList.remove('dragging'));
+  });
+  box.querySelectorAll('.rcol').forEach((col) => {
+    col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('over'); });
+    col.addEventListener('dragleave', (e) => { if(!col.contains(e.relatedTarget)) col.classList.remove('over'); });
+    col.addEventListener('drop', async (e) => {
+      e.preventDefault(); col.classList.remove('over');
+      const id = e.dataTransfer.getData('text/plain');
+      const r = state.recruits.find((x) => x.id === id);
+      const stage = col.dataset.rstage;
+      if(!r || r.stage === stage) return;
+      try{
+        await patch('/recruits/' + id, { stage });
+        await renderRecruits();
+        // A meeting with no time is not on the calendar yet; a signed-on
+        // recruit is not a rep yet. Ask for the one missing thing right away.
+        if(stage === 'meeting' && !r.meeting_at) recruitDialog(id, { focus: 'meeting_at' });
+        if(stage === 'hired' && !r.rep_id) makeRepDialog(id);
+      }catch(err){ flash(err.message); }
+    });
+  });
+}
+
+function recruitDialog(id, { focus } = {}){
+  const r = id ? state.recruits.find((x) => x.id === id) : { name:'', email:'', phone:'', location:'', source:'wizehire', stage:'applied', meeting_at:null, next_step:'', notes:'' };
+  if(!r) return;
+  const stageOpts = RSTAGES.concat([['not_a_fit', 'Not a fit']]);
+  openDialog(
+    '<h3>' + (id ? esc(r.name) : 'Add a recruit') + '</h3>' +
+    '<form id="recForm"><label>Name</label><input name="name" required maxlength="120" value="' + esc(r.name) + '">' +
+    '<div class="row"><div><label>Phone</label><input name="phone" maxlength="50" value="' + esc(r.phone || '') + '"></div>' +
+      '<div><label>Email</label><input name="email" type="email" maxlength="200" value="' + esc(r.email || '') + '"></div></div>' +
+    '<div class="row"><div><label>Found on</label><select name="source">' + RSOURCES.map(([k, l]) => '<option value="' + k + '"' + (r.source === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div>' +
+      '<div><label>Where they are</label><input name="location" maxlength="120" placeholder="City, state or country" value="' + esc(r.location || '') + '"></div></div>' +
+    '<div class="row"><div><label>Stage</label><select name="stage">' + stageOpts.map(([k, l]) => '<option value="' + k + '"' + (r.stage === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div>' +
+      '<div><label>Meeting (Eastern)</label><input name="meeting_at" type="datetime-local" value="' + esc(rLocalInput(r.meeting_at)) + '"></div></div>' +
+    '<label>Card note <span class="muted">(short — shows on the card)</span></label><input name="next_step" maxlength="80" placeholder="e.g. Texted Tue, wants evenings" value="' + esc(r.next_step || '') + '">' +
+    '<label>Notes</label><textarea name="notes" rows="3" maxlength="4000">' + esc(r.notes || '') + '</textarea>' +
+    '<div class="actions">' +
+      (id ? '<button type="button" class="btn danger" id="recDel">Delete</button>' : '') +
+      (id && !r.rep_id ? '<button type="button" class="btn secondary" id="recRep">Sign on as a rep</button>' : '') +
+      '<button type="button" class="btn secondary" id="cancelDlg">Cancel</button><button class="btn" type="submit">Save</button></div></form>'
+  );
+  $('cancelDlg').addEventListener('click', closeDialog);
+  if(focus){ const f = $('recForm').querySelector('[name="' + focus + '"]'); if(f) f.focus(); }
+  const save = $('recForm').querySelector('button[type="submit"]');
+  $('recForm').addEventListener('submit', once(save, async (e) => {
+    e.preventDefault();
+    const d = formData(e.target);
+    const body = { name: d.name, phone: d.phone, email: d.email, source: d.source, location: d.location,
+      stage: d.stage, next_step: d.next_step, notes: d.notes,
+      meeting_at: d.meeting_at ? new Date(d.meeting_at).toISOString() : null };
+    // A time typed in on a new card means the meeting is booked.
+    if(!id && body.meeting_at && body.stage === 'applied') body.stage = 'meeting';
+    try{
+      const saved = id ? await patch('/recruits/' + id, body) : await post('/recruits', body);
+      closeDialog(); await renderRecruits();
+      if(saved.stage === 'hired' && !saved.rep_id) makeRepDialog(saved.id);
+    }catch(err){ dialogError(err.message); }
+  }));
+  if(id){
+    $('recDel').addEventListener('click', once($('recDel'), async () => {
+      if(!confirm('Delete ' + r.name + ' from Recruits?')) return;
+      try{ await api('/recruits/' + id, { method:'DELETE' }); closeDialog(); await renderRecruits(); }
+      catch(err){ dialogError(err.message); }
+    }));
+    const rep = $('recRep');
+    if(rep) rep.addEventListener('click', () => makeRepDialog(id));
+  }
+}
+
+function makeRepDialog(id){
+  const r = id && state.recruits.find((x) => x.id === id);
+  if(!r || r.rep_id) return;
+  openDialog('<h3>Add ' + esc(r.name) + ' to your reps?</h3>' +
+    '<p>They will show on the Reps tab and in the rep lists. No login is sent — use Invite on the Reps tab when you are ready.</p>' +
+    '<div class="actions"><button type="button" class="btn secondary" id="cancelDlg">Not yet</button><button type="button" class="btn" id="recMake">Add as a rep</button></div>');
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('recMake').addEventListener('click', once($('recMake'), async () => {
+    try{
+      await post('/recruits/' + id + '/make-rep');
+      await loadReps();
+      closeDialog(); flash(r.name + ' is now on the Reps tab.', true); await renderRecruits();
+    }catch(err){ dialogError(err.message); }
+  }));
+}
 </script>
 </body>
 </html>
