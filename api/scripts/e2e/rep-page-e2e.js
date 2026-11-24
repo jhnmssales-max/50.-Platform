@@ -2427,7 +2427,8 @@ async function main() {
         assert(/^What .* pays$/.test(shape.heading), `heading: ${shape.heading}`);
         assert(shape.prices > 0, 'no price boxes on an in-house company');
         eq(shape.fulfilment, 1, 'no gift-card fulfilment control');
-        eq(shape.cardCost, 1, 'no card-cost checkbox');
+        // Deliberately gone: who pays for the cards follows who sends them.
+        eq(shape.cardCost, 0, 'the card-cost checkbox is back');
         eq(shape.followup, 1, 'the follow-up control is missing');
         // The screen has to say the amounts cannot be charged here, or a
         // zero on it reads as a price rather than as the truth.

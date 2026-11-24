@@ -58,8 +58,9 @@ const IN_FLIGHT_GRACE_MS = 2 * 60 * 1000;
 // 20261025000000_dealer_pricing.sql.
 //
 // The cards' face value is added ON TOP only when the dealer is being
-// charged for cards 50. buys (tenants.charge_card_cost). Off for every
-// dealer who sends their own, which is all of them today.
+// charged for cards 50. buys (tenants.charge_card_cost), which is exactly
+// when 50. sends them: that column is generated from reward_fulfillment, so
+// the two cannot disagree. See 20261124000000_card_cost_follows_fulfillment.
 //
 //   fee only            $30 flat                      -> $30
 //   fee + card cost     $30 flat + two $50 cards      -> $130

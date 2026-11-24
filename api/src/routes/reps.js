@@ -812,8 +812,10 @@ const pricingBody = z.object({
   annual_fee_cents: z.number().int().min(0).max(1000000).optional(),
   referral_fee_cents: z.number().int().min(0).max(100000).optional(),
   reward_amount_cents: z.number().int().min(500).max(50000).optional(),
+  // Who sends the cards also decides who pays for them: tenants.charge_card_cost
+  // is a generated column now, so it is not accepted here and could not be
+  // written if it were. Change this and the billing follows.
   reward_fulfillment: z.enum(['dealer', 'platform']).optional(),
-  charge_card_cost: z.boolean().optional(),
   // Not a price: how often an invited customer is sent their link again.
   // Nullable because null is "never", and turning it back off has to be
   // expressible rather than merely omitted.
@@ -1097,7 +1099,7 @@ router.patch('/rep-dealers/:tenantId/pricing', requireAuth, wrap(async (req, res
       'select id, name, billing_required from tenants where id = $1', [tenantId]);
     if (!t) throw httpError(404, 'No such company');
     const PRICES = ['activation_fee_cents', 'annual_fee_cents', 'referral_fee_cents',
-                    'reward_amount_cents', 'reward_fulfillment', 'charge_card_cost'];
+                    'reward_amount_cents', 'reward_fulfillment'];
 
     const sets = [];
     const vals = [tenantId];
@@ -1908,8 +1910,9 @@ const buildBody = z.object({
   activation_fee_cents: z.number().int().min(0).max(1000000).optional(),
   annual_fee_cents: z.number().int().min(0).max(1000000).optional(),
   referral_fee_cents: z.number().int().min(0).max(100000).optional(),
+  // No separate "charge them for the cards" field: that follows from who
+  // sends them (tenants.charge_card_cost is generated from this column).
   reward_fulfillment: z.enum(['dealer', 'platform']).optional(),
-  charge_card_cost: z.boolean().optional(),
   admin_name: z.string().trim().min(1).max(120).optional(),
   admin_email: z.string().email().max(200).optional(),
 });
@@ -1977,13 +1980,12 @@ router.post('/rep-leads/:id/build', requireAuth, wrap(async (req, res) => {
   const tenantId = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { admin: true });
     const { rows: [r] } = await client.query(
-      'select approve_lead_build($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10) as tenant_id',
+      'select approve_lead_build($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9) as tenant_id',
       [id, plan.slug, plan.name, JSON.stringify(plan.brand), plan.rewardCents,
        body.activation_fee_cents != null ? body.activation_fee_cents : null,
        body.annual_fee_cents != null ? body.annual_fee_cents : null,
        body.referral_fee_cents != null ? body.referral_fee_cents : null,
-       body.reward_fulfillment || null,
-       body.charge_card_cost != null ? body.charge_card_cost : null]
+       body.reward_fulfillment || null]
     );
     return r.tenant_id;
   });

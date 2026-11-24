@@ -433,8 +433,9 @@ async function main() {
           activation_fee_cents: 75000,
           annual_fee_cents: 15000,
           referral_fee_cents: 4500,
+          // No charge_card_cost here: who pays for the cards follows from who
+          // sends them, so this one line is meant to produce both.
           reward_fulfillment: 'platform',
-          charge_card_cost: true,
         },
       });
       eq(r.status, 201, `build: ${JSON.stringify(r.body)}`);
@@ -463,7 +464,7 @@ async function main() {
       eq(t.referral_fee_cents, 4500, 'flat fee per referral');
       eq(t.reward_amount_cents, 2500, 'gift card');
       eq(t.reward_fulfillment, 'platform', 'who sends the cards');
-      eq(t.charge_card_cost, true, 'charged for the cards too');
+      eq(t.charge_card_cost, true, 'and therefore charged for the cards, with nothing asking for that separately');
       return '$750 / $150 / $45 a referral, 50. sends the cards and bills for them';
     });
 
@@ -501,7 +502,7 @@ async function main() {
 
       const r = await api('PATCH', `/rep-dealers/${id}/pricing`, {
         as: USERS.admin,
-        body: { referral_fee_cents: 2500, annual_fee_cents: 0, reward_fulfillment: 'platform', charge_card_cost: true },
+        body: { referral_fee_cents: 2500, annual_fee_cents: 0, reward_fulfillment: 'platform' },
       });
       eq(r.status, 200, `patch: ${JSON.stringify(r.body)}`);
       const [t] = await sql(
@@ -510,10 +511,49 @@ async function main() {
       eq(t.referral_fee_cents, 2500, 'fee changed');
       eq(t.annual_fee_cents, 0, 'a free renewal is allowed, not treated as unset');
       eq(t.reward_fulfillment, 'platform', 'fulfillment changed');
-      eq(t.charge_card_cost, true, 'card cost changed');
+      eq(t.charge_card_cost, true, 'card cost followed the switch on its own');
       // Untouched fields stay put: a partial edit must not reset the rest.
       eq(t.activation_fee_cents, 50000, 'onboarding charge left alone');
       return 'renegotiated to $25 a referral with no yearly, 50. sending the cards';
+    });
+
+    await check('Who pays for the cards cannot be set apart from who sends them', async () => {
+      // This is the whole point of the generated column. Before it, the build
+      // screen had a tick box of its own, and the quiet failure was a company
+      // set to "we send the cards" with the box left unticked: 50. bought two
+      // cards for every referral they closed and billed for neither, with
+      // nothing erroring and nothing warning.
+      const id = global.__standardTenantId;
+
+      // 1. Switching back flips the billing back with it.
+      const back = await api('PATCH', `/rep-dealers/${id}/pricing`, {
+        as: USERS.admin, body: { reward_fulfillment: 'dealer' },
+      });
+      eq(back.status, 200, `patch: ${JSON.stringify(back.body)}`);
+      let [t] = await sql('select reward_fulfillment, charge_card_cost from tenants where id = $1', [id]);
+      eq(t.reward_fulfillment, 'dealer', 'they send their own again');
+      eq(t.charge_card_cost, false, 'so they stop being billed for cards 50. is not buying');
+
+      // 2. The API refuses to carry the old field even if something still
+      //    sends it. zod strips what it does not know, so the request has to
+      //    be rejected for having nothing else in it rather than quietly
+      //    accepted as a no-op.
+      const stale = await api('PATCH', `/rep-dealers/${id}/pricing`, {
+        as: USERS.admin, body: { charge_card_cost: true },
+      });
+      eq(stale.status, 400, `a charge_card_cost-only patch must not be accepted: ${JSON.stringify(stale.body)}`);
+      [t] = await sql('select charge_card_cost from tenants where id = $1', [id]);
+      eq(t.charge_card_cost, false, 'and nothing changed');
+
+      // 3. Nor can psql, PostgREST or a future route write it directly.
+      let refused = null;
+      try {
+        await sql('update tenants set charge_card_cost = true where id = $1', [id]);
+      } catch (err) { refused = err.message; }
+      assert(refused, 'a direct write to charge_card_cost was allowed');
+      // Postgres words this "can only be updated to DEFAULT".
+      assert(/updated to DEFAULT|generated/i.test(refused), `refused for the wrong reason: ${refused}`);
+      return 'switching back unbilled the cards; a direct write is refused by the database';
     });
 
     await check('The helper cannot read or change what any dealer pays', async () => {

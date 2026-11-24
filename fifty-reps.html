@@ -1406,21 +1406,22 @@ function pricingFieldsHtml(v){
       '<input name="price_' + f.key + '" type="number" min="0" max="10000" step="1" value="' + dollars(f.key, f.std) + '">' +
       '<p class="hint">' + esc(f.hint) + '</p></div>').join('');
   const platform = v ? v.reward_fulfillment === 'platform' : false;
-  const charge = v ? !!v.charge_card_cost : false;
   const followup = (v && v.invite_followup_months != null) ? v.invite_followup_months : '';
+  // One question, not two. There used to be a tick box here for "also charge
+  // them for the gift cards", which could be left to disagree with the line
+  // above it -- set a company to "we send the cards" with the box unticked
+  // and 50. bought two cards per referral and billed for neither, silently.
+  // Whoever buys the cards is whoever sends them, so the choice below settles
+  // both, and the database enforces it (tenants.charge_card_cost is generated
+  // from this column) rather than trusting this screen to stay in step.
   const money =
     '<div class="row">' + boxes + '</div>' +
     '<label>Who sends the gift cards</label>' +
     '<select name="reward_fulfillment">' +
-      '<option value="dealer"' + (platform ? '' : ' selected') + '>They do \u2014 we email them, they send the cards</option>' +
-      '<option value="platform"' + (platform ? ' selected' : '') + '>We do \u2014 we email the cards to their customer</option>' +
+      '<option value="dealer"' + (platform ? '' : ' selected') + '>They do \u2014 we email them, they buy and send the cards</option>' +
+      '<option value="platform"' + (platform ? ' selected' : '') + '>We do \u2014 we email the cards out, and bill them for the cards</option>' +
     '</select>' +
-    '<p class="hint">Either way nothing goes out until they mark the referral paid.</p>' +
-    '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px">' +
-      '<input type="checkbox" name="charge_card_cost" style="width:auto;margin-top:3px"' + (charge ? ' checked' : '') + '>' +
-      '<span>Also charge them for the gift cards themselves' +
-      '<p class="hint" style="margin:2px 0 0">Tick this when you are buying the cards, so you are paid back for them on top of your fee. Leave it off when the cards are theirs to buy.</p></span>' +
-    '</label>';
+    '<p class="hint">Whoever sends the cards is whoever pays for them, so this one line sets both: pick “we do” and the cards’ value is added to their bill on top of your fee. Either way nothing goes out until they mark the referral paid.</p>';
 
   // How often a customer is sent their link again is not a price, so it
   // shows for every company -- in-house included. North Mountain has 184
@@ -1453,8 +1454,6 @@ function readPricingFields(form, { onlyChanges = false } = {}){
   });
   const sel = form.querySelector('[name="reward_fulfillment"]');
   if(sel && !(onlyChanges && sel.value === 'dealer')) out.reward_fulfillment = sel.value;
-  const chk = form.querySelector('[name="charge_card_cost"]');
-  if(chk && !(onlyChanges && !chk.checked)) out.charge_card_cost = chk.checked;
   // Empty means never. Sent as null rather than omitted, so turning it back
   // off actually turns it off instead of leaving the old value in place.
   const fu = form.querySelector('[name="invite_followup_months"]');
