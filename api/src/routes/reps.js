@@ -11,6 +11,9 @@ const repInviteEmail = require('../lib/repInviteEmail');
 const { sendEmail } = require('../lib/postmark');
 const tenantCopy = require('../lib/tenantCopy');
 const stripeLib = require('../lib/stripe');
+const { buildInviteUrl, ensureInviteLink, sendInviteEmail } = require('../lib/customerInvite');
+const { noteDeliveryOutcome } = require('../lib/deliveryOutcome');
+const { tokenForSending } = require('../lib/unsubscribe');
 
 // The sales-rep program (see the rep_program migration and workers/repEarnings.js).
 //
@@ -1287,6 +1290,244 @@ router.patch('/rep-dealers/:tenantId/brand', requireAuth, wrap(async (req, res) 
 
   console.log(`BRAND: ${out.name} (${tenantId}) updated — ${Object.keys(body).join(', ')}`);
   res.json(out);
+}));
+
+// ---------------------------------------------------------------------------
+// A company's own customers, for whoever looks after that company.
+//
+// Joseph: "let's enhance it to where I can see everybody's customers and
+// adjust those as well... I just want to be certain that I can help
+// everything."
+//
+// Until now nobody could. customers_select_same_tenant is
+// (tenant_id = current_tenant_id()) with no admin exception, so Joseph could
+// not see one customer of one dealer -- and there was no edit route for a
+// customer anywhere in this platform, not even for the dealer who owns them.
+// A mistyped address was permanent: the invite bounced, the row carried the
+// bounce for good, and the only repair was deleting the person and adding
+// them again under a new id.
+//
+// Same gate as branding and logins -- Joseph everywhere, a rep on the
+// companies they are on right now. Prices stay admin-only.
+// ---------------------------------------------------------------------------
+
+// The tenant fields the invite email and the invite URL need, aliased the way
+// getCallerContext aliases them so sendInviteEmail takes this row unchanged.
+async function sendingTenant(client, tenantId) {
+  const { rows: [t] } = await client.query(
+    `select id, name as tenant_name, domain as tenant_domain, branding as tenant_branding,
+            reward_amount_cents, reward_currency,
+            send_from_address, send_from_name, send_domain_verified
+       from tenants where id = $1`,
+    [tenantId]
+  );
+  if (!t) throw httpError(404, 'No such company');
+  return t;
+}
+
+const dealerCustomersQuery = z.object({
+  query: z.string().trim().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  offset: z.coerce.number().int().min(0).optional().default(0),
+});
+
+router.get('/rep-dealers/:tenantId/customers', requireAuth, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  const { query, limit, offset } = parseOr400(dealerCustomersQuery, req.query || {});
+
+  const out = await requireManagesThen(req.userId, tenantId, async (client) => {
+    const t = await sendingTenant(client, tenantId);
+    // tenant_id is in the WHERE clause here, unlike the dealer's own
+    // GET /customers which leans on RLS. This runs as the service role,
+    // where RLS is not looking, so the filter IS the scope -- and it is the
+    // same tenantId the gate above just approved, not anything from the body.
+    const { rows } = await client.query(
+      `select c.id, c.name, c.email, c.phone, c.created_at, c.last_invited_at,
+              c.delivery_failed_at, c.delivery_error, c.unsubscribed_at,
+              l.code as invite_code,
+              count(*) over() as total
+         from customers c
+         left join lateral (
+           select code from referral_links
+            where customer_id = c.id and kind = 'invite'
+            order by created_at asc
+            limit 1
+         ) l on true
+        where c.tenant_id = $1
+          and ($2::text is null
+               or lower(c.name) like $2
+               or lower(c.email) like $2
+               or lower(coalesce(c.phone, '')) like $2)
+        order by coalesce(c.last_invited_at, c.created_at) desc, c.created_at desc
+        limit $3 offset $4`,
+      [tenantId, query ? `%${query.toLowerCase()}%` : null, limit, offset]
+    );
+    return {
+      tenant_id: t.id,
+      name: t.tenant_name,
+      customers: rows.map((c) => ({
+        id: c.id,
+        name: c.name,
+        email: c.email,
+        phone: c.phone,
+        created_at: c.created_at,
+        last_invited_at: c.last_invited_at,
+        // The two reasons a send stops arriving, both repairable from here:
+        // a bounce is an address to correct, an unsubscribe is not.
+        delivery_failed_at: c.delivery_failed_at,
+        delivery_error: c.delivery_error,
+        unsubscribed_at: c.unsubscribed_at,
+        invite_url: c.invite_code ? buildInviteUrl(c.invite_code, t.tenant_domain) : null,
+      })),
+      pagination: { limit, offset, total: rows[0]?.total ? Number(rows[0].total) : 0 },
+    };
+  });
+  res.json(out);
+}));
+
+const dealerCustomerBody = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  email: z.string().trim().email().max(200).optional(),
+  phone: z.string().trim().max(40).nullable().optional(),
+}).refine((b) => Object.keys(b).length > 0, { message: 'Nothing to change' });
+
+router.patch('/rep-dealers/:tenantId/customers/:customerId', requireAuth, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  const customerId = parseOr400(uuid, req.params.customerId);
+  const body = parseOr400(dealerCustomerBody, req.body || {});
+
+  const out = await requireManagesThen(req.userId, tenantId, async (client) => {
+    const { rows: [before] } = await client.query(
+      `select id, name, email, phone, delivery_failed_at, unsubscribed_at
+         from customers where id = $1 and tenant_id = $2`,
+      [customerId, tenantId]
+    );
+    if (!before) throw httpError(404, 'No customer of that company with that id');
+
+    const sets = [];
+    const vals = [customerId, tenantId];
+    for (const key of ['name', 'email', 'phone']) {
+      if (body[key] === undefined) continue;
+      let value = body[key];
+      if (key === 'email') value = value.toLowerCase();
+      if (key === 'phone') value = value || null;
+      vals.push(value);
+      sets.push(`${key} = $${vals.length}`);
+    }
+    if (!sets.length) throw httpError(400, 'Nothing to change');
+
+    // A new address has not bounced yet. Without this the row stays flagged
+    // undeliverable through the one change that repairs it, and the only
+    // other thing that ever clears the flag is a send that gets through --
+    // which is the thing the flag is discouraging.
+    const emailChanged =
+      body.email !== undefined && body.email.toLowerCase() !== (before.email || '').toLowerCase();
+    if (emailChanged) sets.push('delivery_failed_at = null, delivery_error = null');
+
+    // unsubscribed_at is not in that list and never will be. Somebody who
+    // asked this business to stop emailing them asked the business, not the
+    // address; putting a working address back on the row is not consent, and
+    // neither is an admin deciding on their behalf.
+    const { rows: [after] } = await client.query(
+      `update customers set ${sets.join(', ')}
+        where id = $1 and tenant_id = $2
+        returning id, name, email, phone, created_at, last_invited_at,
+                  delivery_failed_at, delivery_error, unsubscribed_at`,
+      vals
+    );
+
+    // These people belong to the dealer. When somebody outside their company
+    // changes one, the dealer gets to find out who, what and when from their
+    // own trail rather than noticing a name has quietly changed.
+    const changed = {};
+    for (const key of ['name', 'email', 'phone']) {
+      if (body[key] !== undefined && (before[key] || null) !== (after[key] || null)) {
+        changed[key] = { from: before[key], to: after[key] };
+      }
+    }
+    await client.query(
+      `insert into audit_log (tenant_id, actor_user_id, action, entity_type, entity_id, metadata)
+       values ($1, $2, 'customer.corrected', 'customers', $3, $4::jsonb)`,
+      [
+        tenantId,
+        req.userId,
+        customerId,
+        JSON.stringify({ changed, bounce_cleared: emailChanged && !!before.delivery_failed_at }),
+      ]
+    );
+    return after;
+  });
+  res.json(out);
+}));
+
+// Send this customer their invite again -- the same link, not a new one, for
+// the same reason the dealer's own resend reuses it: the usual prompt is "I
+// can't find your email", and a fresh URL strands any copy they later dig up.
+router.post('/rep-dealers/:tenantId/customers/:customerId/resend', requireAuth, wrap(async (req, res) => {
+  const tenantId = parseOr400(uuid, req.params.tenantId);
+  const customerId = parseOr400(uuid, req.params.customerId);
+
+  const prepared = await requireManagesThen(req.userId, tenantId, async (client) => {
+    const tenant = await sendingTenant(client, tenantId);
+    const { rows: [customer] } = await client.query(
+      'select id, name, email from customers where id = $1 and tenant_id = $2',
+      [customerId, tenantId]
+    );
+    if (!customer) throw httpError(404, 'No customer of that company with that id');
+
+    const { link } = await ensureInviteLink(client, {
+      tenantId,
+      customerId: customer.id,
+      name: customer.name,
+    });
+    const unsubscribeToken = await tokenForSending(client, customer.id);
+
+    // Only stamped when something is actually going out, so an unsubscribed
+    // customer does not get a "Last sent" date for a send that never happened.
+    let touched = customer;
+    if (unsubscribeToken) {
+      const { rows: [row] } = await client.query(
+        `update customers set last_invited_at = now() where id = $1
+          returning id, name, email, phone, created_at, last_invited_at,
+                    delivery_failed_at, delivery_error, unsubscribed_at`,
+        [customer.id]
+      );
+      touched = row || customer;
+    }
+    return { tenant, customer: touched, link, unsubscribeToken };
+  });
+
+  const inviteUrl = buildInviteUrl(prepared.link.code, prepared.tenant.tenant_domain);
+  const body = { customer: prepared.customer, invite_url: inviteUrl };
+
+  // Same refusal and the same wording the dealer sees on their own screen.
+  if (!prepared.unsubscribeToken) {
+    body.email = {
+      sent: false,
+      reason: 'unsubscribed',
+      error: `${prepared.customer.name || 'This customer'} asked to stop receiving referral emails, so nothing was sent. Their link still works if you want to pass it on another way.`,
+    };
+    return res.json(body);
+  }
+
+  try {
+    await sendInviteEmail({
+      tenant: prepared.tenant,
+      customerName: prepared.customer.name,
+      customerEmail: prepared.customer.email,
+      inviteUrl,
+      unsubscribeToken: prepared.unsubscribeToken,
+    });
+    body.email = { sent: true, resent: true };
+    await noteDeliveryOutcome(prepared.customer.id, null);
+  } catch (emailErr) {
+    // A failed send is reported on the row, not as a 500: the link exists and
+    // the address is now known bad, which is what the page needs to show.
+    body.email = { sent: false, error: emailErr.message };
+    await noteDeliveryOutcome(prepared.customer.id, emailErr);
+  }
+
+  res.json(body);
 }));
 
 // The wording fields, for any rep. The build screen used to carry its own
