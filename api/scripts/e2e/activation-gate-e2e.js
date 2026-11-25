@@ -1538,11 +1538,14 @@ async function main() {
       skip('Declined fee / lost response / concurrency', 'failure injection needs the stand-in; covered in --stripe=stand-in');
     }
 
-    await check('The flat fee does not move when the gift card amount does', async () => {
-      // This is the whole reason the percentage went: a dealer who sends
-      // their own cards can have any reward, or none that 50. funds, and
-      // Joseph still gets paid the same amount per referral. Under the old
-      // rate, dropping the reward dropped his fee with it.
+    await check('The fee moves with the gift card, because it is 30% of it', async () => {
+      // Reversed deliberately (20261126_fee_follows_the_card). This used to
+      // assert the opposite: the fee was made flat so that a dealer who
+      // funds their own cards paid the same per referral whatever their card
+      // was. Joseph's call is that 30% of the payout is the price, full
+      // stop -- two $50 cards is $30, two $100 cards is $60 -- and that it
+      // should never be a number anybody types. So the fee is generated from
+      // the card now, and this check guards the new rule instead.
       const at = async (reward) => {
         await sql(`update tenants set reward_amount_cents = $2 where id = $1`, [newTenantId, reward]);
         const me = await api('GET', '/api/me', { token: tokenFor(USERS.newAdmin) });
@@ -1550,16 +1553,20 @@ async function main() {
       };
       const small = await at(3333);
       // Capped by tenants_card_requires_low_charge: on a card, two cards plus
-      // the platform fee must stay under $500. The point here is that the fee
-      // holds, not how big the reward can get.
+      // the platform fee must stay under $500.
       const big = await at(20000);
       await sql(`update tenants set reward_amount_cents = 5000 where id = $1`, [newTenantId]);
-      eq(small.fee_cents, 3000, 'fee at a $33.33 card');
-      eq(big.fee_cents, 3000, 'fee at a $200.00 card');
+      // 30% of what the two cards cost, rounded to the cent: 2 x $33.33 is
+      // $66.66, so $20.00.
+      eq(small.fee_cents, 2000, 'fee at a $33.33 card');
+      eq(big.fee_cents, 12000, 'fee at a $200.00 card');
+      // And nothing wrote either figure. The card was the only thing set.
+      const [row] = await sql('select referral_fee_cents from tenants where id = $1', [newTenantId]);
+      eq(row.referral_fee_cents, 3000, 'back to $30 the moment the card went back to $50');
       eq(small.payout_cents, 6666, 'payout still reported');
       // This dealer sends their own cards, so 50. charges the fee alone.
       eq(small.card_cents, 0, 'card cost not charged');
-      eq(small.charged_cents, 3000, 'charged = the fee');
+      eq(small.charged_cents, 2000, 'charged = the fee, which moved with the card');
       return `fee held at $30.00 across a $33.33 and a $200.00 card`;
     });
 

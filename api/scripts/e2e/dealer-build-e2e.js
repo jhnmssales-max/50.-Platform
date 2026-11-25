@@ -432,7 +432,6 @@ async function main() {
           // Joseph priced this one himself on the build screen.
           activation_fee_cents: 75000,
           annual_fee_cents: 15000,
-          referral_fee_cents: 4500,
           // No charge_card_cost here: who pays for the cards follows from who
           // sends them, so this one line is meant to produce both.
           reward_fulfillment: 'platform',
@@ -461,11 +460,13 @@ async function main() {
            from tenants where id = $1`, [built.tenant_id]);
       eq(t.activation_fee_cents, 75000, 'onboarding charge');
       eq(t.annual_fee_cents, 15000, 'yearly');
-      eq(t.referral_fee_cents, 4500, 'flat fee per referral');
       eq(t.reward_amount_cents, 2500, 'gift card');
+      // Nothing asked for either of these. The fee is 30% of the two $25
+      // cards, and being billed for the cards follows from sending them.
+      eq(t.referral_fee_cents, 1500, 'the fee follows the gift card, with nothing asking for it');
       eq(t.reward_fulfillment, 'platform', 'who sends the cards');
       eq(t.charge_card_cost, true, 'and therefore charged for the cards, with nothing asking for that separately');
-      return '$750 / $150 / $45 a referral, 50. sends the cards and bills for them';
+      return '$750 / $150 / $15 a referral off a $25 card, 50. sends the cards and bills for them';
     });
 
     await check('A build that sets no prices gets the standard terms, not whatever the form showed', async () => {
@@ -485,7 +486,7 @@ async function main() {
            from tenants where id = $1`, [r.body.tenant_id]);
       eq(t.activation_fee_cents, 50000, 'standard onboarding charge');
       eq(t.annual_fee_cents, 10000, 'standard yearly');
-      eq(t.referral_fee_cents, 3000, 'standard flat fee');
+      eq(t.referral_fee_cents, 3000, 'the standard fee, off the standard $50 card');
       eq(t.reward_amount_cents, 5000, 'standard gift card');
       eq(t.reward_fulfillment, 'dealer', 'dealer sends their own cards by default');
       eq(t.charge_card_cost, false, 'not charged for cards 50. does not buy');
@@ -502,19 +503,22 @@ async function main() {
 
       const r = await api('PATCH', `/rep-dealers/${id}/pricing`, {
         as: USERS.admin,
-        body: { referral_fee_cents: 2500, annual_fee_cents: 0, reward_fulfillment: 'platform' },
+        body: { reward_amount_cents: 4000, annual_fee_cents: 0, reward_fulfillment: 'platform' },
       });
       eq(r.status, 200, `patch: ${JSON.stringify(r.body)}`);
       const [t] = await sql(
         `select activation_fee_cents, annual_fee_cents, referral_fee_cents, reward_fulfillment, charge_card_cost
            from tenants where id = $1`, [id]);
-      eq(t.referral_fee_cents, 2500, 'fee changed');
+      // Nothing sent a fee. Dropping the card from $50 to $40 drops the fee
+      // from $30 to $24 on its own, which is the whole point: a company's
+      // fee can no longer be left behind when its card changes.
+      eq(t.referral_fee_cents, 2400, 'the fee came down with the card, untouched by the request');
       eq(t.annual_fee_cents, 0, 'a free renewal is allowed, not treated as unset');
       eq(t.reward_fulfillment, 'platform', 'fulfillment changed');
       eq(t.charge_card_cost, true, 'card cost followed the switch on its own');
       // Untouched fields stay put: a partial edit must not reset the rest.
       eq(t.activation_fee_cents, 50000, 'onboarding charge left alone');
-      return 'renegotiated to $25 a referral with no yearly, 50. sending the cards';
+      return 'card cut to $40 so the fee fell to $24, no yearly, 50. sending the cards';
     });
 
     await check('Who pays for the cards cannot be set apart from who sends them', async () => {
@@ -569,11 +573,11 @@ async function main() {
       // passed while testing nothing.
       const id = global.__standardTenantId;
       const g = await api('GET', `/rep-dealers/${id}/pricing`, { as: USERS.helper });
-      const pch = await api('PATCH', `/rep-dealers/${id}/pricing`, { as: USERS.helper, body: { referral_fee_cents: 1 } });
+      const pch = await api('PATCH', `/rep-dealers/${id}/pricing`, { as: USERS.helper, body: { reward_amount_cents: 1000 } });
       eq(g.status, 403, `helper GET: ${JSON.stringify(g.body)}`);
       eq(pch.status, 403, `helper PATCH: ${JSON.stringify(pch.body)}`);
       const [t] = await sql('select referral_fee_cents from tenants where id = $1', [id]);
-      eq(t.referral_fee_cents, 2500, 'the refused requests changed nothing');
+      eq(t.referral_fee_cents, 2400, 'the refused requests changed nothing');
       return 'helper refused on both, nothing moved';
     });
 
@@ -703,16 +707,21 @@ async function main() {
       // is untouched -- which is the part that has to stay true.
       const [gss] = await sql(`select id from tenants where slug = 'good-steward-structures'`);
       const r = await api('PATCH', `/rep-dealers/${gss.id}/pricing`, {
-        as: USERS.admin, body: { referral_fee_cents: 5000 },
+        as: USERS.admin, body: { annual_fee_cents: 5000 },
       });
       eq(r.status, 200, `expected it to save: ${JSON.stringify(r.body)}`);
       const [t] = await sql(
-        'select referral_fee_cents, billing_required from tenants where id = $1', [gss.id]);
-      eq(t.referral_fee_cents, 5000, 'the amount did not save');
+        'select annual_fee_cents, referral_fee_cents, billing_required from tenants where id = $1', [gss.id]);
+      eq(t.annual_fee_cents, 5000, 'the amount did not save');
       // The thing that actually matters: it is still exempt.
       eq(t.billing_required, false, 'an in-house company stopped being exempt');
-      await sql('update tenants set referral_fee_cents = null where id = $1', [gss.id]).catch(() => {});
-      return 'the amount saved; billing_required is still false, so nothing can charge it';
+      // And its fee per referral stays at nothing however big its gift card
+      // is, because the generated fee is zero for an exempt company. A flat
+      // 30% would have put $30 here -- a figure nothing charges today, but
+      // one that would go live the moment anybody flipped that flag.
+      eq(t.referral_fee_cents, 0, 'an in-house company was given a fee');
+      await sql('update tenants set annual_fee_cents = 0 where id = $1', [gss.id]).catch(() => {});
+      return 'the amount saved, the fee stayed at zero, and billing_required is still false';
     });
 
     await check('Their wording lands on the dealer, with every other line filled in generically', async () => {

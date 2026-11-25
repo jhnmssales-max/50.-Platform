@@ -1407,8 +1407,11 @@ async function main() {
       const [t] = await sql(
         'select activation_fee_cents, annual_fee_cents, referral_fee_cents from tenants where id = $1',
         [r.body.tenant_id]);
-      eq([t.activation_fee_cents, t.annual_fee_cents, t.referral_fee_cents], [0, 25000, 9900], 'exactly what he set');
-      return 'free onboarding, $250 a year, $99 a referral — all of it his to set';
+      eq([t.activation_fee_cents, t.annual_fee_cents], [0, 25000], 'exactly what he set');
+      // The fee is the one price nobody sets any more, his own builds
+      // included: 30% of two $100 cards.
+      eq(t.referral_fee_cents, 6000, 'and the fee follows the card he chose');
+      return 'free onboarding, $250 a year, a $100 card and the $60 fee that follows it';
     });
 
     await check('She cannot build somebody else\'s lead, through the API or the function itself', async () => {
@@ -1430,7 +1433,7 @@ async function main() {
       let refused = null;
       try {
         await asUser(ANGELA.id,
-          `select approve_lead_build($1,'not-hers-co','Not Hers Co','{}'::jsonb,5000,null,null,null,null)`,
+          `select approve_lead_build($1,'not-hers-co','Not Hers Co','{}'::jsonb,5000,null,null,null)`,
           [bobLead.id]);
       } catch (e) { refused = e.message; }
       assert(refused && /not yours/i.test(refused), `the function allowed it: ${refused}`);
