@@ -690,6 +690,13 @@
     color:var(--charcoal);display:flex;gap:12px;align-items:flex-start;box-shadow:0 18px 50px rgba(0,0,0,.25);}
   .rcols{flex:1 1 auto;min-width:0;display:grid;grid-template-columns:repeat(5,minmax(165px,1fr));gap:12px;overflow-x:auto;}
   .rboard > .rweek{flex:0 0 230px;}
+  /* The pipeline board: the same board, three columns instead of five, and
+     each column wide enough for a company name and a contact line. */
+  .rcols.three{grid-template-columns:repeat(3,minmax(230px,1fr));}
+  .rcard.flat{cursor:default;}
+  .rcard.flat:hover{box-shadow:0 2px 6px rgba(12,30,72,.06);transform:none;}
+  .rcard .rwhen{display:block;margin-top:6px;font-size:12px;color:var(--muted);}
+  .rcard .rdo{margin-top:8px;}
   .rcol{min-width:150px;display:flex;flex-direction:column;gap:8px;border-radius:12px;padding:4px;min-height:220px;transition:background .12s;}
   .rcol.over{background:var(--tintbg);outline:2px dashed var(--secondary);outline-offset:-2px;}
   .rhead{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;background:var(--primary);color:#fff;
@@ -785,6 +792,7 @@
     <section id="tab-money" class="hide"></section>
     <section id="tab-mymoney" class="hide"></section>
     <section id="tab-builds" class="hide"></section>
+    <section id="tab-pipeline" class="hide"></section>
     <section id="tab-company" class="hide"></section>
     <section id="tab-calls" class="hide"></section>
     <section id="tab-recruits" class="hide"></section>
@@ -801,7 +809,7 @@ const SUPABASE_URL = "https://jzjmuttqbtandwjmwwfn.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_RE92j36ZEVFvSBwV-Rl8hg_JyfxRT6a";
 
 const TZ = 'America/New_York';
-const state = { me: null, isAdmin: false, isRep: false, myRepId: null, reps: [], leads: [], dealers: [], builds: [], company: null, money: null, month: null, tab: 'leads', settings: null, calMonth: null, calItems: [], leadRep: '', leadStatus: '', leadByRep: [] };
+const state = { me: null, isAdmin: false, isRep: false, isAgency: false, myRepId: null, reps: [], leads: [], dealers: [], builds: [], company: null, money: null, month: null, tab: 'leads', settings: null, calMonth: null, calItems: [], leadRep: '', leadStatus: '', leadByRep: [] };
 
 /* ---------- helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1032,7 +1040,14 @@ async function start(){
   state.isAdmin = state.me.role === 'admin';
   state.isRep = state.me.role === 'rep';
   state.myRepId = state.isRep && state.reps.length ? state.reps[0].id : null;
-  $('who').textContent = state.me.name + ' · ' + (state.isAdmin ? 'admin' : state.isRep ? 'rep' : 'helper');
+  // Someone who sells 50. for an outside company on its own contract. They
+  // are a rep login like any other; what differs is that 50. holds no money
+  // for them and they build their own companies' dashboards. Read off their
+  // own rep row, which RLS has already narrowed to exactly them.
+  const myRep = state.isRep && state.reps.length ? state.reps[0] : null;
+  state.isAgency = Boolean(myRep && myRep.kind === 'agency');
+  $('who').textContent = state.me.name + ' · ' +
+    (state.isAdmin ? 'admin' : state.isAgency ? (myRep.company || 'agency') : state.isRep ? 'rep' : 'helper');
   $('loginBox').classList.add('hide'); $('app').classList.remove('hide');
   // A rep runs their own pipeline: their leads, their dealers, their money.
   // No Reps tab (there is only them) and no Money tab (that is everyone's).
@@ -1040,10 +1055,18 @@ async function start(){
   // before the lists of everything. The page still OPENS on Leads, which is
   // where everyone's habit already is; adding a tab should not move the
   // furniture. Change state.tab's default to 'calendar' to open on it.
-  const tabs = state.isRep
-    ? [['calendar','Calendar'],['leads','My leads'],['calls','Calls'],['dealers','My dealers'],['mymoney','My money']]
-    : [['calendar','Calendar'],['leads','Leads'],['calls','Calls'],['reps','Reps'],['dealers','Companies']];
+  // An agency rep opens on the board, because the board IS their job: move
+  // each company from being worked, to signed up, to paying. No My Money —
+  // they are paid by their own company, and a tab reading $0 owed would not
+  // be an empty page, it would be a wrong one. Build dashboards instead,
+  // which is the part Joseph handed over.
+  const tabs = state.isAgency
+    ? [['pipeline','Pipeline'],['calendar','Calendar'],['leads','My leads'],['calls','Calls'],['builds','Build dashboards'],['dealers','My companies']]
+    : state.isRep
+      ? [['calendar','Calendar'],['leads','My leads'],['calls','Calls'],['dealers','My dealers'],['mymoney','My money']]
+      : [['calendar','Calendar'],['leads','Leads'],['calls','Calls'],['reps','Reps'],['dealers','Companies']];
   if(state.isAdmin) tabs.push(['recruits','Recruits'], ['builds','Build dashboards'], ['money','Money'], ['company','Finances']);
+  if(state.isAgency) state.tab = 'pipeline';
   $('tabs').innerHTML = tabs.map(([k,l]) => '<button type="button" data-tab="' + k + '">' + l + '</button>').join('');
   $('tabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
   showTab(state.tab);
@@ -1054,12 +1077,13 @@ async function loadReps(){ const d = await api('/reps'); state.reps = d.reps; st
 
 async function showTab(tab){
   state.tab = tab; clearFlash();
-  // The recruits board is six columns across; give it the room.
-  document.querySelector('main').classList.toggle('wide', tab === 'recruits');
+  // The recruits board is six columns across and the pipeline board three;
+  // give them the room.
+  document.querySelector('main').classList.toggle('wide', tab === 'recruits' || tab === 'pipeline');
   $('tabs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
   // Every tab's section, not just the ones that existed when this was
   // written: a key missing here renders its tab perfectly and never shows it.
-  for(const k of ['calendar','leads','calls','reps','dealers','money','mymoney','builds','company','recruits']) $('tab-' + k).classList.toggle('hide', k !== tab);
+  for(const k of ['calendar','leads','calls','reps','dealers','money','mymoney','builds','company','recruits','pipeline']) $('tab-' + k).classList.toggle('hide', k !== tab);
   try{
     if(tab === 'calendar') await renderCalendar();
     if(tab === 'leads') await renderLeads();
@@ -1068,6 +1092,7 @@ async function showTab(tab){
     if(tab === 'money') await renderMoney();
     if(tab === 'mymoney') await renderMyMoney();
     if(tab === 'builds') await renderBuilds();
+    if(tab === 'pipeline') await renderPipeline();
     if(tab === 'company') await renderCompany();
     if(tab === 'calls') await renderCalls();
     if(tab === 'recruits') await renderRecruits();
@@ -3080,6 +3105,97 @@ async function renderDealers(){
   }));
 }
 
+/* ---------- the pipeline board ---------- */
+// Three columns, in the order the work actually moves. The point of the
+// middle one is that it exists at all: a lead is not finished when it is won.
+// It is won, then a dashboard is built, then somebody at that company signs
+// in and pays — and weeks can pass in that last gap with the lead sitting in
+// the Won pile looking done. Everything in the middle column is work that is
+// still owed something, and a card says which half of the wait it is in.
+//
+// Nothing here is dragged between columns. A card moves when the thing it
+// describes actually happens: winning the lead moves it out of Working, the
+// money clearing moves it into Signed on. A board you can drag is a board
+// that can disagree with the database.
+async function renderPipeline(){
+  const me = state.myRepId;
+  const [p, year] = await Promise.all([
+    api('/rep-pipeline'),
+    me ? api('/reports/rep/' + me).catch(() => null) : Promise.resolve(null),
+  ]);
+
+  const card = (c, extra) =>
+    '<div class="rcard flat">' +
+      '<div class="rname">' + esc(c.company_name) + '</div>' +
+      '<div class="rsub">' + esc(c.contact_name || c.email || c.phone || 'no contact yet') + '</div>' +
+      (extra || '') +
+    '</div>';
+
+  const working = p.working.map((c) =>
+    card(c, '<span class="rwhen">Found ' + esc(plainDate(c.found_on)) + '</span>')).join('');
+
+  const waiting = p.not_signed_up.map((c) => card(c,
+    '<span class="rchip' + (c.waiting_on === 'a dashboard' ? ' gold' : '') + '">' +
+      (c.waiting_on === 'a dashboard' ? 'Needs a dashboard' : 'Waiting on them to pay') + '</span>' +
+    '<span class="rwhen">Won ' + esc(plainDate(c.closed_on)) + '</span>' +
+    (c.waiting_on === 'a dashboard' && p.can_build
+      ? '<div class="rdo"><button type="button" class="btn small" data-pbuild="' + esc(c.id) + '">Build dashboard</button></div>'
+      : ''))).join('');
+
+  const signed = p.signed_on.map((c) =>
+    card(c, '<span class="rwhen">Signed on ' + esc(plainDate(c.activated_on || c.closed_on)) + '</span>')).join('');
+
+  const col = (n, label, count, inner, empty) =>
+    '<div class="rcol"><div class="rhead"><b>' + n + '</b>' + esc(label) + ' <i>' + count + '</i></div>' +
+      (count ? inner : '<div class="rempty">' + esc(empty) + '</div>') + '</div>';
+
+  // The two rates that matter, and the gap between them. A high first rate
+  // with a low second one is leads won and then dropped, which is work done
+  // for nothing — and it is invisible on any board that stops at Won.
+  const conv = year && year.conversion;
+  const rate = (v) => v === null || v === undefined ? '—' : v + '%';
+  const charts = year
+    ? '<div class="reportgrid" style="margin-top:14px">' +
+        '<div class="chartcard"><h3>Month by month</h3>' +
+          '<div class="muted">Leads found, companies won, and the ones that actually paid and went live.</div>' +
+          barChart(year.months, [
+            { key:'leads', label:'Leads in', color:CHART.steel },
+            { key:'won', label:'Won', color:CHART.primary },
+            { key:'signed_on', label:'Signed on', color:CHART.green },
+          ]) + '</div>' +
+        '<div class="chartcard"><h3>Conversion</h3>' +
+          '<div class="muted">' + (conv && conv.decided
+            ? 'Of the ' + conv.decided + ' leads that reached an answer this year. Still-open leads are left out — counting them as losses flatters nobody and counting them as wins flatters everybody.'
+            : 'Nothing has reached an answer yet this year.') + '</div>' +
+          donut(
+            [{ label:'Won', value:(conv && conv.won) || 0, color:CHART.primary },
+             { label:'Lost', value:(conv && conv.lost) || 0, color:CHART.line }],
+            rate(conv && conv.rate), 'of leads won'
+          ) +
+          '<div class="rstats" style="margin-top:12px"><div class="lbl">And then</div><div class="nums">' +
+            '<span><b>' + ((conv && conv.won) || 0) + '</b>won</span>' +
+            '<span><b>' + ((conv && conv.signed_on) || 0) + '</b>signed on</span>' +
+            '<span><b>' + rate(conv && conv.signed_on_rate) + '</b>of wins paid</span>' +
+          '</div></div>' +
+        '</div>' +
+      '</div>'
+    : '';
+
+  $('tab-pipeline').innerHTML =
+    '<div class="head"><h2>Pipeline</h2><span class="muted">' +
+      p.working.length + ' working · ' + p.not_signed_up.length + ' not signed up yet · ' +
+      p.signed_on.length + ' signed on</span></div>' +
+    '<div class="rboard"><div class="rcols three">' +
+      col(1, 'Working', p.working.length, working, 'No open leads.') +
+      col(2, 'Not signed up yet', p.not_signed_up.length, waiting, 'Nothing waiting.') +
+      col(3, 'Signed on', p.signed_on.length, signed, 'None yet.') +
+    '</div></div>' +
+    charts;
+
+  $('tab-pipeline').querySelectorAll('[data-pbuild]').forEach((b) =>
+    b.addEventListener('click', () => buildDialog(b.dataset.pbuild)));
+}
+
 /* ---------- charts ---------- */
 // Drawn by hand as SVG rather than pulled from a library: these are a dozen
 // bars and a ring, the page already has no build step and no dependencies, and
@@ -3176,6 +3292,9 @@ async function renderBuilds(){
   state.builds = q.builds;
   $('tab-builds').innerHTML =
     '<div class="head"><h2>Build dashboards</h2><span class="muted">' + q.builds.length + ' waiting</span></div>' +
+    (state.isAgency
+      ? '<div class="notice">Your won companies, waiting for a dashboard. 50.\u2019s terms are set for you \u2014 $500 to start, $100 a year, and a fee per referral of 30% of the two gift cards. The gift card itself is yours to agree with them.</div>'
+      : '') +
     (q.builds.length
       ? '<div class="tablewrap"><table><thead><tr><th>Company</th><th>Contact</th><th>Closed by</th><th>Won</th><th>Files</th><th></th></tr></thead><tbody>' +
         q.builds.map((b) =>
@@ -3187,7 +3306,9 @@ async function renderBuilds(){
           '<td class="num">' + b.file_count + '</td>' +
           '<td class="num"><button class="btn" data-build="' + b.id + '">Build dashboard</button></td></tr>'
         ).join('') + '</tbody></table></div>'
-      : '<div class="notice">Nothing waiting. When a rep marks a company won it lands here, for you to check before their dashboard is built.</div>');
+      : '<div class="notice">' + (state.isAgency
+          ? 'Nothing waiting. When you mark a company won it lands here, ready to build.'
+          : 'Nothing waiting. When a rep marks a company won it lands here, for you to check before their dashboard is built.') + '</div>');
   $('tab-builds').querySelectorAll('[data-build]').forEach((x) => x.addEventListener('click', () => buildDialog(x.dataset.build)));
 }
 
@@ -3236,11 +3357,23 @@ async function buildDialog(leadId){
       '<div class="row"><div><label>Their contact\u2019s name</label><input name="admin_name" maxlength="120" value="' + esc(lead.contact_name || '') + '"></div>' +
       '<div><label>Gift card each side gets ($)</label><input name="reward" type="number" min="5" max="500" step="1" value="' + (cardCents / 100) + '"></div></div>' +
 
-      // Every price is per dealer now. Pre-filled with the standard terms, so
-      // leaving them alone builds a dealer on the usual deal.
+      // Every price is per dealer -- for Joseph. An agency rep builds the
+      // whole dashboard but the prices are 50.'s, so she gets the figures
+      // read-only instead of boxes she could change. The lock is in
+      // approve_lead_build, not here: this screen only shows what the
+      // database is going to do, so a hand-written request cannot get a
+      // different answer by skipping the page.
       '<h3 style="font-size:15px;margin:14px 0 2px">What they pay</h3>' +
-      '<p class="muted" style="margin:2px 0 8px">Pre-filled with the standard terms. Change any of them for this dealer.</p>' +
-      pricingFieldsHtml(null) +
+      (state.isAgency
+        ? '<p class="muted" style="margin:2px 0 8px">These are 50.\u2019s standard terms and are set for you. The gift card above is yours to agree with them \u2014 the fee per referral follows it.</p>' +
+          '<div class="rstats" id="agencyPrices"><div class="lbl">Their terms</div><div class="nums">' +
+            '<span><b>$500</b>to start</span>' +
+            '<span><b>$100</b>every year</span>' +
+            '<span><b id="agencyFee">\u2014</b>per referral</span>' +
+            '<span><b>They send</b>the gift cards</span>' +
+          '</div></div>'
+        : '<p class="muted" style="margin:2px 0 8px">Pre-filled with the standard terms. Change any of them for this dealer.</p>' +
+          pricingFieldsHtml(null)) +
 
       '<h3 style="font-size:15px;margin:14px 0 2px">Their logo</h3>' +
       (b.logoUrl
@@ -3294,6 +3427,24 @@ async function buildDialog(leadId){
   });
   drawPreview();
 
+  // The fee an agency rep's company will pay, shown live as she changes the
+  // gift card. The same sum approve_lead_build does: 30% of what the two
+  // cards cost. Shown rather than sent -- the database works it out again
+  // from the card it actually stores, so this can only ever be a preview of
+  // the real answer, never the source of it.
+  const feeNote = $('agencyFee');
+  if(feeNote){
+    const rewardInput = $('dlg').querySelector('[name=reward]');
+    const showFee = () => {
+      const card = Math.round(Number(rewardInput.value) * 100);
+      feeNote.textContent = Number.isFinite(card) && card > 0
+        ? dollars(Math.round(card * 2 * 0.30))
+        : '\u2014';
+    };
+    rewardInput.addEventListener('input', showFee);
+    showFee();
+  }
+
   $('cancelDlg').addEventListener('click', closeDialog);
   $('declineBuild').addEventListener('click', async () => {
     const reason = window.prompt('Not building ' + lead.company_name + '. Why? (optional — it stays on the lead)', '');
@@ -3319,8 +3470,10 @@ async function buildDialog(leadId){
         brand, copy: readCopyFields(e.target), reward_amount_cents: Math.round(Number(d.reward) * 100),
         // Only prices Joseph actually changed. Sending the standard ones
         // explicitly would pin them on the dealer, so a later change to what
-        // "standard" means would skip every dealer built before it.
-        ...readPricingFields(e.target, { onlyChanges: true }),
+        // "standard" means would skip every dealer built before it. An agency
+        // rep has no price boxes to read, and the database would ignore them
+        // anyway.
+        ...(state.isAgency ? {} : readPricingFields(e.target, { onlyChanges: true })),
       });
       closeDialog();
       const trouble = (out.emailed && out.emailed.problems) || [];
@@ -3359,43 +3512,64 @@ async function repReport(repId, year){
     '<p class="muted">' + esc(d.rep.email || '') + (d.rep.active ? '' : ' · inactive') + '</p>' +
 
     '<div class="cards">' +
-      '<div class="stat"><b>' + t.won + '</b><span>Companies signed in ' + d.year + '</span></div>' +
+      '<div class="stat"><b>' + t.won + '</b><span>Companies won in ' + d.year + '</span></div>' +
+      '<div class="stat"><b>' + t.signed_on + '</b><span>Of those, signed on and paying</span></div>' +
       '<div class="stat"><b>' + t.leads + '</b><span>Leads brought in</span></div>' +
       '<div class="stat"><b>' + openish + '</b><span>Still open' + (now.open_over_30_days ? ' · ' + now.open_over_30_days + ' over 30 days' : '') + '</span></div>' +
-      '<div class="stat"><b>' + dollars(t.earned_cents) + '</b><span>Earned in ' + d.year + '</span></div>' +
+      // Absent, not zero, for someone paid by their own company: a $0 here
+      // would read as "you are owed nothing", which is not what is true.
+      (now.owed_cents === undefined ? '' :
+        '<div class="stat"><b>' + dollars(t.earned_cents) + '</b><span>Earned in ' + d.year + '</span></div>') +
     '</div>' +
 
     '<div class="reportgrid">' +
       '<div class="chartcard"><h3>Month by month</h3>' +
-        '<div class="muted">Leads brought in, and companies signed.</div>' +
+        '<div class="muted">Leads brought in, companies won, and the ones that actually paid and went live.</div>' +
         barChart(d.months, [
           { key:'leads', label:'Leads in', color:CHART.steel },
-          { key:'won', label:'Signed', color:CHART.primary },
+          { key:'won', label:'Won', color:CHART.primary },
+          { key:'signed_on', label:'Signed on', color:CHART.green },
         ]) + '</div>' +
       '<div class="chartcard"><h3>Conversion</h3>' +
         '<div class="muted">' + (d.conversion.decided
             ? 'Of the ' + d.conversion.decided + ' that reached an answer. Still-open leads are left out.'
             : 'Nothing has reached an answer yet.') + '</div>' +
         donut(
-          [{ label:'Signed', value:d.conversion.won, color:CHART.primary }, { label:'Lost', value:d.conversion.lost, color:CHART.line }],
+          [{ label:'Won', value:d.conversion.won, color:CHART.primary }, { label:'Lost', value:d.conversion.lost, color:CHART.line }],
           rate === null ? '—' : rate + '%',
-          'signed'
-        ) + '</div>' +
+          'of leads won'
+        ) +
+        // Winning a lead is not the finish line; the company paying is. The
+        // gap between these two rates is leads won and then dropped.
+        '<div class="rstats" style="margin-top:12px"><div class="lbl">And then</div><div class="nums">' +
+          '<span><b>' + d.conversion.won + '</b>won</span>' +
+          '<span><b>' + d.conversion.signed_on + '</b>signed on</span>' +
+          '<span><b>' + (d.conversion.signed_on_rate === null ? '—' : d.conversion.signed_on_rate + '%') + '</b>of wins paid</span>' +
+        '</div></div>' +
+        '</div>' +
     '</div>' +
 
-    '<div class="chartcard"><h3>What they earned</h3>' +
-      '<div class="muted">Sign-up bonuses and referral royalties, in the month each was earned.</div>' +
-      barChart(d.months, [
-        { key:'bonus_cents', label:'Sign-up bonuses', color:CHART.primary },
-        { key:'royalty_cents', label:'Referral royalties', color:CHART.gold },
-      ], { money:true }) + '</div>' +
+    (now.owed_cents === undefined ? '' :
+      '<div class="chartcard"><h3>What they earned</h3>' +
+        '<div class="muted">Sign-up bonuses and referral royalties, in the month each was earned.</div>' +
+        barChart(d.months, [
+          { key:'bonus_cents', label:'Sign-up bonuses', color:CHART.primary },
+          { key:'royalty_cents', label:'Referral royalties', color:CHART.gold },
+        ], { money:true }) + '</div>') +
 
-    '<div class="tablewrap"><table style="min-width:0"><thead><tr><th>Month</th><th class="num">Leads in</th><th class="num">Signed</th><th class="num">Lost</th><th class="num">Earned</th></tr></thead><tbody>' +
-      d.months.map((m) => '<tr><td>' + esc(m.label) + '</td><td class="num">' + m.leads + '</td><td class="num">' + m.won +
-        '</td><td class="num">' + m.lost + '</td><td class="num">' + dollars(m.earned_cents) + '</td></tr>').join('') +
-      '<tr><td><b>Total</b></td><td class="num"><b>' + t.leads + '</b></td><td class="num"><b>' + t.won +
-        '</b></td><td class="num"><b>' + t.lost + '</b></td><td class="num"><b>' + dollars(t.earned_cents) + '</b></td></tr>' +
-    '</tbody></table></div>' +
+    (() => {
+      const money = now.owed_cents !== undefined;
+      return '<div class="tablewrap"><table style="min-width:0"><thead><tr><th>Month</th><th class="num">Leads in</th>' +
+        '<th class="num">Won</th><th class="num">Signed on</th><th class="num">Lost</th>' +
+        (money ? '<th class="num">Earned</th>' : '') + '</tr></thead><tbody>' +
+        d.months.map((m) => '<tr><td>' + esc(m.label) + '</td><td class="num">' + m.leads + '</td><td class="num">' + m.won +
+          '</td><td class="num">' + m.signed_on + '</td><td class="num">' + m.lost + '</td>' +
+          (money ? '<td class="num">' + dollars(m.earned_cents) + '</td>' : '') + '</tr>').join('') +
+        '<tr><td><b>Total</b></td><td class="num"><b>' + t.leads + '</b></td><td class="num"><b>' + t.won +
+          '</b></td><td class="num"><b>' + t.signed_on + '</b></td><td class="num"><b>' + t.lost + '</b></td>' +
+          (money ? '<td class="num"><b>' + dollars(t.earned_cents) + '</b></td>' : '') + '</tr>' +
+      '</tbody></table></div>';
+    })() +
 
     '<p class="muted" style="margin-top:12px">Right now: ' + now.dealers + ' dealer' + (now.dealers === 1 ? '' : 's') +
       ', ' + now.awaiting_build + ' waiting to be built, ' + dollars(now.owed_cents) + ' owed.</p>' +

@@ -17,6 +17,7 @@ const { runBillingEmailCycle } = require('./billingEmails');
 const { runRepEarningsCycle } = require('./repEarnings');
 const { runFollowupReminderCycle } = require('./followupReminders');
 const { runInviteFollowupCycle } = require('./inviteFollowups');
+const { runWeeklyStatusCycle } = require('./weeklyStatusReport');
 
 const INTERVAL_MS = 60 * 60 * 1000;
 const FIRST_RUN_DELAY_MS = 2 * 60 * 1000;
@@ -64,6 +65,15 @@ async function tick() {
     await runInviteFollowupCycle();
   } catch (err) {
     console.error('INVITE_FOLLOWUPS scheduled cycle failed:', err.message);
+  }
+  // The Monday status report (workers/weeklyStatusReport.js). Checks the day
+  // and the hour itself, so on six days out of seven this is one cheap query
+  // and nothing else. No `force`: a cycle on a Wednesday is meant to do
+  // nothing.
+  try {
+    await runWeeklyStatusCycle();
+  } catch (err) {
+    console.error('WEEKLY_STATUS scheduled cycle failed:', err.message);
   }
 }
 

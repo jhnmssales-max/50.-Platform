@@ -39,12 +39,16 @@ async function requirePlatform(client, userId, { admin = false, rep = false } = 
   if (!t || t.slug !== '50-platform') throw httpError(403, 'Reports are only for 50. staff');
   const { rows: [u] } = await client.query('select role from users where id = $1', [userId]);
   const isRep = Boolean(u && u.role === 'rep');
-  const { rows: [r] } = await client.query('select current_rep_id() as rep_id');
+  const { rows: [r] } = await client.query(
+    'select current_rep_id() as rep_id, current_agency_rep_id() as agency_rep_id');
   const repId = (r && r.rep_id) || null;
   if (isRep && !repId) throw httpError(403, 'This rep account has been switched off.', 'rep_inactive');
   if (isRep && !rep) throw httpError(403, 'That report is not for reps', 'staff_only');
   if (admin && !ctx.is_admin) throw httpError(403, 'Only the 50. admin can see the company report', 'admin_only');
-  return { ...ctx, rep_id: repId, is_rep: isRep };
+  // Someone who sells 50. for an outside company. Their report is theirs like
+  // any rep's; what it must not carry is a balance, because 50. holds none
+  // for them. See 20261125000000_agency_reps.
+  return { ...ctx, rep_id: repId, is_rep: isRep, is_agency: Boolean(r && r.agency_rep_id) };
 }
 
 function wrap(handler) {
@@ -135,6 +139,29 @@ router.get('/reports/rep/:id', requireAuth, wrap(async (req, res) => {
       [id, `${year}-%`]
     );
 
+    // Companies of theirs that actually paid, by the month the money cleared.
+    // This is the stage after "won": a lead can be won, built, and then sit
+    // for weeks without anyone signing in and paying, and counting those as
+    // the finish line is how a pipeline flatters itself. Scoped the same way
+    // the Companies tab is -- closer or onboarder -- so a company they
+    // onboarded for somebody else still counts as one of theirs.
+    const { rows: signed } = await client.query(
+      `select to_char(t.activation_paid_at at time zone '${BILLING_TIME_ZONE}', 'YYYY-MM') as month,
+              count(distinct t.id)::int as signed_on
+       from tenants t
+       join rep_assignments a on a.tenant_id = t.id
+        and (a.closer_rep_id = $1 or a.onboarder_rep_id = $1)
+       where t.activation_paid_at is not null
+         -- Live money only, which is the same test rep_dealer_list() makes
+         -- for "activated". A test-mode activation is not a company that
+         -- paid, and the board and this chart must not disagree.
+         and t.activation_livemode is true
+         and (t.activation_paid_at at time zone '${BILLING_TIME_ZONE}') >= $2::date
+         and (t.activation_paid_at at time zone '${BILLING_TIME_ZONE}') < $3::date
+       group by 1`,
+      [id, ...bounds]
+    );
+
     // Still in play right now — not a monthly figure, a standing one.
     const { rows: [open] } = await client.query(
       `select count(*)::int as open_leads,
@@ -152,17 +179,46 @@ router.get('/reports/rep/:id', requireAuth, wrap(async (req, res) => {
        from rep_assignments where effective_to is null and (closer_rep_id = $1 or onboarder_rep_id = $1)`,
       [id]
     );
+
+    // The three stages of their pipeline as they stand right now, which is
+    // what the board on the page draws. Deliberately counted here rather than
+    // in the page from three separate lists: the page would then be adding up
+    // whatever happened to be loaded, and a paged leads list is not all of
+    // them.
+    const { rows: [stages] } = await client.query(
+      `select
+         -- Still being worked.
+         (select count(*)::int from rep_leads
+           where (brought_in_by_rep_id = $1 or closed_by_rep_id = $1) and status = 'open') as working,
+         -- Won, and either not built yet or built and not paid for. One
+         -- column on the board, because from their side it is one wait.
+         (select count(*)::int from rep_leads l
+           where (l.brought_in_by_rep_id = $1 or l.closed_by_rep_id = $1)
+             and l.status = 'won'
+             and (l.tenant_id is null
+                  or exists (select 1 from tenants t where t.id = l.tenant_id
+                              and not (t.activation_paid_at is not null
+                                       and t.activation_livemode is true)))) as not_signed_up_yet,
+         -- Paid, which is the finish line.
+         (select count(distinct t.id)::int
+            from tenants t
+            join rep_assignments a on a.tenant_id = t.id
+             and (a.closer_rep_id = $1 or a.onboarder_rep_id = $1)
+           where t.activation_paid_at is not null
+             and t.activation_livemode is true) as signed_on`,
+      [id]
+    );
     const { rows: [balance] } = await client.query(
       `select (coalesce((select sum(amount_cents) from rep_earnings where rep_id = $1), 0)
              - coalesce((select sum(amount_cents) from rep_payouts where rep_id = $1), 0))::int as owed_cents`,
       [id]
     );
 
-    const byMonth = fill(months, [...inbound, ...won, ...earned, ...lost].reduce((acc, row) => {
+    const byMonth = fill(months, [...inbound, ...won, ...earned, ...lost, ...signed].reduce((acc, row) => {
       const at = acc.find((x) => x.month === row.month);
       if (at) Object.assign(at, row); else acc.push({ ...row });
       return acc;
-    }, []), ['leads', 'won', 'lost', 'bonus_cents', 'royalty_cents', 'earned_cents']);
+    }, []), ['leads', 'won', 'lost', 'signed_on', 'bonus_cents', 'royalty_cents', 'earned_cents']);
 
     const total = (k) => byMonth.reduce((n, m) => n + m[k], 0);
     const decided = total('won') + total('lost');
@@ -175,6 +231,8 @@ router.get('/reports/rep/:id', requireAuth, wrap(async (req, res) => {
         leads: total('leads'),
         won: total('won'),
         lost: total('lost'),
+        // Of the ones won, how many actually paid. Won is not the finish line.
+        signed_on: total('signed_on'),
         earned_cents: total('earned_cents'),
         bonus_cents: total('bonus_cents'),
         royalty_cents: total('royalty_cents'),
@@ -184,7 +242,14 @@ router.get('/reports/rep/:id', requireAuth, wrap(async (req, res) => {
         open_over_30_days: open.open_over_30_days,
         awaiting_build: waiting.awaiting_build,
         dealers: dealers.dealers_now,
-        owed_cents: balance.owed_cents,
+        // The three columns of the pipeline board, as they stand.
+        working: stages.working,
+        not_signed_up_yet: stages.not_signed_up_yet,
+        signed_on: stages.signed_on,
+        // 50. holds no balance for someone paid by their own company, so the
+        // field is absent rather than zero -- a zero here would read as "you
+        // are owed nothing", which is not what is true.
+        ...(ctx.is_agency ? {} : { owed_cents: balance.owed_cents }),
       },
       // Out of the leads that actually reached an answer. Leads still open are
       // left out on purpose: counting them as losses flatters nobody and
@@ -194,6 +259,13 @@ router.get('/reports/rep/:id', requireAuth, wrap(async (req, res) => {
         won: total('won'),
         lost: total('lost'),
         rate: decided ? Math.round((total('won') / decided) * 1000) / 10 : null,
+        // Of the ones they won, how many actually paid and went live. The
+        // gap between these two rates is the one that costs money: a lead
+        // won and never signed up was work done for nothing.
+        signed_on: total('signed_on'),
+        signed_on_rate: total('won')
+          ? Math.round((total('signed_on') / total('won')) * 1000) / 10
+          : null,
       },
     };
   });

@@ -808,15 +808,34 @@ async function main() {
       return 'second attempt 409; one dealer; queue empty';
     });
 
-    await check('Two companies with the same name get different addresses', async () => {
-      const twin = (await api('POST', '/rep-leads', { as: USERS.admin, body: { company_name: 'Silver Run Home Improvements', email: 'other@silverrun2.test', confirm_duplicate: true } })).body;
-      await api('POST', `/rep-leads/${twin.id}/win`, { as: USERS.admin, body: { closed_by_rep_id: repRow.id } });
-      const r = await api('POST', `/rep-leads/${twin.id}/build`, { as: USERS.admin, body: {} });
-      eq(r.status, 201, `build: ${JSON.stringify(r.body)}`);
-      eq(r.body.slug, 'silver-run-home-improvements', 'the API asks for the plain one');
-      const [t] = await sql('select slug from tenants where id = $1', [r.body.tenant_id]);
-      eq(t.slug, 'silver-run-home-improvements-2', 'and the database gives the second one its own address');
-      return r.body.slug;
+    await check('Two companies with the same name get different addresses, and the answer says which', async () => {
+      // Both are built here rather than leaning on an earlier check, so this
+      // proves the -2 whatever else in the suite did or did not run.
+      //
+      // The slug is the dealer's address on the platform, and it used to come
+      // back from this route as the one the API ASKED for. approve_lead_build
+      // appends -2 when the name is taken, so the second company was handed a
+      // link to the first company's page -- the page a build screen shows and
+      // a rep sends on. The answer is read from the row now.
+      const build = async (email) => {
+        const lead = (await api('POST', '/rep-leads', {
+          as: USERS.admin,
+          body: { company_name: 'Twin Barn Co', email, confirm_duplicate: true },
+        })).body;
+        await api('POST', `/rep-leads/${lead.id}/win`, { as: USERS.admin, body: { closed_by_rep_id: repRow.id } });
+        const r = await api('POST', `/rep-leads/${lead.id}/build`, { as: USERS.admin, body: {} });
+        eq(r.status, 201, `build: ${JSON.stringify(r.body)}`);
+        const [t] = await sql('select slug from tenants where id = $1', [r.body.tenant_id]);
+        // The one invariant that matters: what the caller is told the address
+        // is, and what the address is, are the same string.
+        eq(r.body.slug, t.slug, 'the answer reports the address the company actually has');
+        return t.slug;
+      };
+      const first = await build('one@twinbarn.test');
+      const second = await build('two@twinbarn.test');
+      eq(first, 'twin-barn-co', 'the first takes the plain address');
+      eq(second, 'twin-barn-co-2', 'the second gets its own');
+      return `${first} and ${second}`;
     });
 
     await check('A lead with no email cannot be built, and nothing is half-created', async () => {

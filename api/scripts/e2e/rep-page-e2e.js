@@ -2081,7 +2081,11 @@ async function main() {
       const bars = await coPage.$$eval('#dlg svg.chart rect', (els) => els.filter((e) => Number(e.getAttribute('height')) > 1).length);
       assert(bars > 0, 'no bars have any height');
       const text = (await coPage.textContent('#dlg')).replace(/\s+/g, ' ');
-      assert(/Companies signed in/.test(text) && /Conversion/.test(text), text.slice(0, 160));
+      // "Won" and "signed on and paying" are two different numbers now: a
+      // company can be won and then never pay, and a report that stops at
+      // Won cannot show that.
+      assert(/Companies won in/.test(text) && /signed on and paying/.test(text) && /Conversion/.test(text), text.slice(0, 220));
+      assert(/of wins paid/.test(text), `no won-to-paid rate: ${text.slice(0, 220)}`);
       await coPage.click('#cancelDlg');
       return `${charts} charts, ${bars} bars with height`;
     });

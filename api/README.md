@@ -361,6 +361,67 @@ Both are bounded (8s, 1.5MB of HTML, a sampled grid rather than every pixel), be
   - `npm run e2e:rep-page` — the page in headless Chromium as Joseph, as the helper, as a rep and as a dealer's login, including dropping a real PNG on a lead and building the dealer from the review screen. 35 checks.
 
 
+## Agency reps
+
+Someone who sells 50. for an **outside company** on its own contract — Angela,
+who works for SmartScale Global. They are a rep in every way that matters to
+the pipeline and in none that matters to payroll. `reps.kind` is `'agency'`
+and `reps.company` names who they sell for; the database refuses `'agency'`
+with no company.
+
+- **They earn nothing from 50.** They are on `rep_assignments` (that is what
+  puts a company on their Companies tab), so `src/workers/repEarnings.js`
+  skips them explicitly on `kind`, and a trigger on `rep_earnings` refuses any
+  row for them whatever writes it. The My Money tab is not hidden, it is
+  **refused** (`403 agency_no_money`) — a tab reading `$0 owed` would not be a
+  blank page, it would be a wrong one.
+- **They build their own dealers.** `can_build_dealers()` is the one test:
+  Joseph, or an active agency rep. `/api/rep-builds` shows each of them only
+  their own won leads, and `approve_lead_build` refuses a lead that is not
+  theirs — checked in the function as well as the route, because the function
+  is `security definer` and sees every row RLS would hide.
+- **The prices are not theirs.** An agency rep's build takes the standard
+  onboarding and yearly prices, a referral fee of **30% of what the two gift
+  cards cost**, and dealer-sent cards — **whatever the request sends**. Only
+  the gift card amount is theirs to agree. That is enforced in
+  `approve_lead_build` and not on the build screen, because a screen can be
+  skipped; the screen only shows what the database is going to do. Joseph's
+  own builds are unchanged and price every company however he likes.
+- Switching an agency rep off takes their build rights away the same moment it
+  takes their pipeline away (`current_agency_rep_id()` goes null).
+
+**The pipeline board.** `GET /api/rep-pipeline` returns three columns —
+*working*, *not signed up yet*, *signed on* — built in one query rather than
+assembled in the page from the paged leads list. The middle column is the
+point: a lead is not finished when it is won, and weeks can pass between a
+dashboard being built and somebody at that company signing in and paying.
+Nothing is dragged between columns; a card moves when the thing it describes
+actually happens. `GET /api/reports/rep/:id` carries the same three counts plus
+`signed_on` per month and a **won → paid** rate beside the lead → won one.
+
+**The Monday status report.** `src/workers/weeklyStatusReport.js`, built by
+`src/lib/weeklyStatusEmail.js`, run hourly by `src/workers/renewalScheduler.js`
+like everything else — it checks the day and the hour itself, so on six days
+out of seven it is one cheap query. One email to every admin of the 50. tenant
+on Monday after 7am Eastern, covering the week just finished: one line per rep
+who did something, a list of names for the ones who did not, and the standing
+three columns. `rep_week_report_emails` has a unique `(user_id, week_start)`,
+which is what holds it to once a week; it needs its own table because
+`rep_reminder_emails` is keyed `(user_id, for_date)` and Joseph gets the daily
+digest on Mondays too. `npm run weekly-status` runs one cycle by hand and
+**`npm run weekly-status:dry-run`** prints the report without sending or
+writing anything; `--now` skips both gates.
+
+- **Code.** `supabase/migrations/20261125000000_agency_reps.sql` (`reps.kind`,
+  `reps.company`, `current_agency_rep_id()`, `can_build_dealers()`, the
+  nine-argument `approve_lead_build`, the `rep_earnings` trigger) and
+  `20261125000001_weekly_status_report.sql` (`rep_week_report_emails`).
+- **Verifying.** `npm run e2e:rep-pipeline` covers all of it: the locked
+  prices proved both through the API and by calling `approve_lead_build`
+  directly as her, the money routes refused, a cleared activation on her own
+  company paying her nothing, and the Monday report's once-a-week ledger.
+
+
 ## The wording wizard
 
 The reps page walks a business's wording one page at a time: the invite email, their share page, the share sheet, the page their friend lands on, the reminder email, the gift-card notes, the terms page. Each step DRAWS that page in CSS and puts the editable text where it sits on it, so a rep typing "had a roof put on by us" can see the sentence it finishes.
