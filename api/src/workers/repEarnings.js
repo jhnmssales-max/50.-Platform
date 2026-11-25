@@ -65,6 +65,11 @@ const ACTIVATION_SQL = `
     ('closer', a.closer_rep_id, s.activation_cents),
     ('onboarder', a.onboarder_rep_id, s.onboarder_activation_cents)
   ) r(role, rep_id, rate)
+  -- An agency rep is on the assignment (it is what puts the company on their
+  -- Companies tab) but is paid by their own company, not by 50. Joined rather
+  -- than filtered with a NOT EXISTS so a rep record that has vanished takes
+  -- the earning with it instead of quietly paying.
+  join reps rp on rp.id = r.rep_id and rp.kind = 'rep'
   where be.event_type = 'activation_charge'
     and be.status = 'succeeded'
     and be.livemode is true
@@ -108,6 +113,9 @@ const REFERRAL_SQL = `
       ('closer', a.closer_rep_id, s.referral_cents, s.referral_cents_after_threshold),
       ('onboarder', a.onboarder_rep_id, s.onboarder_referral_cents, s.onboarder_referral_cents_after_threshold)
     ) r(role, rep_id, rate_base, rate_after)
+    -- Same as the activation query: an agency rep is on the assignment but is
+    -- never paid by 50.
+    join reps rp on rp.id = r.rep_id and rp.kind = 'rep'
     cross join lateral (
       -- This rep's company number for this dealer: how many of their
       -- companies (ever assigned as closer or onboarder, activated for real)

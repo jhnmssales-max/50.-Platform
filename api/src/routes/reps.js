@@ -45,7 +45,7 @@ function httpError(status, message, publicCode) {
 // Resolves who is calling and refuses early. `admin` is Joseph only; `rep`
 // lets a sales rep through, in which case the returned ctx.rep_id is the only
 // rep whose rows they may see and every handler below narrows to it.
-async function requirePlatform(client, userId, { admin = false, rep = false } = {}) {
+async function requirePlatform(client, userId, { admin = false, rep = false, money = false, build = false } = {}) {
   const ctx = await getCallerContext(client, userId);
   if (!ctx) throw httpError(403, 'No account found for this user');
   const { rows: [t] } = await client.query('select slug from tenants where id = $1', [ctx.tenant_id]);
@@ -53,15 +53,29 @@ async function requirePlatform(client, userId, { admin = false, rep = false } = 
 
   const { rows: [u] } = await client.query('select role from users where id = $1', [userId]);
   const isRep = Boolean(u && u.role === 'rep');
-  const { rows: [r] } = await client.query('select current_rep_id() as rep_id');
+  const { rows: [r] } = await client.query(
+    'select current_rep_id() as rep_id, current_agency_rep_id() as agency_rep_id');
   const repId = (r && r.rep_id) || null;
+  // Angela and anyone else who sells 50. for an outside company. They work
+  // the pipeline like any rep, earn nothing from 50., and build their own
+  // dealers. See 20261125000000_agency_reps.
+  const isAgency = Boolean(r && r.agency_rep_id);
 
   // A rep whose rep record was switched off: current_rep_id() goes null, so
   // they would otherwise see an empty page with no explanation.
   if (isRep && !repId) throw httpError(403, 'This rep account has been switched off. Ask Joseph to turn it back on.', 'rep_inactive');
   if (isRep && !rep) throw httpError(403, 'That part of the reps area is not for reps', 'staff_only');
   if (admin && !ctx.is_admin) throw httpError(403, 'Only the 50. admin can see or change rep money', 'admin_only');
-  return { ...ctx, rep_id: repId, is_rep: isRep };
+  // Money here is 50.'s rep program. An agency rep is paid by their own
+  // company on their own terms, so a statement from 50. is not an empty page
+  // for them -- it is a wrong one. Refused rather than shown as zeros.
+  if (money && isAgency) {
+    throw httpError(403, 'You are paid by your own company, so 50. keeps no earnings for you', 'agency_no_money');
+  }
+  if (build && !ctx.is_admin && !isAgency) {
+    throw httpError(403, 'Only the 50. admin or an agency rep can build a dashboard', 'build_not_allowed');
+  }
+  return { ...ctx, rep_id: repId, is_rep: isRep, is_agency: isAgency, agency_rep_id: (r && r.agency_rep_id) || null };
 }
 
 // Postgres errors raised by the migration's own functions carry a SQLSTATE
@@ -119,6 +133,11 @@ const repBody = z.object({
   email: optText(200),
   phone: optText(50),
   notes: optText(2000),
+  // 'rep' is on 50.'s own program; 'agency' sells 50. for an outside company
+  // on its own contract. The database refuses an agency rep with no company
+  // named, so the two always travel together.
+  kind: z.enum(['rep', 'agency']).optional(),
+  company: optText(160),
 });
 
 function repRow(r) {
@@ -130,6 +149,11 @@ function repRow(r) {
     active: r.active,
     notes: r.notes,
     created_at: r.created_at,
+    // What kind of rep, and who they sell for. The page reads these to decide
+    // whether to show My Money (never, for an agency rep) and whether they
+    // may build their own dashboards.
+    kind: r.kind || 'rep',
+    company: r.company || null,
     // Sent so the page can say "already removed" instead of offering a Remove
     // that the database is going to refuse.
     closed_at: r.closed_at,
@@ -149,7 +173,7 @@ router.get('/reps', requireAuth, wrap(async (req, res) => {
   const out = await withUserTransaction(req.userId, async (client) => {
     const ctx = await requirePlatform(client, req.userId, { rep: true });
     const { rows } = await client.query(
-      `select r.id, r.name, r.email, r.phone, r.active, r.notes, r.created_at, r.user_id, r.closed_at,
+      `select r.id, r.name, r.email, r.phone, r.active, r.notes, r.created_at, r.user_id, r.closed_at, r.kind, r.company,
               (select count(*)::int from rep_leads l where l.brought_in_by_rep_id = r.id) as leads_brought_in,
               (select count(*)::int from rep_assignments a where a.closer_rep_id = r.id and a.effective_to is null) as companies_closed,
               (select count(*)::int from rep_assignments a where a.onboarder_rep_id = r.id and a.effective_to is null) as companies_onboarded
@@ -199,9 +223,10 @@ router.post('/reps', requireAuth, wrap(async (req, res) => {
   const rep = await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId);
     const { rows: [r] } = await client.query(
-      `insert into reps (name, email, phone, notes) values ($1, $2, $3, $4)
-       returning id, name, email, phone, active, notes, created_at`,
-      [body.name, body.email || null, body.phone || null, body.notes || null]
+      `insert into reps (name, email, phone, notes, kind, company) values ($1, $2, $3, $4, $5, $6)
+       returning id, name, email, phone, active, notes, created_at, kind, company`,
+      [body.name, body.email || null, body.phone || null, body.notes || null,
+       body.kind || 'rep', body.company || null]
     );
     return { ...r, leads_brought_in: 0, companies_closed: 0, companies_onboarded: 0 };
   });
@@ -215,7 +240,7 @@ router.patch('/reps/:id', requireAuth, wrap(async (req, res) => {
     await requirePlatform(client, req.userId);
     const sets = [];
     const vals = [id];
-    for (const key of ['name', 'email', 'phone', 'notes', 'active']) {
+    for (const key of ['name', 'email', 'phone', 'notes', 'active', 'kind', 'company']) {
       if (body[key] !== undefined) {
         vals.push(body[key] === '' ? null : body[key]);
         sets.push(`${key} = $${vals.length}`);
@@ -223,7 +248,7 @@ router.patch('/reps/:id', requireAuth, wrap(async (req, res) => {
     }
     if (!sets.length) throw httpError(400, 'Nothing to change');
     const { rows: [r] } = await client.query(
-      `update reps set ${sets.join(', ')} where id = $1 returning id, name, email, phone, active, notes, created_at`,
+      `update reps set ${sets.join(', ')} where id = $1 returning id, name, email, phone, active, notes, created_at, kind, company`,
       vals
     );
     if (!r) throw httpError(404, 'No such rep');
@@ -1671,7 +1696,7 @@ router.post('/rep-leads/:id/brand-guess', requireAuth, wrap(async (req, res) => 
 // ---------------------------------------------------------------------------
 router.get('/rep-money/overview', requireAuth, wrap(async (req, res) => {
   const out = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId, { admin: true });
+    await requirePlatform(client, req.userId, { admin: true, money: true });
     const month = monthParam(req.query.month, await currentMonth(client));
     const { rows } = await client.query(
       `with mo as (
@@ -1704,7 +1729,7 @@ router.get('/rep-money/overview', requireAuth, wrap(async (req, res) => {
 router.get('/reps/:id/statement', requireAuth, wrap(async (req, res) => {
   const id = parseOr400(uuid, req.params.id);
   const out = await withUserTransaction(req.userId, async (client) => {
-    const ctx = await requirePlatform(client, req.userId, { rep: true });
+    const ctx = await requirePlatform(client, req.userId, { rep: true, money: true });
     if (!ctx.is_admin && ctx.rep_id !== id) {
       throw httpError(403, 'You can only open your own statement', 'own_statement_only');
     }
@@ -1851,18 +1876,115 @@ router.put('/rep-settings', requireAuth, wrap(async (req, res) => {
 // dealer's customers see.
 router.get('/rep-builds', requireAuth, wrap(async (req, res) => {
   const out = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId, { admin: true });
+    const ctx = await requirePlatform(client, req.userId, { rep: true, build: true });
+    // An agency rep builds their own and sees only their own. RLS on
+    // rep_leads already limits a rep to their own rows, so this WHERE is the
+    // second of the two guards rather than the only one -- and
+    // approve_lead_build makes the same check again when they go to build.
     const { rows } = await client.query(
       `select ${LEAD_COLUMNS},
               (select name from reps where id = l.closed_by_rep_id) as closed_by_name,
               (select count(*)::int from rep_lead_files f where f.lead_id = l.id) as file_count
        from rep_leads l
        where l.build_status = 'awaiting_approval'
-       order by l.closed_on, l.created_at`
+         and ($1::uuid is null
+              or l.closed_by_rep_id = $1 or l.brought_in_by_rep_id = $1)
+       order by l.closed_on, l.created_at`,
+      [ctx.is_admin ? null : ctx.agency_rep_id]
     );
     return rows;
   });
   res.json({ builds: out });
+}));
+
+// ---------------------------------------------------------------------------
+// The pipeline board: three columns, in the order the work actually moves
+// ---------------------------------------------------------------------------
+// A lead does not finish when it is won. It is won, then a dashboard gets
+// built, then somebody at that company has to sign in and pay the $500 — and
+// weeks can pass in that last gap with the lead sitting in the Won pile
+// looking finished. Counting won as the finish line is how a pipeline
+// flatters itself, so the board has three columns and the middle one is the
+// wait:
+//
+//   working          open leads, still being sold to
+//   not signed up    won, and either no dashboard yet or one nobody has
+//                    paid for. From the seller's side this is one wait, so
+//                    it is one column; each card says which half it is in.
+//   signed on        paid, live, done
+//
+// Built in ONE query rather than assembled in the page from the leads list
+// and the companies list: those are paged and filtered, and a board adding up
+// whatever happened to be loaded is a board that quietly undercounts.
+//
+// Rep-scoped by RLS, like every other read here. Joseph gets everybody's,
+// which makes this the whole company's board when he opens it.
+router.get('/rep-pipeline', requireAuth, wrap(async (req, res) => {
+  const out = await withUserTransaction(req.userId, async (client) => {
+    const ctx = await requirePlatform(client, req.userId, { rep: true });
+    // Each lead with the one fact the leads table does not carry: whether the
+    // company it became has actually paid. Read through rep_dealer_list so a
+    // rep is shown the same companies the Companies tab shows them and no
+    // others -- it is the function that already decides that question.
+    const { rows } = await client.query(
+      `with mine as (
+         select l.id, l.company_name, l.contact_name, l.email, l.phone, l.website,
+                l.found_on, l.closed_on, l.status, l.build_status, l.tenant_id,
+                l.brought_in_by_rep_id, l.closed_by_rep_id
+           from rep_leads l
+          where l.status in ('open', 'won')
+       )
+       select m.*,
+              d.name as company_live_name,
+              d.activated,
+              d.activated_on
+         from mine m
+         left join rep_dealer_list() d on d.tenant_id = m.tenant_id
+        order by coalesce(m.closed_on, m.found_on) desc, m.company_name`
+    );
+
+    const card = (r) => ({
+      id: r.id,
+      company_name: r.company_live_name || r.company_name,
+      contact_name: r.contact_name,
+      email: r.email,
+      phone: r.phone,
+      website: r.website,
+      found_on: r.found_on,
+      closed_on: r.closed_on,
+      tenant_id: r.tenant_id,
+      build_status: r.build_status,
+      activated_on: r.activated_on || null,
+    });
+
+    const working = [];
+    const notSignedUp = [];
+    const signedOn = [];
+    for (const r of rows) {
+      if (r.status === 'open') { working.push(card(r)); continue; }
+      // Won. A rep may hold a lead whose company rep_dealer_list does not
+      // show them (an in-house company, a reassignment). Unknown is treated
+      // as not yet signed on rather than as signed on: the board must never
+      // claim money arrived that it cannot see.
+      if (r.tenant_id && r.activated === true) signedOn.push(card(r));
+      else notSignedUp.push(card(r));
+    }
+
+    return {
+      // Which half of the middle column each card is in, said once here so
+      // the page does not work it out from build_status itself.
+      working,
+      not_signed_up: notSignedUp.map((c) => ({
+        ...c,
+        waiting_on: c.tenant_id ? 'them' : 'a dashboard',
+      })),
+      signed_on: signedOn,
+      is_admin: Boolean(ctx.is_admin),
+      // Only someone who may build sees a Build button on the middle column.
+      can_build: Boolean(ctx.is_admin || ctx.is_agency),
+    };
+  });
+  res.json(out);
 }));
 
 // A slug is the dealer's address on the platform, so it has to be unique and
@@ -1931,7 +2053,7 @@ router.post('/rep-leads/:id/build', requireAuth, wrap(async (req, res) => {
 
   // 1. Everything the database can check, before anything is created anywhere.
   const plan = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId, { admin: true });
+    const ctx = await requirePlatform(client, req.userId, { rep: true, build: true });
     const { rows: [lead] } = await client.query(
       `select ${LEAD_COLUMNS}, (select name from reps where id = l.closed_by_rep_id) as closed_by_name,
               (select email from reps where id = l.closed_by_rep_id) as closed_by_email
@@ -1951,6 +2073,12 @@ router.post('/rep-leads/:id/build', requireAuth, wrap(async (req, res) => {
       lead,
       name,
       slug,
+      // Whether this build sets its own prices. An agency rep's does not --
+      // approve_lead_build ignores them for her whatever is sent -- and the
+      // answer says so, so the page is never left quoting a price she did
+      // not get. is_admin rather than "not agency": the helper never reaches
+      // here at all.
+      setsOwnPrices: Boolean(ctx.is_admin),
       adminEmail,
       adminName: (body.admin_name || lead.contact_name || name).trim(),
       // branding.copy is where every public page and the invite email read
@@ -1978,7 +2106,7 @@ router.post('/rep-leads/:id/build', requireAuth, wrap(async (req, res) => {
 
   // 3. The dealer itself, in one transaction (see approve_lead_build).
   const tenantId = await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId, { admin: true });
+    await requirePlatform(client, req.userId, { rep: true, build: true });
     const { rows: [r] } = await client.query(
       'select approve_lead_build($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9) as tenant_id',
       [id, plan.slug, plan.name, JSON.stringify(plan.brand), plan.rewardCents,
@@ -2012,7 +2140,7 @@ router.post('/rep-leads/:id/build', requireAuth, wrap(async (req, res) => {
   //     price the dealer is not charged. It hardcoded $500 before this.
   const terms = await withServiceRole(async (client) => {
     const { rows: [row] } = await client.query(
-      `select activation_fee_cents, annual_fee_cents, referral_fee_cents,
+      `select slug, activation_fee_cents, annual_fee_cents, referral_fee_cents,
               reward_amount_cents, reward_fulfillment, charge_card_cost,
               branding->'copy'->>'cardNoun' as card_noun
          from tenants where id = $1`, [tenantId]);
@@ -2074,12 +2202,28 @@ router.post('/rep-leads/:id/build', requireAuth, wrap(async (req, res) => {
     }
   }
 
+  // Everything here is read back from the company that now exists, not
+  // restated from the request. Two of these used to be the request's own
+  // copy, and both could be wrong in a way nobody would notice:
+  //
+  //   slug   -- approve_lead_build appends -2 when the address is taken, so
+  //             the second "Silver Run Home Improvements" was told its page
+  //             was at an address belonging to the first one.
+  //   prices -- an agency rep's build takes the standard terms whatever it
+  //             sent, so quoting the request back would show her prices the
+  //             company is not on.
   res.status(201).json({
     tenant_id: tenantId,
-    slug: plan.slug,
+    slug: terms.slug,
     name: plan.name,
     admin_email: plan.adminEmail,
-    reward_amount_cents: plan.rewardCents || 5000,
+    reward_amount_cents: terms.reward_amount_cents,
+    activation_fee_cents: terms.activation_fee_cents,
+    annual_fee_cents: terms.annual_fee_cents,
+    referral_fee_cents: terms.referral_fee_cents,
+    reward_fulfillment: terms.reward_fulfillment,
+    // False when the prices above were decided for them rather than by them.
+    sets_own_prices: plan.setsOwnPrices,
     emailed,
   });
 }));

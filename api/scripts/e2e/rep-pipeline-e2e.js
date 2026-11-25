@@ -168,6 +168,7 @@ async function main() {
 
     process.env.DATABASE_URL = dbUrl(DB);
     const { runRepEarningsCycle } = require('../../src/workers/repEarnings');
+    const { runWeeklyStatusCycle } = require('../../src/workers/weeklyStatusReport');
     const { withUserTransaction } = require('../../src/db');
     // What this person can actually read from the database itself, RLS and all.
     const asUser = (userId, text, params) => withUserTransaction(userId, async (c) => (await c.query(text, params)).rows);
@@ -1282,6 +1283,391 @@ async function main() {
       return 'helper and rep both refused, nothing changed';
     });
 
+    // ===========================================================================
+    // Angela sells 50. for SmartScale Global. She works the pipeline like any
+    // rep, is paid by her own company rather than by 50., and builds her own
+    // dealers. The prices on those dealers are not hers to set, and that is
+    // the part worth proving twice: through the API, and by going round it.
+    section('An agency rep: builds her own dealers, earns nothing from 50.');
+
+    let angela = null;
+    let ANGELA = null;
+    await check('An agency rep has to name who they sell for', async () => {
+      const bare = await api('POST', '/reps', {
+        as: USERS.admin, body: { name: 'Nameless Agency', email: 'nobody@agency.test', kind: 'agency' },
+      });
+      assert(bare.status >= 400, `an agency rep with no company was accepted: ${JSON.stringify(bare.body)}`);
+      const r = await api('POST', '/reps', {
+        as: USERS.admin,
+        body: { name: 'Angela', email: 'angela@smartscale.test', kind: 'agency', company: 'SmartScale Global' },
+      });
+      eq(r.status, 201, `create: ${JSON.stringify(r.body)}`);
+      angela = r.body;
+      eq([angela.kind, angela.company], ['agency', 'SmartScale Global'], 'kind and company come back');
+      const [row] = await sql('select kind, company from reps where id = $1', [angela.id]);
+      eq([row.kind, row.company], ['agency', 'SmartScale Global'], 'and are on the row');
+      return 'no company -> refused; Angela created as agency for SmartScale Global';
+    });
+
+    await check('She signs in and the page can tell she is not on 50.\'s rep program', async () => {
+      await api('POST', `/reps/${angela.id}/invite`, { as: USERS.admin });
+      auth.setPassword('angela@smartscale.test', PASSWORD);
+      ANGELA = { id: auth.userIdFor('angela@smartscale.test'), email: 'angela@smartscale.test' };
+      const me = await api('GET', '/me', { as: ANGELA });
+      eq(me.body.role, 'rep', 'she is a rep login like any other');
+      const mine = await api('GET', '/reps', { as: ANGELA });
+      eq(mine.status, 200, 'reps');
+      eq(mine.body.reps.length, 1, 'she sees only herself');
+      eq(mine.body.reps[0].kind, 'agency', 'and the page learns she is agency from her own row');
+      return 'role=rep, kind=agency, company=SmartScale Global';
+    });
+
+    await check('50. keeps no money for her — the tab is refused, not shown as zeros', async () => {
+      // A My Money tab reading $0 owed would not be a blank page, it would be
+      // a wrong one: she is owed money, by SmartScale, on terms 50. does not
+      // hold. Both money routes say so rather than answering.
+      const overview = await api('GET', '/rep-money/overview', { as: ANGELA });
+      eq(overview.status, 403, 'overview');
+      const own = await api('GET', `/reps/${angela.id}/statement`, { as: ANGELA });
+      eq(own.status, 403, `her own statement: ${JSON.stringify(own.body)}`);
+      eq(own.body.code, 'agency_no_money', 'and says why');
+      // Alice is unaffected: this is about Angela, not about reps.
+      eq((await api('GET', `/reps/${rep.Alice.id}/statement`, { as: ALICE })).status, 200, 'Alice still has hers');
+      return 'overview and statement both 403 agency_no_money; a 50. rep is untouched';
+    });
+
+    await check('A 50. rep still cannot build, and the queue shows each person only their own', async () => {
+      const bobTry = await api('GET', '/rep-builds', { as: BOB });
+      eq(bobTry.status, 403, `Bob: ${JSON.stringify(bobTry.body)}`);
+      eq(bobTry.body.code, 'build_not_allowed', 'and says why');
+      eq((await api('GET', '/rep-builds', { as: USERS.helper })).status, 403, 'the helper still cannot');
+      eq((await api('GET', '/rep-builds', { as: ANGELA })).status, 200, 'Angela can');
+      return 'rep -> 403 build_not_allowed; helper -> 403; agency rep -> 200';
+    });
+
+    let angelaLead = null;
+    await check('She builds her own won lead, and the company is on 50.\'s standard terms', async () => {
+      angelaLead = (await api('POST', '/rep-leads', {
+        as: ANGELA,
+        body: { company_name: 'Hill Country Barns', contact_name: 'Dale', email: 'dale@hillcountry.test' },
+      })).body;
+      await api('POST', `/rep-leads/${angelaLead.id}/win`, { as: ANGELA, body: {} });
+
+      const queue = await api('GET', '/rep-builds', { as: ANGELA });
+      eq(queue.body.builds.length, 1, 'her won lead is waiting in her queue');
+      eq(queue.body.builds[0].id, angelaLead.id, 'and it is hers');
+
+      // She sends prices she is not allowed to set, as a hand-written request
+      // would. The gift card is the one thing she decides.
+      const r = await api('POST', `/rep-leads/${angelaLead.id}/build`, {
+        as: ANGELA,
+        body: {
+          reward_amount_cents: 2500,
+          activation_fee_cents: 0,
+          annual_fee_cents: 0,
+          referral_fee_cents: 0,
+          reward_fulfillment: 'platform',
+        },
+      });
+      eq(r.status, 201, `build: ${JSON.stringify(r.body)}`);
+      eq(r.body.sets_own_prices, false, 'the answer says the prices were not hers');
+
+      const [t] = await sql(
+        `select activation_fee_cents, annual_fee_cents, referral_fee_cents,
+                reward_amount_cents, reward_fulfillment, charge_card_cost
+           from tenants where id = $1`, [r.body.tenant_id]);
+      eq(t.activation_fee_cents, 50000, 'the standard $500, not the $0 she sent');
+      eq(t.annual_fee_cents, 10000, 'the standard $100, not the $0 she sent');
+      eq(t.reward_amount_cents, 2500, 'the $25 card IS hers');
+      // 30% of what the two cards cost: $25 + $25 = $50, so $15.
+      eq(t.referral_fee_cents, 1500, '30% of the two cards, worked out from her card');
+      eq(t.reward_fulfillment, 'dealer', 'they send their own cards, not the platform she asked for');
+      eq(t.charge_card_cost, false, 'so they are not billed for cards 50. is not buying');
+      // And the answer quotes the company's real terms, not the request's.
+      eq([r.body.activation_fee_cents, r.body.annual_fee_cents, r.body.referral_fee_cents],
+         [50000, 10000, 1500], 'the response reports what the company actually got');
+      return '$25 card hers; $500 / $100 / $15 fee locked; her $0s and her "we send the cards" ignored';
+    });
+
+    await check('Joseph can still price a company however he likes', async () => {
+      // The lock is on her, not on the build screen. Nothing above should
+      // have taken anything away from Joseph.
+      const lead = (await api('POST', '/rep-leads', {
+        as: USERS.admin, body: { company_name: 'Josephs Pick Co', contact_name: 'Sam', email: 'sam@jpick.test' },
+      })).body;
+      await api('POST', `/rep-leads/${lead.id}/win`, { as: USERS.admin, body: { closed_by_rep_id: rep.Alice.id } });
+      const r = await api('POST', `/rep-leads/${lead.id}/build`, {
+        as: USERS.admin,
+        body: { activation_fee_cents: 0, annual_fee_cents: 25000, referral_fee_cents: 9900, reward_amount_cents: 10000 },
+      });
+      eq(r.status, 201, `build: ${JSON.stringify(r.body)}`);
+      eq(r.body.sets_own_prices, true, 'his prices are his');
+      const [t] = await sql(
+        'select activation_fee_cents, annual_fee_cents, referral_fee_cents from tenants where id = $1',
+        [r.body.tenant_id]);
+      eq([t.activation_fee_cents, t.annual_fee_cents, t.referral_fee_cents], [0, 25000, 9900], 'exactly what he set');
+      return 'free onboarding, $250 a year, $99 a referral — all of it his to set';
+    });
+
+    await check('She cannot build somebody else\'s lead, through the API or the function itself', async () => {
+      const bobLead = (await api('POST', '/rep-leads', {
+        as: BOB, body: { company_name: 'Not Hers Co', contact_name: 'Pat', email: 'pat@nothers.test' },
+      })).body;
+      await api('POST', `/rep-leads/${bobLead.id}/win`, { as: BOB, body: {} });
+
+      // Her own queue does not show it.
+      const queue = await api('GET', '/rep-builds', { as: ANGELA });
+      assert(!queue.body.builds.some((b) => b.id === bobLead.id), 'Bob\'s lead appeared in her queue');
+
+      // Sent straight at the route anyway.
+      const r = await api('POST', `/rep-leads/${bobLead.id}/build`, { as: ANGELA, body: {} });
+      assert(r.status >= 400, `she built another rep's lead: ${JSON.stringify(r.body)}`);
+
+      // And going round the route entirely: the function makes its own check,
+      // because it is security definer and sees every row RLS would hide.
+      let refused = null;
+      try {
+        await asUser(ANGELA.id,
+          `select approve_lead_build($1,'not-hers-co','Not Hers Co','{}'::jsonb,5000,null,null,null,null)`,
+          [bobLead.id]);
+      } catch (e) { refused = e.message; }
+      assert(refused && /not yours/i.test(refused), `the function allowed it: ${refused}`);
+      const [still] = await sql('select build_status from rep_leads where id = $1', [bobLead.id]);
+      eq(still.build_status, 'awaiting_approval', 'and nothing was built');
+      return 'not in her queue; the route refuses; the function refuses on its own';
+    });
+
+    await check('Switching her off takes her build rights with her pipeline', async () => {
+      await api('PATCH', `/reps/${angela.id}`, { as: USERS.admin, body: { active: false } });
+      const r = await api('GET', '/rep-builds', { as: ANGELA });
+      eq(r.status, 403, 'build queue');
+      const [can] = await asUser(USERS.admin.id, 'select 1 as ok');
+      eq(can.ok, 1, 'Joseph is unaffected');
+      await api('PATCH', `/reps/${angela.id}`, { as: USERS.admin, body: { active: true } });
+      eq((await api('GET', '/rep-builds', { as: ANGELA })).status, 200, 'and back on when she is');
+      return 'inactive -> 403; active again -> 200';
+    });
+
+    await check('A cleared activation on her company pays her nothing, and nothing can put an earning on her', async () => {
+      // This is the failure that matters: money appearing where none is owed.
+      // She is on the assignment — that is what puts the company on her
+      // Companies tab — so the earnings worker has to skip her on purpose.
+      const [mine] = await sql(
+        'select tenant_id from rep_assignments where closer_rep_id = $1 order by effective_from desc limit 1',
+        [angela.id]);
+      assert(mine && mine.tenant_id, 'she is not on her own company');
+      await sql(
+        `insert into billing_events (tenant_id, event_type, amount_cents, status, livemode, stripe_payment_intent_id, created_at)
+         values ($1,'activation_charge',50000,'succeeded',true,'pi_act_angela',now())`,
+        [mine.tenant_id]);
+      await runRepEarningsCycle();
+      const [owed] = await sql(
+        'select coalesce(sum(amount_cents),0)::int t from rep_earnings where rep_id = $1', [angela.id]);
+      eq(owed.t, 0, 'the worker wrote her nothing');
+
+      // And the second lock, for every route in that is not the worker.
+      let refused = null;
+      try {
+        await sql(
+          `insert into rep_earnings (rep_id, tenant_id, role, kind, amount_cents, earned_at)
+           values ($1, $2, 'closer', 'activation', 5000, now())`,
+          [angela.id, mine.tenant_id]);
+      } catch (e) { refused = e.message; }
+      assert(refused && /earns nothing here/i.test(refused), `a hand-written earning was allowed: ${refused}`);
+      return 'the worker skips her; a hand-written earning is refused by the database';
+    });
+
+    // ===========================================================================
+    // "Make sure the calendar can hold thousands of follow-ups." Proving it
+    // rather than asserting it: a few thousand rows are planted and a month
+    // is asked for, which is what the page actually asks for.
+    //
+    // The figure that matters is not how fast this container is, it is the
+    // PLAN. A sequential scan on a small table is quick and gets slower
+    // forever; an index scan over a narrow date range does not care how many
+    // rows sit behind it. So the plan is what is checked, and the clock is
+    // only a sanity rail.
+    section('A calendar with thousands of follow-ups on it');
+
+    await check('Three thousand follow-ups, and a month still comes back from the index', async () => {
+      await sql(
+        `insert into rep_followups (user_id, title, due_on, due_time)
+         select $1,
+                'Call back ' || g,
+                (date '2026-01-01' + (g % 365))::date,
+                case when g % 3 = 0 then time '09:30' else null end
+           from generate_series(1, 3000) g`,
+        [ANGELA.id]
+      );
+      // Without this the planner is working from statistics for the table it
+      // last saw, which was empty.
+      await sql('analyze rep_followups');
+
+      const [{ n }] = await sql('select count(*)::int n from rep_followups where user_id = $1', [ANGELA.id]);
+      assert(n >= 3000, `only ${n} planted`);
+
+      const plan = (await sql(
+        `explain (format json)
+         select * from rep_followups
+          where user_id = $1 and due_on >= date '2026-03-01' and due_on < date '2026-04-01'`,
+        [ANGELA.id]
+      ))[0]['QUERY PLAN'][0].Plan;
+      const planText = JSON.stringify(plan);
+      assert(/Index/.test(planText), `a month of follow-ups is read by scanning the whole table: ${planText}`);
+
+      const started = Date.now();
+      const r = await api('GET', '/rep-calendar?from=2026-03-01&to=2026-03-31', { as: ANGELA });
+      const took = Date.now() - started;
+      eq(r.status, 200, `calendar: ${JSON.stringify(r.body).slice(0, 200)}`);
+      const followups = r.body.items.filter((i) => i.followup_id);
+      // Compared against what the database says March holds, rather than a
+      // number worked out here: an expected count computed twice from the
+      // same fixture proves only that the arithmetic matches itself.
+      const [{ inMarch }] = await sql(
+        `select count(*)::int as "inMarch" from rep_followups
+          where user_id = $1 and due_on >= date '2026-03-01' and due_on <= date '2026-03-31'`,
+        [ANGELA.id]);
+      eq(followups.length, inMarch, 'the month came back whole, and only the month');
+      assert(inMarch > 100, `only ${inMarch} in March — the fixture is not big enough to prove anything`);
+      assert(followups.every((i) => i.on_date >= '2026-03-01' && i.on_date <= '2026-03-31'),
+        'a day outside the month came back');
+      assert(followups.some((i) => i.at_time), 'appointment times are not coming through');
+      // Generous on purpose: this is a shared container, and the point of the
+      // check above is the plan, not the clock.
+      assert(took < 5000, `a month took ${took}ms with 3,000 follow-ups on the calendar`);
+      return `${n} follow-ups; March came back in ${took}ms, by index`;
+    });
+
+    await check('Her morning digest still has one day to read, not three thousand', async () => {
+      const [{ due }] = await sql(
+        `select count(*)::int due from rep_followups
+          where user_id = $1 and done_at is null and due_on = date '2026-03-15'`,
+        [ANGELA.id]);
+      assert(due > 0, 'nothing planted on the day being checked');
+      assert(due < 20, `${due} on one day is not a day's list`);
+      return `${due} due on 15 March, out of 3,000`;
+    });
+
+    // ===========================================================================
+    // Joseph has had no weekly view of any of this. Handing the building of
+    // dealers to an agency makes that matter more, not less: the point is
+    // that he stops being in the middle of it, and a loop he is out of has
+    // to report itself.
+    section('The Monday status report');
+
+    // A cycle that actually SENDS is run the way it really runs: as its own
+    // process, through the CLI entry point, with the same trimmed environment
+    // the API child gets. Not for purity -- this suite's own process inherited
+    // the sandbox's outbound proxy, and Node bakes that into fetch at startup,
+    // so an in-process send to the Postmark stand-in on 127.0.0.1 comes back
+    // as a bare "fetch failed" no matter what the environment says afterwards.
+    //
+    // The gate checks below (not Monday, too early) stay in-process: they
+    // return before anything is sent, and they need to be handed a date.
+    const runReportProcess = () => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['src/workers/runWeeklyStatusReport.js', '--now'], {
+        cwd: API_DIR,
+        env: {
+          PATH: process.env.PATH, HOME: process.env.HOME,
+          DATABASE_URL: dbUrl(DB),
+          EMAIL_FROM_ADDRESS: 'notifications@referwith50.test',
+          POSTMARK_SERVER_TOKEN: 'postmark-test-token',
+          POSTMARK_API_BASE: `http://127.0.0.1:${PORTS.postmark}`,
+          FRONTEND_BASE_URL: FRONTEND,
+        },
+      });
+      let out = '';
+      child.stdout.on('data', (d) => { out += d; });
+      child.stderr.on('data', (d) => { out += d; });
+      child.on('close', () => {
+        // Taken from the runner's own marker, not from the first "{" in the
+        // output: the worker logs a JSON line of its own before this, and
+        // parsing from the first brace reads that instead.
+        const marker = 'Weekly status worker finished:';
+        const at = out.indexOf(marker);
+        if (at < 0) return reject(new Error(`the worker printed no summary:\n${out}`));
+        try { resolve(JSON.parse(out.slice(at + marker.length))); }
+        catch (err) { reject(new Error(`${err.message}\n${out}`)); }
+      });
+    });
+
+    await check('A Monday morning run emails Joseph one short report, naming each rep\'s week', async () => {
+      const before = sent.length;
+      // force skips the Monday and 7am gates, which is what the CLI's --now
+      // does. Everything else about the run is the real one.
+      const out = await runReportProcess();
+      eq(out.errored, 0, `errors: ${JSON.stringify(out.details)}`);
+      eq(out.sent, 1, 'one report, to the one admin on the 50. tenant');
+      assert(sent.length === before + 1, 'exactly one email');
+
+      const mail = sent[sent.length - 1];
+      eq(mail.To, 'joseph@fifty.test', 'to Joseph');
+      // His own standing rule for a subject line, and this one answers
+      // itself on the first line.
+      assert(mail.Subject.includes('?'), `the subject asks something: ${mail.Subject}`);
+      assert(/Angela \(SmartScale Global\)/.test(mail.TextBody),
+        `an agency rep is named with who she sells for:\n${mail.TextBody}`);
+      assert(/Alice Rep/.test(mail.TextBody), '50.\'s own reps are in it too');
+      assert(/not signed up yet/.test(mail.TextBody), 'the middle column is reported, not just wins');
+      // Short enough to read on a phone before the day starts.
+      assert(mail.TextBody.split('\n').length < 40, `too long to read: ${mail.TextBody.split('\n').length} lines`);
+      return mail.Subject;
+    });
+
+    await check('It goes out once a week, not once an hour', async () => {
+      const before = sent.length;
+      await runReportProcess();
+      await runReportProcess();
+      eq(sent.length, before, 'the next ticks of the same day send nothing');
+      const [row] = await sql(
+        `select count(*)::int n from rep_week_report_emails where sent_at is not null`);
+      eq(row.n, 1, 'one row in the ledger, which is what holds it to once');
+      return 'two more cycles, no second email';
+    });
+
+    await check('Six days out of seven it does nothing at all, and never before 7am', async () => {
+      // A Wednesday, and then a Monday at 3am. Both in New York time, which
+      // is the zone the whole system means by a day.
+      const wednesday = new Date('2026-11-25T15:00:00Z');
+      const mondayEarly = new Date('2026-11-23T08:00:00Z'); // 3am Eastern
+      const a = await runWeeklyStatusCycle({ now: wednesday });
+      eq(a.notMonday, true, 'a Wednesday is not a Monday');
+      eq(a.sent, 0, 'and sends nothing');
+      const b = await runWeeklyStatusCycle({ now: mondayEarly });
+      eq(b.tooEarly, true, '3am on a Monday is too early');
+      eq(b.sent, 0, 'and sends nothing');
+      return 'Wednesday -> notMonday; Monday 3am -> tooEarly';
+    });
+
+    await check('A rep who did nothing is named, not given a line of zeros', async () => {
+      // Carol has no leads and no companies. A line reading "0 new leads, 0
+      // won" for every quiet rep is how a short report stops being short;
+      // a list of names is enough to notice the same one three weeks running.
+      const mail = sent[sent.length - 1];
+      assert(/Nothing from:/.test(mail.TextBody), `no quiet list:\n${mail.TextBody}`);
+      assert(!/0 new leads/.test(mail.TextBody), 'a quiet rep got a line of zeros');
+      return 'quiet reps listed by name on one line';
+    });
+
+    await check('The report is service-role only — nobody signed in can read it', async () => {
+      // Two ways a table can be shut: no GRANT at all (the query is refused)
+      // or RLS with no policy (it succeeds and returns nothing). Either is a
+      // closed door; what would be a bug is rows coming back.
+      const how = [];
+      for (const who of [USERS.admin, USERS.helper, ALICE, ANGELA]) {
+        try {
+          const rows = await asUser(who.id, 'select id from rep_week_report_emails');
+          eq(rows.length, 0, `${who.email} read the report ledger`);
+          how.push('no rows');
+        } catch (err) {
+          assert(/permission denied/i.test(err.message), `${who.email}: ${err.message}`);
+          how.push('refused');
+        }
+      }
+      return `admin, helper, rep and agency rep: ${how.join(', ')}`;
+    });
+
+    // ===========================================================================
     section('Everyone else is still shut out');
     await check('A dealer\'s own admin gets 403 on every rep route, reps included', async () => {
       for (const [m, p] of [['GET', '/reps'], ['GET', '/rep-leads'], ['GET', '/rep-dealers'], ['GET', '/rep-money/overview'], ['GET', '/rep-settings']]) {
