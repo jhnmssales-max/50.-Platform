@@ -1415,21 +1415,53 @@ function followupDialog(id, about){
 // Shared by the build screen and the Companies-tab dialog, so a price means
 // the same thing in both places and there is one list to keep right.
 // `v` is a tenant's current pricing, or null on a build (standard terms).
+// The fee per referral is NOT here any more. It is 30% of what the two gift
+// cards cost, worked out by the database from the gift card itself
+// (tenants.referral_fee_cents is generated), so there is nothing to type and
+// nothing that can drift. Halving a company's gift card used to leave 50.
+// charging the old fee on a smaller payout, with no screen looking wrong.
 const PRICE_FIELDS = [
   { key:'activation_fee_cents', label:'Onboarding charge ($)', std:500,
     hint:'Charged once, at their first sign-in. Covers their first year.' },
   { key:'annual_fee_cents', label:'Every year after ($)', std:100,
     hint:'Charged to the card on file on their anniversary.' },
-  { key:'referral_fee_cents', label:'Your fee per referral ($)', std:30,
-    hint:'A flat amount each time one is marked paid \u2014 not a percentage, so it does not shrink with the gift card.' },
 ];
+
+// The one sum, in one place. The database does it again from the card it
+// actually stores, so this is only ever a preview of the real answer.
+const FEE_SHARE = 0.30;
+function feeForCard(cardCents){
+  return Math.round(cardCents * 2 * FEE_SHARE);
+}
+
+// Keeps a "your fee per referral" line in step with whatever gift-card box
+// is on screen. Both the pricing dialog and the build screen use it, so the
+// sum is written once and the two screens cannot disagree.
+function wireFeePreview(root, cardSelector, noteId){
+  const note = (root || document).querySelector('#' + noteId);
+  const card = (root || document).querySelector(cardSelector);
+  if(!note || !card) return;
+  const show = () => {
+    const cents = Math.round(Number(card.value) * 100);
+    note.textContent = Number.isFinite(cents) && cents > 0 ? dollars(feeForCard(cents)) : '\u2014';
+  };
+  card.addEventListener('input', show);
+  show();
+}
 
 function pricingFieldsHtml(v){
   const dollars = (key, std) => (v && v[key] != null) ? (v[key] / 100) : std;
   const boxes = PRICE_FIELDS.map((f) =>
     '<div><label>' + esc(f.label) + '</label>' +
       '<input name="price_' + f.key + '" type="number" min="0" max="10000" step="1" value="' + dollars(f.key, f.std) + '">' +
-      '<p class="hint">' + esc(f.hint) + '</p></div>').join('');
+      '<p class="hint">' + esc(f.hint) + '</p></div>').join('') +
+    // The gift card belongs on this screen now, because it is what sets the
+    // fee. Without it a company's card could only be changed at build time,
+    // and the fee had no input to follow.
+    '<div><label>Gift card each side gets ($)</label>' +
+      '<input name="price_reward_amount_cents" type="number" min="5" max="500" step="1" value="' +
+        dollars('reward_amount_cents', 50) + '">' +
+      '<p class="hint">What the customer and their friend each get. Your fee follows this.</p></div>';
   const platform = v ? v.reward_fulfillment === 'platform' : false;
   const followup = (v && v.invite_followup_months != null) ? v.invite_followup_months : '';
   // One question, not two. There used to be a tick box here for "also charge
@@ -1441,7 +1473,11 @@ function pricingFieldsHtml(v){
   // from this column) rather than trusting this screen to stay in step.
   const money =
     '<div class="row">' + boxes + '</div>' +
-    '<label>Who sends the gift cards</label>' +
+    // Shown, never typed. It updates as the gift card above is changed.
+    '<div class="rstats" style="margin-top:4px"><div class="lbl">Your fee per referral</div>' +
+      '<div class="nums"><span><b id="feePreview">\u2014</b>each one marked paid</span>' +
+      '<span class="muted" style="font-weight:400">30% of the two cards \u2014 worked out from the gift card, not typed</span></div></div>' +
+    '<label style="margin-top:12px">Who sends the gift cards</label>' +
     '<select name="reward_fulfillment">' +
       '<option value="dealer"' + (platform ? '' : ' selected') + '>They do \u2014 we email them, they buy and send the cards</option>' +
       '<option value="platform"' + (platform ? ' selected' : '') + '>We do \u2014 we email the cards out, and bill them for the cards</option>' +
@@ -1477,6 +1513,15 @@ function readPricingFields(form, { onlyChanges = false } = {}){
     if(onlyChanges && cents === f.std * 100) return;
     out[f.key] = cents;
   });
+  // The gift card is not in PRICE_FIELDS (it is not a price 50. charges) but
+  // it is the number the fee is generated from, so it has to be saved.
+  const card = form.querySelector('[name="price_reward_amount_cents"]');
+  if(card && card.value !== ''){
+    const cents = Math.round(Number(card.value) * 100);
+    if(Number.isFinite(cents) && cents > 0 && !(onlyChanges && cents === 5000)){
+      out.reward_amount_cents = cents;
+    }
+  }
   const sel = form.querySelector('[name="reward_fulfillment"]');
   if(sel && !(onlyChanges && sel.value === 'dealer')) out.reward_fulfillment = sel.value;
   // Empty means never. Sent as null rather than omitted, so turning it back
@@ -3016,7 +3061,7 @@ async function renderDealers(){
         ' <b>In-house</b> companies are yours \u2014 they run a live program but pay no setup, renewal or 30% fee, so no rep is ever on one.</div>') +
     searchBox('dealers', state.isRep ? 'Search your dealers' : 'Search companies') +
     '<div class="tablewrap"><table><thead><tr><th>' + (state.isRep ? 'Dealer' : 'Company') + '</th><th>Activated</th>' +
-      (state.isRep ? '<th>My role</th>' : '<th>Closed by</th><th>Onboarded by</th>' + (state.isAdmin ? '<th>Start date</th>' : '') + '<th></th>') +
+      (state.isRep ? '<th>My role</th>' : '<th>Closed by</th><th>Onboarded by</th>' + (state.isAdmin ? '<th>Credited from</th>' : '') + '<th></th>') +
       '</tr></thead><tbody>' +
     (state.dealers.map((x) =>
       '<tr data-tenant="' + x.tenant_id + '"' + (x.closed_at ? ' style="opacity:.6"' : '') +
@@ -3048,7 +3093,7 @@ async function renderDealers(){
         // would invite a change that could never pay anyone.
         : ((x.billing_exempt || x.closed_at)
           ? '<td class="muted nomob" data-label="Closed by">—</td><td class="muted nomob" data-label="Onboarded by">—</td>' +
-            (state.isAdmin ? '<td class="muted nomob" data-label="Start date">—</td>' : '') +
+            (state.isAdmin ? '<td class="muted nomob" data-label="Credited from">—</td>' : '') +
             // There is nothing to save on this row, but an in-house company
             // still has real people signing in and getting the gift-card
             // reminders, so Logins belongs here too. It first shipped inside
@@ -3067,7 +3112,15 @@ async function renderDealers(){
                 '<button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button>' : '') + '</td>'
           : '<td data-label="Closed by"><select data-field="closer" aria-label="Closed by">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
             '<td data-label="Onboarded by"><select data-field="onboarder" aria-label="Onboarded by">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
-            (state.isAdmin ? '<td data-label="Start date"><input type="date" data-field="from" class="startdate" aria-label="Start date" title="Leave blank to start now"></td>' : '') +
+            // This is NOT the company's start date -- that is the Activated
+            // column beside it. It is the date the rep on this row starts
+            // being credited for the company, which matters when one is
+            // handed from one rep to another. It used to render with no
+            // value at all, so a company that HAD a date still showed an
+            // empty box, which reads as a date that failed to load.
+            (state.isAdmin ? '<td data-label="Credited from"><input type="date" data-field="from" class="startdate" aria-label="Credited from"' +
+              (x.assigned_from ? ' value="' + esc(String(x.assigned_from).slice(0, 10)) + '"' : '') +
+              ' title="When this rep starts being credited for the company. Blank means from now."></td>' : '') +
             '<td class="num"><button class="btn small" data-save="' + x.tenant_id + '">Save</button>' +
               // In-house companies are never charged, so there is nothing to
               // price and a dialog would imply they had started being billed.
@@ -3383,8 +3436,10 @@ async function buildDialog(leadId){
             '<span><b id="agencyFee">\u2014</b>per referral</span>' +
             '<span><b>They send</b>the gift cards</span>' +
           '</div></div>'
-        : '<p class="muted" style="margin:2px 0 8px">Pre-filled with the standard terms. Change any of them for this dealer.</p>' +
-          pricingFieldsHtml(null)) +
+        : '<p class="muted" style="margin:2px 0 8px">Pre-filled with the standard terms. Change either of them for this dealer. The fee per referral follows the gift card above and is not typed.</p>' +
+          // The build screen already has its own gift-card box further up, so
+          // this one is suppressed and the fee preview reads from that one.
+          pricingFieldsHtml(null).replace(/<div><label>Gift card each side gets[\s\S]*?<\/div>/, '')) +
 
       '<h3 style="font-size:15px;margin:14px 0 2px">Their logo</h3>' +
       (b.logoUrl
@@ -3438,23 +3493,13 @@ async function buildDialog(leadId){
   });
   drawPreview();
 
-  // The fee an agency rep's company will pay, shown live as she changes the
-  // gift card. The same sum approve_lead_build does: 30% of what the two
-  // cards cost. Shown rather than sent -- the database works it out again
-  // from the card it actually stores, so this can only ever be a preview of
-  // the real answer, never the source of it.
-  const feeNote = $('agencyFee');
-  if(feeNote){
-    const rewardInput = $('dlg').querySelector('[name=reward]');
-    const showFee = () => {
-      const card = Math.round(Number(rewardInput.value) * 100);
-      feeNote.textContent = Number.isFinite(card) && card > 0
-        ? dollars(Math.round(card * 2 * 0.30))
-        : '\u2014';
-    };
-    rewardInput.addEventListener('input', showFee);
-    showFee();
-  }
+  // The fee this company will pay, shown live as the gift card is changed.
+  // Everyone sees it now, not only an agency rep: the fee is generated from
+  // the card for every company, so there is nothing to type on any screen.
+  // Shown rather than sent -- the database works it out again from the card
+  // it actually stores, so this is a preview of the real answer, never the
+  // source of it.
+  wireFeePreview($('dlg'), '[name=reward]', state.isAgency ? 'agencyFee' : 'feePreview');
 
   $('cancelDlg').addEventListener('click', closeDialog);
   $('declineBuild').addEventListener('click', async () => {
@@ -3790,6 +3835,7 @@ async function pricingDialog(tenantId){
         '<button class="btn" type="submit" id="savePricing">Save pricing</button>' +
       '</div></form>'
   );
+  wireFeePreview(document, '[name="price_reward_amount_cents"]', 'feePreview');
   $('cancelDlg').addEventListener('click', closeDialog);
   $('pricingForm').addEventListener('submit', async (e) => {
     e.preventDefault();
