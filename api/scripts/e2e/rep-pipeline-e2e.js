@@ -1587,6 +1587,145 @@ async function main() {
       return 'inactive -> 403; handed on -> 403; Joseph unaffected throughout';
     });
 
+    // =======================================================================
+    // "let's enhance it to where I can see everybody's customers and adjust
+    // those as well. I just want to be certain that I can help everything."
+    //
+    // He could not see one of them. The rule behind every customer row is
+    // (tenant_id = current_tenant_id()) with no admin exception, and no edit
+    // route for a customer existed anywhere -- so a typo'd address was
+    // permanent and the invite bounced forever.
+    // =======================================================================
+    section('A company\'s customers, for whoever looks after that company');
+
+    let bouncedId = null;
+    let quietId = null;
+
+    await check('Joseph can see a company\'s customers, which the database hides from him', async () => {
+      // Two people carrying the two problems this screen exists for.
+      const [a] = await sql(
+        `insert into customers (tenant_id, name, email, phone, delivery_failed_at, delivery_error)
+         values ($1, 'Dana Bounce', 'dana@wrongdomain.test', '717-555-0101', now(), 'hard bounce')
+         returning id`, [bensCo]);
+      // A real unsubscriber has been invited -- that is how they came to
+      // unsubscribe -- so theirs carries a date already. last_invited_at
+      // DEFAULTS to now(), so it is set explicitly here rather than left out.
+      const [b] = await sql(
+        `insert into customers (tenant_id, name, email, unsubscribed_at, last_invited_at)
+         values ($1, 'Pat Quiet', 'pat@quiet.test', now(), timestamptz '2026-01-02 09:00:00+00')
+         returning id`, [bensCo]);
+      bouncedId = a.id;
+      quietId = b.id;
+
+      const r = await api('GET', `/rep-dealers/${bensCo}/customers`, { as: USERS.admin });
+      eq(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+      const names = r.body.customers.map((c) => c.name);
+      assert(names.includes('Dana Bounce') && names.includes('Pat Quiet'),
+        `expected both, got ${JSON.stringify(names)}`);
+      const dana = r.body.customers.find((c) => c.name === 'Dana Bounce');
+      assert(dana.delivery_failed_at, 'the bounce is shown on the row');
+      const pat = r.body.customers.find((c) => c.name === 'Pat Quiet');
+      assert(pat.unsubscribed_at, 'and the unsubscribe on theirs');
+      return `${r.body.pagination.total} customers, bounce and unsubscribe both on the row`;
+    });
+
+    await check('Search narrows it, the same way it does everywhere else', async () => {
+      const r = await api('GET', `/rep-dealers/${bensCo}/customers?query=wrongdomain`, { as: USERS.admin });
+      eq(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+      eq(r.body.customers.length, 1, JSON.stringify(r.body.customers.map((c) => c.name)));
+      eq(r.body.customers[0].name, 'Dana Bounce', 'searched the address, not only the name');
+      return 'one row back from a search on part of an email address';
+    });
+
+    await check('A rep sees their own company\'s customers and nobody else\'s', async () => {
+      const mine = await api('GET', `/rep-dealers/${bensCo}/customers`, { as: ALICE });
+      eq(mine.status, 200, JSON.stringify(mine.body).slice(0, 200));
+      assert(mine.body.customers.length >= 2, 'her own company\'s list came back');
+
+      const [other] = await sql(
+        `select t.id from tenants t
+          where t.id <> $2
+            and not exists (select 1 from rep_assignments a
+                             where a.tenant_id = t.id and a.effective_to is null
+                               and (a.closer_rep_id = $1 or a.onboarder_rep_id = $1))
+          limit 1`, [rep.Alice.id, bensCo]);
+      assert(other && other.id, 'no company exists that is not hers');
+      eq((await api('GET', `/rep-dealers/${other.id}/customers`, { as: ALICE })).status, 403,
+        'she read another company\'s customers');
+      eq((await api('GET', `/rep-dealers/${bensCo}/customers`, { as: USERS.helper })).status, 403,
+        'the helper read a company\'s customers');
+      return 'hers 200, somebody else\'s 403, the helper 403';
+    });
+
+    await check('Correcting the address clears the bounce, and the dealer gets a trail of it', async () => {
+      const r = await api('PATCH', `/rep-dealers/${bensCo}/customers/${bouncedId}`, {
+        as: USERS.admin, body: { email: 'Dana@RightDomain.test', phone: '717-555-0199' },
+      });
+      eq(r.status, 200, JSON.stringify(r.body));
+      eq(r.body.email, 'dana@rightdomain.test', 'stored lowercase, like every other address here');
+      eq(r.body.delivery_failed_at, null, 'the bounce survived the one change that repairs it');
+
+      const [c] = await sql('select delivery_error from customers where id = $1', [bouncedId]);
+      eq(c.delivery_error, null, 'and the reason went with it');
+
+      // These people belong to the dealer, so the dealer can find out who
+      // changed one and what it was before.
+      const [log] = await sql(
+        `select actor_user_id, metadata from audit_log
+          where entity_type = 'customers' and entity_id = $1 and action = 'customer.corrected'`,
+        [bouncedId]);
+      assert(log, 'nothing reached the dealer\'s own trail');
+      eq(log.metadata.changed.email.from, 'dana@wrongdomain.test', 'the trail says what it was');
+      eq(log.metadata.changed.email.to, 'dana@rightdomain.test', 'and what it became');
+      eq(log.metadata.bounce_cleared, true, 'and that the bounce went with it');
+      return 'address fixed, bounce and reason cleared, one audit row naming both';
+    });
+
+    await check('An unsubscribe is never undone from here, by anybody', async () => {
+      // Somebody who asked this business to stop asked the BUSINESS, not the
+      // address. There is no field for it on the route, and putting a working
+      // address back on the row is not them changing their mind.
+      const r = await api('PATCH', `/rep-dealers/${bensCo}/customers/${quietId}`, {
+        as: USERS.admin, body: { email: 'pat@newaddress.test', unsubscribed_at: null },
+      });
+      eq(r.status, 200, JSON.stringify(r.body));
+      assert(r.body.unsubscribed_at, 'an admin un-unsubscribed somebody');
+
+      const send = await api('POST', `/rep-dealers/${bensCo}/customers/${quietId}/resend`, { as: USERS.admin });
+      eq(send.status, 200, JSON.stringify(send.body));
+      eq(send.body.email.sent, false, 'something was sent to somebody who asked to stop');
+      eq(send.body.email.reason, 'unsubscribed', JSON.stringify(send.body.email));
+
+      // A send that never happened does not move the date of the last one
+      // that did -- otherwise their row would read as freshly contacted.
+      const [c] = await sql('select last_invited_at from customers where id = $1', [quietId]);
+      eq(new Date(c.last_invited_at).toISOString(), '2026-01-02T09:00:00.000Z',
+        'a send that never happened was dated anyway');
+      return 'still unsubscribed after an address change; the resend refuses and dates nothing';
+    });
+
+    await check('A rep can fix one of their own, and cannot reach anybody else\'s', async () => {
+      const r = await api('PATCH', `/rep-dealers/${bensCo}/customers/${bouncedId}`, {
+        as: ALICE, body: { name: 'Dana Fixed' },
+      });
+      eq(r.status, 200, JSON.stringify(r.body));
+      eq(r.body.name, 'Dana Fixed', 'her correction stuck');
+
+      // A customer id from another company, asked for THROUGH a company she
+      // is on: the row has to be refused on its own tenant, not only at the
+      // gate, or the gate becomes the only thing standing between a rep and
+      // every customer on the platform.
+      const [other] = await sql('select id from customers where tenant_id <> $1 limit 1', [bensCo]);
+      assert(other && other.id, 'no customer exists outside this company');
+      eq((await api('PATCH', `/rep-dealers/${bensCo}/customers/${other.id}`,
+        { as: ALICE, body: { name: 'Nope' } })).status, 404,
+        'she edited another company\'s customer through her own company');
+      eq((await api('POST', `/rep-dealers/${bensCo}/customers/${other.id}/resend`,
+        { as: ALICE })).status, 404,
+        'she sent to another company\'s customer through her own company');
+      return 'her own fixed; a customer id from elsewhere is 404 even through her own company';
+    });
+
     // ===========================================================================
     // "Make sure the calendar can hold thousands of follow-ups." Proving it
     // rather than asserting it: a few thousand rows are planted and a month

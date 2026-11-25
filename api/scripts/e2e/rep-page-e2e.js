@@ -1819,6 +1819,41 @@ async function main() {
       assert(out.reps === 200, 'she can still read her own rep row');
       return JSON.stringify(out);
     });
+
+    await check('She can open a customer of her own company and correct their address', async () => {
+      // The thing nobody could do before. This platform had no route that
+      // edited a customer at all -- not for a rep, not for Joseph, not even
+      // for the dealer who owns them -- so a mistyped address bounced for
+      // good and the row carried the bounce forever.
+      await repPage.click('[data-tab=dealers]');
+      await repPage.waitForSelector('#tab-dealers tr[data-tenant]');
+      const row = repPage.locator('#tab-dealers tbody tr[data-tenant]').first();
+      const tenantId = await row.getAttribute('data-tenant');
+
+      const [cust] = await sql(
+        `insert into customers (tenant_id, name, email, delivery_failed_at, delivery_error)
+         values ($1, 'Typo Person', 'typo@wrng.test', now(), 'hard bounce') returning id`,
+        [tenantId]);
+
+      await row.locator('[data-custs]').click();
+      await repPage.waitForSelector('#dlg tr[data-cust]');
+      const listed = await repPage.textContent('#dlg');
+      assert(/Typo Person/.test(listed), `her customer is not listed: ${listed.slice(0, 200)}`);
+      assert(/Bounced/.test(listed), 'the bounce is not called out on the row');
+
+      await repPage.locator(`#dlg tr[data-cust="${cust.id}"] [data-fix]`).click();
+      await repPage.fill('#dlg [data-f=email]', 'typo@right.test');
+      await repPage.click('#dlg [data-fixsave]');
+      await repPage.waitForFunction(
+        () => document.getElementById('appMsg').textContent.includes('Saved'), { timeout: 10000 });
+
+      const [after] = await sql(
+        'select email, delivery_failed_at from customers where id = $1', [cust.id]);
+      eq(after.email, 'typo@right.test', 'the address did not change');
+      eq(after.delivery_failed_at, null, 'the bounce outlived the correction that repairs it');
+      return 'bounced customer found and their address corrected from the page, bounce cleared';
+    });
+
     await repPage.context().close();
 
     // ======================================================================

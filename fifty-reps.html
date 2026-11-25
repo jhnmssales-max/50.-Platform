@@ -3093,7 +3093,8 @@ async function renderDealers(){
           // back to Joseph. These are the same two dialogs he uses. Pricing
           // is deliberately absent: what a company pays is his alone.
           '<td class="num"><button class="btn small secondary" data-brand="' + x.tenant_id + '">Brand &amp; wording</button> ' +
-            '<button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button></td>'
+            '<button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button> ' +
+            '<button class="btn small secondary" data-custs="' + x.tenant_id + '">Customers</button></td>'
         // An in-house company pays nothing, so there is no payment for a rep
         // to be credited with and nothing to assign. Showing the dropdowns
         // would invite a change that could never pay anyone.
@@ -3115,7 +3116,8 @@ async function renderDealers(){
             '<td class="num">' + (state.isAdmin && !x.closed_at
               ? '<button class="btn small secondary" data-price="' + x.tenant_id + '">Pricing</button> ' +
                 '<button class="btn small secondary" data-brand="' + x.tenant_id + '">Brand</button> ' +
-                '<button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button>' : '') + '</td>'
+                '<button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button> ' +
+                '<button class="btn small secondary" data-custs="' + x.tenant_id + '">Customers</button>' : '') + '</td>'
           : '<td data-label="Closed by"><select data-field="closer" aria-label="Closed by">' + repOptions(x.closer_rep_id, { blank: 'House account' }) + '</select></td>' +
             '<td data-label="Onboarded by"><select data-field="onboarder" aria-label="Onboarded by">' + repOptions(x.onboarder_rep_id, { blank: '— none —' }) + '</select></td>' +
             // This is NOT the company's start date -- that is the Activated
@@ -3135,6 +3137,7 @@ async function renderDealers(){
               // where they have no Save to sit beside.
               (state.isAdmin ? ' <button class="btn small secondary" data-brand="' + x.tenant_id + '">Brand</button>' : '') +
               (state.isAdmin ? ' <button class="btn small secondary" data-logins="' + x.tenant_id + '">Logins</button>' : '') +
+              (state.isAdmin ? ' <button class="btn small secondary" data-custs="' + x.tenant_id + '">Customers</button>' : '') +
               (state.isAdmin ? ' <button class="btn small danger" data-delco="' + x.tenant_id + '">Remove</button>' : '') + '</td>'))  +
       '</tr>'
     ).join('') || '<tr data-empty-row><td colspan="6" class="muted" style="padding:18px">' + (state.isRep ? 'None yet. They show up here once Joseph has built them.' : 'No companies yet.') + '</td></tr>') + '</tbody></table></div>';
@@ -3149,6 +3152,8 @@ async function renderDealers(){
     b.addEventListener('click', () => brandDialog(b.dataset.brand)));
   $('tab-dealers').querySelectorAll('[data-logins]').forEach((b) =>
     b.addEventListener('click', () => loginsDialog(b.dataset.logins)));
+  $('tab-dealers').querySelectorAll('[data-custs]').forEach((b) =>
+    b.addEventListener('click', () => customersDialog(b.dataset.custs)));
   if($('toggleClosed')) $('toggleClosed').addEventListener('click', async () => {
     state.showClosed = !state.showClosed;
     await renderDealers();
@@ -3694,6 +3699,150 @@ function confirmDeleteDialog({ title, name, lead, goes, stays, button, onConfirm
 // platform emails when a referral is marked paid and the gift cards have to
 // go out. Until this existed a dealer had exactly one, set at build time, so
 // one person on holiday meant nobody at that business was told.
+// ---------------------------------------------------------------------------
+// A company's customers, for whoever looks after that company.
+//
+// Joseph could not see one of them before this. The rule behind every
+// customer row is (tenant_id = current_tenant_id()) and he is in nobody's
+// tenant, so "their invite went to the wrong address" had no answer -- not
+// from him, and not from the dealer either, because until now nothing in the
+// platform could edit a customer at all. A typo was permanent.
+// ---------------------------------------------------------------------------
+const CUSTOMER_PAGE = 50;
+
+async function customersDialog(tenantId, opts){
+  const o = opts || {};
+  const q = o.query || '';
+  const limit = o.limit || CUSTOMER_PAGE;
+
+  let cur;
+  try{
+    cur = await api('/rep-dealers/' + tenantId + '/customers?limit=' + limit
+      + (q ? '&query=' + encodeURIComponent(q) : ''));
+  }catch(err){ return flash(err.message); }
+
+  const total = cur.pagination.total;
+  const shown = cur.customers.length;
+
+  const rows = cur.customers.map((c) =>
+    '<tr data-cust="' + esc(c.id) + '">' +
+      '<td><b>' + esc(c.name) + '</b>' +
+        '<div class="muted">' + esc(c.email) + (c.phone ? ' · ' + esc(c.phone) : '') + '</div>' +
+        // The two reasons their link stopped arriving, said on the row. A
+        // bounce is the thing this screen exists to repair; an unsubscribe
+        // is the thing it must not.
+        (c.delivery_failed_at
+          ? '<div class="nologo">Bounced ' + esc(plainDate(String(c.delivery_failed_at).slice(0,10)))
+            + ' — correct the address and send it again.</div>' : '') +
+        (c.unsubscribed_at
+          ? '<div class="muted">Asked to stop — nothing is sent to them.</div>' : '') +
+      '</td>' +
+      '<td data-label="Last sent">' + (c.last_invited_at
+        ? esc(plainDate(String(c.last_invited_at).slice(0,10)))
+        : '<span class="muted">never</span>') + '</td>' +
+      '<td class="num">' +
+        '<button type="button" class="btn small secondary" data-fix="' + esc(c.id) + '">Fix</button> ' +
+        (c.unsubscribed_at
+          ? '<span class="muted">no sends</span>'
+          : '<button type="button" class="btn small secondary" data-cresend="' + esc(c.id) + '">Send again</button>') +
+      '</td>' +
+    '</tr>').join('');
+
+  openDialog(
+    '<h3>' + esc(cur.name) + '’s customers</h3>' +
+    '<p class="muted">Everyone this company has sent a referral link to. Correct a wrong name or address here, then send the invite again.</p>' +
+    '<form id="custSearch"><div class="row"><div>' +
+      '<label>Search</label>' +
+      '<input name="q" maxlength="200" placeholder="name, email or phone" value="' + esc(q) + '">' +
+    '</div></div></form>' +
+    // min-width:0 for the same reason the logins table carries it: this one
+    // lives in a 560px dialog, and the page-wide 640px minimum would push
+    // the buttons off the edge.
+    '<div class="tablewrap" style="margin-top:12px"><table style="min-width:0">' +
+      '<thead><tr><th>Customer</th><th>Last sent</th><th></th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="3" class="muted" style="padding:18px">' +
+        (q ? 'Nobody matches that.' : 'Nobody has been sent a link yet.') + '</td></tr>') +
+    '</tbody></table></div>' +
+    '<p class="hint">' + (total
+      ? 'Showing ' + shown + ' of ' + total + '.'
+      : '') + '</p>' +
+    '<div class="actions">' +
+      (shown < total
+        ? '<button type="button" class="btn secondary" id="custMore">Show more</button>'
+        : '') +
+      '<button type="button" class="btn secondary" id="cancelDlg">Done</button>' +
+    '</div>'
+  );
+
+  $('cancelDlg').addEventListener('click', closeDialog);
+  $('custSearch').addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    customersDialog(tenantId, { query: $('custSearch').q.value.trim() });
+  });
+  if($('custMore')) $('custMore').addEventListener('click', () =>
+    customersDialog(tenantId, { query: q, limit: limit + CUSTOMER_PAGE }));
+
+  // Fix swaps the one row into a form rather than making every row editable:
+  // fifty rows of inputs is a screen nobody can read, and the mistake being
+  // repaired is almost always on a row somebody has already named.
+  $('dlg').querySelectorAll('[data-fix]').forEach((b) => b.addEventListener('click', () => {
+    const id = b.dataset.fix;
+    const c = cur.customers.find((x) => x.id === id);
+    const tr = $('dlg').querySelector('tr[data-cust="' + id + '"]');
+    if(!c || !tr) return;
+    tr.innerHTML = '<td colspan="3">' +
+      '<div class="row">' +
+        '<div><label>Name</label><input data-f="name" maxlength="200" value="' + esc(c.name) + '"></div>' +
+        '<div><label>Email</label><input data-f="email" type="email" maxlength="200" value="' + esc(c.email) + '"></div>' +
+        '<div><label>Phone</label><input data-f="phone" maxlength="40" value="' + esc(c.phone || '') + '"></div>' +
+      '</div>' +
+      '<p class="hint">A new email address clears a bounce on this person. An unsubscribe is never undone from here — they asked the business to stop, and a different address is not them changing their mind.</p>' +
+      '<div class="actions">' +
+        '<button type="button" class="btn secondary" data-fixcancel="1">Cancel</button>' +
+        '<button type="button" class="btn" data-fixsave="' + esc(id) + '">Save</button>' +
+      '</div></td>';
+    tr.querySelector('[data-fixcancel]').addEventListener('click',
+      () => customersDialog(tenantId, { query: q, limit }));
+    tr.querySelector('[data-fixsave]').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      try{
+        await patch('/rep-dealers/' + tenantId + '/customers/' + id, {
+          name: tr.querySelector('[data-f=name]').value.trim(),
+          email: tr.querySelector('[data-f=email]').value.trim(),
+          phone: tr.querySelector('[data-f=phone]').value.trim() || null,
+        });
+        await customersDialog(tenantId, { query: q, limit });
+        flash('Saved.', true);
+      }catch(err){
+        dialogError(err.message);
+        btn.disabled = false;
+      }
+    });
+  }));
+
+  $('dlg').querySelectorAll('[data-cresend]').forEach((b) => b.addEventListener('click', async () => {
+    if(b.disabled) return;
+    const was = b.textContent;
+    b.disabled = true; b.textContent = 'Sending…';
+    try{
+      const r = await post('/rep-dealers/' + tenantId + '/customers/' + b.dataset.cresend + '/resend', {});
+      if(r.email && r.email.sent){
+        b.textContent = 'Sent';
+        flash('Their invite is on its way again.', true);
+      }else{
+        // A refusal belongs in the dialog: whoever pressed it is looking at
+        // the row, not at the top of the page behind it.
+        b.disabled = false; b.textContent = was;
+        dialogError((r.email && r.email.error) || 'Nothing was sent.');
+      }
+    }catch(err){
+      b.disabled = false; b.textContent = was;
+      dialogError(err.message);
+    }
+  }));
+}
+
 async function loginsDialog(tenantId){
   let cur;
   try{
