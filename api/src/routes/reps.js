@@ -872,9 +872,34 @@ async function requireAdminThen(userId, fn) {
   return withServiceRole(fn);
 }
 
+// Whoever may act on a company that is not their own tenant: Joseph, or the
+// rep who is on that company right now. Branding, wording and logins go
+// through this; prices do NOT, and stay on requireAdminThen above.
+//
+// Ben signed companies and then could do nothing for them -- every "my logo
+// is wrong" came back to Joseph, who is the bottleneck this platform exists
+// to remove. A rep's pay depends on the companies they close, though, so a
+// rep who could discount would be a rep who could discount their way to a
+// close. Hence the split.
+//
+// The test itself is rep_manages_tenant() in the database rather than a join
+// written out here, so everything asking the question gets one answer from
+// one place. The work still runs as the service role, because a rep is not
+// in the company's tenant and RLS would hide every row of it.
+async function requireManagesThen(userId, tenantId, fn) {
+  await withUserTransaction(userId, async (client) => {
+    await requirePlatform(client, userId, { rep: true });
+    const { rows: [row] } = await client.query('select rep_manages_tenant($1) as ok', [tenantId]);
+    if (!row || row.ok !== true) {
+      throw httpError(403, 'That company is not one of yours', 'not_your_company');
+    }
+  });
+  return withServiceRole(fn);
+}
+
 router.get('/rep-dealers/:tenantId/admins', requireAuth, wrap(async (req, res) => {
   const tenantId = parseOr400(uuid, req.params.tenantId);
-  const out = await requireAdminThen(req.userId, async (client) => {
+  const out = await requireManagesThen(req.userId, tenantId, async (client) => {
     const { rows: [t] } = await client.query(
       'select id, name, reward_fulfillment from tenants where id = $1',
       [tenantId]
@@ -912,7 +937,7 @@ router.post('/rep-dealers/:tenantId/admins', requireAuth, wrap(async (req, res) 
   // somewhere else, BEFORE a Supabase account is made for it. A login with no
   // tenant is harmless and reusable; a half-made one attached to the wrong
   // business is not.
-  const tenant = await requireAdminThen(req.userId, async (client) => {
+  const tenant = await requireManagesThen(req.userId, tenantId, async (client) => {
     const { rows: [t] } = await client.query('select id, name from tenants where id = $1', [tenantId]);
     if (!t) throw httpError(404, 'No such company');
     const { rows: [clash] } = await client.query(
@@ -990,7 +1015,7 @@ router.patch('/rep-dealers/:tenantId/admins/:userId', requireAuth, wrap(async (r
   const tenantId = parseOr400(uuid, req.params.tenantId);
   const userId = parseOr400(uuid, req.params.userId);
   const body = parseOr400(rewardAlertBody, req.body || {});
-  const out = await requireAdminThen(req.userId, async (client) => {
+  const out = await requireManagesThen(req.userId, tenantId, async (client) => {
     // Scoped to the tenant in the WHERE clause, not checked beforehand: a
     // login id from another company must miss rather than match.
     const { rows: [row] } = await client.query(
@@ -1013,7 +1038,7 @@ router.post('/rep-dealers/:tenantId/admins/:userId/resend', requireAuth, wrap(as
     throw httpError(503, 'This platform cannot send login links yet: SUPABASE_SERVICE_ROLE_KEY is not set on the API service.', 'logins_not_configured');
   }
 
-  const { tenant, person } = await requireAdminThen(req.userId, async (client) => {
+  const { tenant, person } = await requireManagesThen(req.userId, tenantId, async (client) => {
     const { rows: [t] } = await client.query('select id, name from tenants where id = $1', [tenantId]);
     if (!t) throw httpError(404, 'No such company');
     // Scoped to this company on purpose: a user id alone must not be enough
@@ -1071,7 +1096,7 @@ router.post('/rep-dealers/:tenantId/admins/:userId/resend', requireAuth, wrap(as
 router.delete('/rep-dealers/:tenantId/admins/:userId', requireAuth, wrap(async (req, res) => {
   const tenantId = parseOr400(uuid, req.params.tenantId);
   const userId = parseOr400(uuid, req.params.userId);
-  const out = await requireAdminThen(req.userId, async (client) => {
+  const out = await requireManagesThen(req.userId, tenantId, async (client) => {
     const { rows } = await client.query(
       `select id, email from users where tenant_id = $1 and role = 'admin'`, [tenantId]);
     if (!rows.some((r) => r.id === userId)) throw httpError(404, 'That person does not have a login here');
@@ -1186,7 +1211,9 @@ const dealerBrandBody = z.object({
 router.get('/rep-dealers/:tenantId/brand', requireAuth, wrap(async (req, res) => {
   const tenantId = parseOr400(uuid, req.params.tenantId);
   await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId, { admin: true });
+    await requirePlatform(client, req.userId, { rep: true });
+    const { rows: [ok] } = await client.query('select rep_manages_tenant($1) as ok', [tenantId]);
+    if (!ok || ok.ok !== true) throw httpError(403, 'That company is not one of yours', 'not_your_company');
   });
   const out = await withServiceRole(async (client) => {
     const { rows: [row] } = await client.query(
@@ -1219,7 +1246,9 @@ router.patch('/rep-dealers/:tenantId/brand', requireAuth, wrap(async (req, res) 
   const body = parseOr400(dealerBrandBody, req.body || {});
 
   await withUserTransaction(req.userId, async (client) => {
-    await requirePlatform(client, req.userId, { admin: true });
+    await requirePlatform(client, req.userId, { rep: true });
+    const { rows: [ok] } = await client.query('select rep_manages_tenant($1) as ok', [tenantId]);
+    if (!ok || ok.ok !== true) throw httpError(403, 'That company is not one of yours', 'not_your_company');
   });
 
   const out = await withServiceRole(async (client) => {
