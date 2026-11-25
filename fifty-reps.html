@@ -3145,9 +3145,18 @@ async function renderPipeline(){
   const signed = p.signed_on.map((c) =>
     card(c, '<span class="rwhen">Signed on ' + esc(plainDate(c.activated_on || c.closed_on)) + '</span>')).join('');
 
-  const col = (n, label, count, inner, empty) =>
-    '<div class="rcol"><div class="rhead"><b>' + n + '</b>' + esc(label) + ' <i>' + count + '</i></div>' +
-      (count ? inner : '<div class="rempty">' + esc(empty) + '</div>') + '</div>';
+  // The heading carries the REAL total; the column carries the newest
+  // p.cards_per_column of them. At SmartScale's volume a column can hold
+  // thousands, and a board that drew all of them would send megabytes to a
+  // phone to render cards nobody scrolls to.
+  const col = (n, label, total, shown, inner, empty) =>
+    '<div class="rcol"><div class="rhead"><b>' + n + '</b>' + esc(label) + ' <i>' + total + '</i></div>' +
+      (total ? inner : '<div class="rempty">' + esc(empty) + '</div>') +
+      (total > shown
+        ? '<div class="rempty">Showing the newest ' + shown + '. ' + (total - shown) +
+          ' more \u2014 find them on My leads.</div>'
+        : '') +
+    '</div>';
 
   // The two rates that matter, and the gap between them. A high first rate
   // with a low second one is leads won and then dropped, which is work done
@@ -3181,14 +3190,16 @@ async function renderPipeline(){
       '</div>'
     : '';
 
+  const t = p.totals || { working: p.working.length, not_signed_up: p.not_signed_up.length, signed_on: p.signed_on.length };
+  const cap = p.cards_per_column || 60;
   $('tab-pipeline').innerHTML =
     '<div class="head"><h2>Pipeline</h2><span class="muted">' +
-      p.working.length + ' working · ' + p.not_signed_up.length + ' not signed up yet · ' +
-      p.signed_on.length + ' signed on</span></div>' +
+      t.working + ' working · ' + t.not_signed_up + ' not signed up yet · ' +
+      t.signed_on + ' signed on</span></div>' +
     '<div class="rboard"><div class="rcols three">' +
-      col(1, 'Working', p.working.length, working, 'No open leads.') +
-      col(2, 'Not signed up yet', p.not_signed_up.length, waiting, 'Nothing waiting.') +
-      col(3, 'Signed on', p.signed_on.length, signed, 'None yet.') +
+      col(1, 'Working', t.working, Math.min(cap, p.working.length), working, 'No open leads.') +
+      col(2, 'Not signed up yet', t.not_signed_up, Math.min(cap, p.not_signed_up.length), waiting, 'Nothing waiting.') +
+      col(3, 'Signed on', t.signed_on, Math.min(cap, p.signed_on.length), signed, 'None yet.') +
     '</div></div>' +
     charts;
 

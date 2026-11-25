@@ -57,18 +57,26 @@ function dayCount(iso, todayIso) {
 // `today` and `overdue` are rows from rep_followups: { title, note, due_on,
 // due_time }. Returns null when both are empty, so the worker never sends an
 // empty email — the check belongs here, next to the thing that would be blank.
-function build({ name, today, overdue, todayIso, repsUrl }) {
+// `today` and `overdue` are what to PRINT; totalToday and totalOverdue are
+// how many there really are. The two differ for someone working a very long
+// list, where printing all of them would make the digest unreadable — so the
+// counts in the subject and the opening line are always the true ones, and
+// each section says how many it is not showing.
+function build({ name, today, overdue, todayIso, repsUrl,
+                 moreToday = 0, moreOverdue = 0, totalToday, totalOverdue }) {
   const dueToday = today || [];
   const late = overdue || [];
-  if (dueToday.length === 0 && late.length === 0) return null;
+  const nToday = totalToday === undefined ? dueToday.length : totalToday;
+  const nLate = totalOverdue === undefined ? late.length : totalOverdue;
+  if (nToday === 0 && nLate === 0) return null;
 
   const hi = firstName(name);
-  const total = dueToday.length + late.length;
-  const subject = dueToday.length && late.length
-    ? `${dueToday.length} for today, ${late.length} still open`
-    : dueToday.length
-      ? (dueToday.length === 1 ? 'One follow-up today' : `${dueToday.length} follow-ups today`)
-      : (late.length === 1 ? 'One follow-up still open' : `${late.length} follow-ups still open`);
+  const total = nToday + nLate;
+  const subject = nToday && nLate
+    ? `${nToday} for today, ${nLate} still open`
+    : nToday
+      ? (nToday === 1 ? 'One follow-up today' : `${nToday} follow-ups today`)
+      : (nLate === 1 ? 'One follow-up still open' : `${nLate} follow-ups still open`);
 
   const textItem = (f, withDate) => {
     const when = clock(f.due_time);
@@ -80,8 +88,10 @@ function build({ name, today, overdue, todayIso, repsUrl }) {
     `Hi ${hi},`,
     '',
     total === 1 ? 'One thing on your list:' : `${total} things on your list:`,
-    ...(dueToday.length ? ['', 'TODAY', ...dueToday.map((f) => textItem(f, false))] : []),
-    ...(late.length ? ['', 'STILL OPEN', ...late.map((f) => textItem(f, true))] : []),
+    ...(dueToday.length ? ['', 'TODAY', ...dueToday.map((f) => textItem(f, false)),
+      ...(moreToday ? [`  ...and ${moreToday} more today.`] : [])] : []),
+    ...(late.length ? ['', 'STILL OPEN', ...late.map((f) => textItem(f, true)),
+      ...(moreOverdue ? [`  ...and ${moreOverdue} more still open.`] : [])] : []),
     '',
     `Tick them off on the reps page: ${repsUrl}`,
     '',
@@ -101,16 +111,17 @@ function build({ name, today, overdue, todayIso, repsUrl }) {
     </td></tr>`;
   };
 
-  const group = (heading, items, withDate, tint) => items.length ? `
+  const group = (heading, items, withDate, tint, more) => items.length ? `
     <p style="${FONT}font-size:12px;font-weight:bold;letter-spacing:0.08em;text-transform:uppercase;color:${tint};margin:0 0 10px;">${heading}</p>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 18px;">${items.map((f) => htmlItem(f, withDate)).join('')}</table>` : '';
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 ${more ? '6' : '18'}px;">${items.map((f) => htmlItem(f, withDate)).join('')}</table>
+    ${more ? `<p style="${FONT}font-size:13px;line-height:1.5;color:#6B6A63;margin:0 0 18px;">…and ${more} more. They are all on the calendar.</p>` : ''}` : '';
 
   const html = `
 <div style="${FONT}max-width:480px;margin:0 auto;color:#1B1B1B;">
   <p style="${PARA}">Hi ${escapeHtml(hi)},</p>
   <p style="${PARA}">${total === 1 ? 'One thing on your list.' : `${total} things on your list.`}</p>
-  ${group('Today', dueToday, false, '#1C2B33')}
-  ${group('Still open', late, true, '#8A5A2B')}
+  ${group('Today', dueToday, false, '#1C2B33', moreToday)}
+  ${group('Still open', late, true, '#8A5A2B', moreOverdue)}
   <p style="margin:0 0 18px;">
     <a href="${escapeHtml(repsUrl)}" style="${FONT}display:inline-block;background:#1C2B33;color:#FFFFFF;text-decoration:none;font-size:15px;font-weight:bold;padding:11px 20px;border-radius:8px;">Open the reps page</a>
   </p>
