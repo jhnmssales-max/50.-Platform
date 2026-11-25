@@ -1483,6 +1483,111 @@ async function main() {
     });
 
     // ===========================================================================
+    // Ben signed companies and then could do nothing for them: he saw them on
+    // his Companies tab and every "my logo is wrong" came back to Joseph, who
+    // is the bottleneck this platform exists to remove.
+    section('A rep looks after the companies they signed');
+
+    let bensCo = null;
+    await check('A rep can read and fix the branding and wording of a company they are on', async () => {
+      // Alice closed Josephs Pick Co earlier in this suite, so it is hers.
+      const [row] = await sql(
+        `select tenant_id from rep_assignments
+          where closer_rep_id = $1 and effective_to is null
+          order by effective_from desc limit 1`, [rep.Alice.id]);
+      assert(row && row.tenant_id, 'Alice is not on any company');
+      bensCo = row.tenant_id;
+
+      const read = await api('GET', `/rep-dealers/${bensCo}/brand`, { as: ALICE });
+      eq(read.status, 200, `read: ${JSON.stringify(read.body).slice(0, 200)}`);
+      assert(read.body.copy_fields && read.body.copy_fields.length, 'the wording fields came back');
+
+      const r = await api('PATCH', `/rep-dealers/${bensCo}/brand`, {
+        as: ALICE,
+        body: { primaryColor: '#114477', copy: { offerHow: 'send them your link' } },
+      });
+      eq(r.status, 200, `patch: ${JSON.stringify(r.body)}`);
+      const [t] = await sql('select branding from tenants where id = $1', [bensCo]);
+      eq(t.branding.primaryColor, '#114477', 'her colour change stuck');
+      eq(t.branding.copy.offerHow, 'send them your link', 'and her wording');
+      return 'read the brand, changed a colour and a line of wording';
+    });
+
+    await check('She can add a login for her own company', async () => {
+      const r = await api('POST', `/rep-dealers/${bensCo}/admins`, {
+        as: ALICE, body: { email: 'owner2@jpick.test', name: 'Second Owner' },
+      });
+      eq(r.status, 201, `add login: ${JSON.stringify(r.body)}`);
+      const [n] = await sql(
+        `select count(*)::int c from users where tenant_id = $1 and role = 'admin'`, [bensCo]);
+      assert(n.c >= 2, `expected a second login, found ${n.c}`);
+      return 'a second owner login added by the rep, not by Joseph';
+    });
+
+    await check('What a company PAYS is still Joseph\'s alone', async () => {
+      // The one thing deliberately left out. A rep's pay depends on the
+      // companies they close, so a rep who can discount is a rep who can
+      // discount their way to a close.
+      const read = await api('GET', `/rep-dealers/${bensCo}/pricing`, { as: ALICE });
+      eq(read.status, 403, `pricing read: ${JSON.stringify(read.body)}`);
+      const w = await api('PATCH', `/rep-dealers/${bensCo}/pricing`, {
+        as: ALICE, body: { activation_fee_cents: 0 },
+      });
+      eq(w.status, 403, `pricing write: ${JSON.stringify(w.body)}`);
+      const [t] = await sql('select activation_fee_cents from tenants where id = $1', [bensCo]);
+      eq(t.activation_fee_cents, 0, 'nothing changed either way');
+      return 'pricing read and write both 403 for a rep';
+    });
+
+    await check('She cannot touch a company that is not hers, and neither can the helper', async () => {
+      // Bob's company, and the helper who is on none of them.
+      const [other] = await sql(
+        `select t.id from tenants t
+          where t.billing_required
+            and not exists (select 1 from rep_assignments a
+                             where a.tenant_id = t.id and a.effective_to is null
+                               and (a.closer_rep_id = $1 or a.onboarder_rep_id = $1))
+          limit 1`, [rep.Alice.id]);
+      assert(other && other.id, 'no company exists that is not hers');
+
+      for (const [who, label] of [[ALICE, 'Alice'], [USERS.helper, 'the helper']]) {
+        const read = await api('GET', `/rep-dealers/${other.id}/brand`, { as: who });
+        eq(read.status, 403, `${label} read a company that is not theirs: ${JSON.stringify(read.body)}`);
+        const w = await api('PATCH', `/rep-dealers/${other.id}/brand`, {
+          as: who, body: { primaryColor: '#000000' },
+        });
+        eq(w.status, 403, `${label} changed a company that is not theirs`);
+        const logins = await api('GET', `/rep-dealers/${other.id}/admins`, { as: who });
+        eq(logins.status, 403, `${label} read another company's logins`);
+      }
+      // And the helper has no companies at all, so even her own list is empty.
+      eq((await api('GET', `/rep-dealers/${bensCo}/brand`, { as: USERS.helper })).status, 403,
+        'the helper reached a company through the rep route');
+      return 'brand, wording and logins all 403 on somebody else\'s company';
+    });
+
+    await check('Switching the rep off takes it away, and so does handing the company on', async () => {
+      await api('PATCH', `/reps/${rep.Alice.id}`, { as: USERS.admin, body: { active: false } });
+      eq((await api('GET', `/rep-dealers/${bensCo}/brand`, { as: ALICE })).status, 403, 'inactive rep');
+      await api('PATCH', `/reps/${rep.Alice.id}`, { as: USERS.admin, body: { active: true } });
+      eq((await api('GET', `/rep-dealers/${bensCo}/brand`, { as: ALICE })).status, 200, 'active again');
+
+      // Handed to Bob: the current assignment is what counts, so hers ends.
+      await sql(`update rep_assignments set effective_to = now()
+                  where tenant_id = $1 and effective_to is null`, [bensCo]);
+      eq((await api('GET', `/rep-dealers/${bensCo}/brand`, { as: ALICE })).status, 403,
+        'she kept a company after it was handed on');
+      // Put it back so later checks see the suite as they expect.
+      await sql(`update rep_assignments set effective_to = null
+                  where tenant_id = $1 and closer_rep_id = $2`, [bensCo, rep.Alice.id]);
+      eq((await api('GET', `/rep-dealers/${bensCo}/brand`, { as: ALICE })).status, 200, 'and back');
+
+      // Joseph is never affected by any of it.
+      eq((await api('GET', `/rep-dealers/${bensCo}/brand`, { as: USERS.admin })).status, 200, 'Joseph');
+      return 'inactive -> 403; handed on -> 403; Joseph unaffected throughout';
+    });
+
+    // ===========================================================================
     // "Make sure the calendar can hold thousands of follow-ups." Proving it
     // rather than asserting it: a few thousand rows are planted and a month
     // is asked for, which is what the page actually asks for.
