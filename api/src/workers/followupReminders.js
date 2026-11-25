@@ -28,6 +28,13 @@ const TIME_ZONE = 'America/New_York';
 const SEND_AFTER_HOUR = 7;
 const MAX_PEOPLE_PER_CYCLE = 100;
 const OVERDUE_LOOKBACK_DAYS = 30;
+// A digest is read on a phone between appointments. Somebody working a
+// ten-thousand-call month can have hundreds due on one day, and an email
+// listing all of them is an email nobody opens twice -- so it carries the
+// soonest of each and says how many more there are. One extra row is read
+// past each cap purely to know whether to say "and N more".
+const MAX_TODAY_LISTED = 25;
+const MAX_OVERDUE_LISTED = 15;
 
 // Remembered per process only, like billingEmails.js: a send that just failed
 // is not retried every hour, but a restart (or a fix) tries again at once.
@@ -92,9 +99,17 @@ async function workFor(userId, today) {
         order by due_on, due_time nulls last, title`,
       [userId, today, OVERDUE_LOOKBACK_DAYS]
     );
+    const dueToday = rows.filter((r) => r.due_on === today);
+    const late = rows.filter((r) => r.due_on < today);
     return {
-      today: rows.filter((r) => r.due_on === today),
-      overdue: rows.filter((r) => r.due_on < today),
+      today: dueToday.slice(0, MAX_TODAY_LISTED),
+      overdue: late.slice(0, MAX_OVERDUE_LISTED),
+      moreToday: Math.max(0, dueToday.length - MAX_TODAY_LISTED),
+      moreOverdue: Math.max(0, late.length - MAX_OVERDUE_LISTED),
+      // The true counts, for the line at the top. The listed arrays are
+      // what gets printed; these are what gets said.
+      totalToday: dueToday.length,
+      totalOverdue: late.length,
     };
   });
 }
@@ -134,6 +149,10 @@ async function sendOne(person, today, { dryRun }) {
     name: person.name,
     today: work.today,
     overdue: work.overdue,
+    moreToday: work.moreToday,
+    moreOverdue: work.moreOverdue,
+    totalToday: work.totalToday,
+    totalOverdue: work.totalOverdue,
     todayIso: today,
     repsUrl: repsUrl(),
   });
@@ -142,7 +161,7 @@ async function sendOne(person, today, { dryRun }) {
   if (!email) return { skipped: 'nothing_due' };
 
   if (dryRun) {
-    return { wouldSend: { to: person.email, subject: email.subject, today: work.today.length, overdue: work.overdue.length } };
+    return { wouldSend: { to: person.email, subject: email.subject, today: work.totalToday, overdue: work.totalOverdue } };
   }
 
   const failedAt = recentFailures.get(person.id);

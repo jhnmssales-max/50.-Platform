@@ -1919,6 +1919,10 @@ router.get('/rep-builds', requireAuth, wrap(async (req, res) => {
 //
 // Rep-scoped by RLS, like every other read here. Joseph gets everybody's,
 // which makes this the whole company's board when he opens it.
+// Enough to scroll through and see the shape of a column; past this the
+// number in the heading is the useful thing, not the cards.
+const CARDS_PER_COLUMN = 60;
+
 router.get('/rep-pipeline', requireAuth, wrap(async (req, res) => {
   const out = await withUserTransaction(req.userId, async (client) => {
     const ctx = await requirePlatform(client, req.userId, { rep: true });
@@ -1926,21 +1930,45 @@ router.get('/rep-pipeline', requireAuth, wrap(async (req, res) => {
     // company it became has actually paid. Read through rep_dealer_list so a
     // rep is shown the same companies the Companies tab shows them and no
     // others -- it is the function that already decides that question.
+    //
+    // CAPPED, and the cap is the point. SmartScale are making ten thousand
+    // calls a month; at even a small conversion that is thousands of leads a
+    // year, and a board that returns every one of them would send megabytes
+    // to a phone to draw cards nobody scrolls to. Each column returns its
+    // newest CARDS_PER_COLUMN and its REAL total, counted in the same pass --
+    // so the heading says "1,284" while the column shows sixty, rather than
+    // the page quietly reporting the number that happened to fit.
     const { rows } = await client.query(
       `with mine as (
          select l.id, l.company_name, l.contact_name, l.email, l.phone, l.website,
-                l.found_on, l.closed_on, l.status, l.build_status, l.tenant_id,
-                l.brought_in_by_rep_id, l.closed_by_rep_id
+                l.found_on, l.closed_on, l.status, l.build_status, l.tenant_id
            from rep_leads l
           where l.status in ('open', 'won')
+       ),
+       staged as (
+         select m.*,
+                d.name as company_live_name,
+                d.activated_on,
+                -- Unknown is treated as not yet signed on rather than as
+                -- signed on: the board must never claim money arrived that
+                -- it cannot see. A rep may hold a lead whose company
+                -- rep_dealer_list does not show them.
+                case when m.status = 'open'                            then 'working'
+                     when m.tenant_id is not null and d.activated is true then 'signed_on'
+                     else 'not_signed_up' end as stage
+           from mine m
+           left join rep_dealer_list() d on d.tenant_id = m.tenant_id
+       ),
+       ranked as (
+         select s.*,
+                row_number() over (
+                  partition by s.stage
+                  order by coalesce(s.closed_on, s.found_on) desc, s.company_name) as rn,
+                count(*) over (partition by s.stage)::int as stage_total
+           from staged s
        )
-       select m.*,
-              d.name as company_live_name,
-              d.activated,
-              d.activated_on
-         from mine m
-         left join rep_dealer_list() d on d.tenant_id = m.tenant_id
-        order by coalesce(m.closed_on, m.found_on) desc, m.company_name`
+       select * from ranked where rn <= $1 order by stage, rn`,
+      [CARDS_PER_COLUMN]
     );
 
     const card = (r) => ({
@@ -1957,28 +1985,28 @@ router.get('/rep-pipeline', requireAuth, wrap(async (req, res) => {
       activated_on: r.activated_on || null,
     });
 
-    const working = [];
-    const notSignedUp = [];
-    const signedOn = [];
+    const columns = { working: [], not_signed_up: [], signed_on: [] };
+    const totals = { working: 0, not_signed_up: 0, signed_on: 0 };
     for (const r of rows) {
-      if (r.status === 'open') { working.push(card(r)); continue; }
-      // Won. A rep may hold a lead whose company rep_dealer_list does not
-      // show them (an in-house company, a reassignment). Unknown is treated
-      // as not yet signed on rather than as signed on: the board must never
-      // claim money arrived that it cannot see.
-      if (r.tenant_id && r.activated === true) signedOn.push(card(r));
-      else notSignedUp.push(card(r));
+      if (!columns[r.stage]) continue;
+      columns[r.stage].push(card(r));
+      totals[r.stage] = r.stage_total;
     }
 
     return {
       // Which half of the middle column each card is in, said once here so
       // the page does not work it out from build_status itself.
-      working,
-      not_signed_up: notSignedUp.map((c) => ({
+      working: columns.working,
+      not_signed_up: columns.not_signed_up.map((c) => ({
         ...c,
         waiting_on: c.tenant_id ? 'them' : 'a dashboard',
       })),
-      signed_on: signedOn,
+      signed_on: columns.signed_on,
+      // The real counts, which are what the headings show. A column with
+      // more than CARDS_PER_COLUMN in it shows the newest ones and says how
+      // many there are -- the leads tab already works this way.
+      totals,
+      cards_per_column: CARDS_PER_COLUMN,
       is_admin: Boolean(ctx.is_admin),
       // Only someone who may build sees a Build button on the middle column.
       can_build: Boolean(ctx.is_admin || ctx.is_agency),

@@ -169,6 +169,8 @@ async function main() {
     process.env.DATABASE_URL = dbUrl(DB);
     const { runRepEarningsCycle } = require('../../src/workers/repEarnings');
     const { runWeeklyStatusCycle } = require('../../src/workers/weeklyStatusReport');
+    const { runFollowupReminderCycle } = require('../../src/workers/followupReminders');
+    const followupDigestEmail = require('../../src/lib/followupDigestEmail');
     const { withUserTransaction } = require('../../src/db');
     // What this person can actually read from the database itself, RLS and all.
     const asUser = (userId, text, params) => withUserTransaction(userId, async (c) => (await c.query(text, params)).rows);
@@ -1536,6 +1538,70 @@ async function main() {
       // check above is the plan, not the clock.
       assert(took < 5000, `a month took ${took}ms with 3,000 follow-ups on the calendar`);
       return `${n} follow-ups; March came back in ${took}ms, by index`;
+    });
+
+    await check('The board caps each column and still reports the real total', async () => {
+      // SmartScale are making ten thousand calls a month. A board that drew
+      // every card would send megabytes to a phone to render cards nobody
+      // scrolls to -- and a board that silently showed only what fitted
+      // would be worse, because the heading would be a lie.
+      const before = (await api('GET', '/rep-pipeline', { as: ANGELA })).body;
+      const already = before.totals.working;
+      await sql(
+        `insert into rep_leads (company_name, contact_name, email, found_on, status, brought_in_by_rep_id)
+         select 'Volume Co ' || g, 'Pat', 'pat' || g || '@volume.test', current_date, 'open', $1
+           from generate_series(1, 200) g`,
+        [angela.id]);
+
+      const r = await api('GET', '/rep-pipeline', { as: ANGELA });
+      eq(r.status, 200, 'pipeline');
+      const cap = r.body.cards_per_column;
+      assert(cap > 0 && cap <= 200, `odd cap: ${cap}`);
+      eq(r.body.working.length, cap, 'the column is capped at the cap');
+      eq(r.body.totals.working, already + 200, 'but the heading counts every one of them');
+      assert(r.body.totals.working > r.body.working.length,
+        'the test did not actually exceed the cap');
+
+      // Capped, not truncated at random: the newest are the ones kept.
+      assert(r.body.working.every((c) => c.company_name),
+        'a card came back without a company name');
+
+      // And the payload stays something a phone can hold.
+      const bytes = JSON.stringify(r.body).length;
+      assert(bytes < 200000, `the board sent ${bytes} bytes with 200+ leads in one column`);
+      return `${r.body.totals.working} working, ${cap} drawn, ${bytes} bytes`;
+    });
+
+    await check('Her morning digest says how many there really are, and stays short', async () => {
+      // Hundreds due on one day is a normal Tuesday at ten thousand calls a
+      // month. The digest has to be honest about the number and still be
+      // readable on a phone, which means the count and the list part ways.
+      const today = (await sql(`select current_date::text as d`))[0].d;
+      await sql(
+        `insert into rep_followups (user_id, title, due_on)
+         select $1, 'Ring back ' || g, current_date from generate_series(1, 300) g`,
+        [ANGELA.id]);
+
+      const out = await runFollowupReminderCycle({ dryRun: true, force: true });
+      const hers = out.details.find((d) => d.email === 'angela@smartscale.test');
+      assert(hers && hers.wouldSend, `no digest planned for her: ${JSON.stringify(out.details)}`);
+      assert(hers.wouldSend.today >= 300, `the count is short: ${hers.wouldSend.today}`);
+
+      // The email itself: the true number in the subject, a readable body.
+      const rows = await sql(
+        `select id, title, note, due_on::text as due_on, due_time::text as due_time
+           from rep_followups where user_id = $1 and due_on = $2::date and done_at is null
+          order by title limit 25`, [ANGELA.id, today]);
+      const mail = followupDigestEmail.build({
+        name: 'Angela', today: rows, overdue: [], todayIso: today, repsUrl: 'x',
+        moreToday: hers.wouldSend.today - rows.length, totalToday: hers.wouldSend.today, totalOverdue: 0,
+      });
+      assert(new RegExp(String(hers.wouldSend.today)).test(mail.subject),
+        `the subject hides the real number: ${mail.subject}`);
+      assert(/more today/.test(mail.text), `the body does not say what it left out:\n${mail.text.slice(0, 300)}`);
+      const lines = mail.text.split('\n').length;
+      assert(lines < 80, `${lines} lines is not a digest`);
+      return `${hers.wouldSend.today} due, subject says so, body is ${lines} lines`;
     });
 
     await check('Her morning digest still has one day to read, not three thousand', async () => {
