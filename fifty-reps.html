@@ -2496,10 +2496,16 @@ async function renderLeads(opts){
 
   const form = $('leadForm');
   if(keep){
+    // Re-open what was open, and never close anything. keep.open was read
+    // at the TOP of this redraw: a rep who opened the form while the list was
+    // still reloading -- which it does on its own whenever a lead changes --
+    // had their form snapped shut again by a stale false from a moment
+    // earlier. Opening is the only safe direction here, and it also leaves
+    // the "open when there are no leads yet" default alone.
     const details = $('tab-leads').querySelector('details');
-    if(details) details.open = keep.open;
+    if(details && keep.open) details.open = true;
     const wording = $('tab-leads').querySelector('details.wording');
-    if(wording) wording.open = keep.wordingOpen;
+    if(wording && keep.wordingOpen) wording.open = true;
     Object.entries(keep.values).forEach(([name, value]) => {
       const el = form.querySelector('[name="' + name + '"]');
       // The date box defaults to today; only put back what was really typed.
