@@ -223,9 +223,19 @@ async function main() {
         company_name: 'Silver Run Home Improvements', contact_name: 'Christian', email: 'christian@silverrun.test',
         phone: '717-555-0199', website: `${SITE}/`, notes: 'Wants it before spring.',
         // Christian's own words. A roofer does not say "buy a shed".
-        copy: { friendAction: 'hire us for your roof', inquiryNoun: 'roofing inquiry' },
+        // Christian's own words, in keys that still exist. friendAction was
+        // renamed out of the wording set and junk keys are refused, so this
+        // POST was quietly 400ing -- and because it is not inside a check,
+        // nothing said so. Every check below it then asked for
+        // /rep-leads/undefined/..., which is where the "invalid uuid" and
+        // "cannot read properties of undefined" failures came from.
+        copy: { friendPitch: 'hire us for your roof', inquiryNoun: 'roofing inquiry' },
       },
     })).body;
+    // Created outside a check, so nothing reported it when it started
+    // failing -- the whole section went on asking for /rep-leads/undefined.
+    // Setup that everything below depends on says so when it breaks.
+    assert(lead && lead.id, `the lead this whole section needs was not created: ${JSON.stringify(lead)}`);
 
     let logoFile;
     await check('A rep uploads a PNG logo; it goes to storage, not to the API disk', async () => {
@@ -326,6 +336,39 @@ async function main() {
       return `bare site: "${r1.body.reason}"; no website: "${r2.body.reason}"`;
     });
 
+    await check('A bare domain on an http-only site is still read', async () => {
+      // Joseph types "theircompany.com", not a scheme -- the box even says
+      // so. normalizeUrl makes that https, which is right almost everywhere
+      // and wrong for the small builders who still have not moved off http.
+      // Before the fallback those came back "could not read that site" and
+      // the dealer got 50.'s navy with nothing anyone could do about it.
+      const bare = `127.0.0.1:${PORTS.site}`;
+      const http = (await api('POST', '/rep-leads', {
+        as: USERS.admin, body: { company_name: 'Old Site Co', website: bare },
+      })).body;
+      eq(http.website, bare, 'stored exactly as typed, with no scheme');
+
+      const r = await api('POST', `/rep-leads/${http.id}/brand-guess?from=website`, { as: USERS.admin });
+      eq(r.status, 200, 'status');
+      eq(r.body.ok, true, `https was tried and nothing fell back to http: ${r.body.reason}`);
+      eq(r.body.brand.primaryColor, '#B22222', 'the same colour the https-less site declares');
+      assert(/^http:\/\//.test(r.body.site), `read over: ${r.body.site}`);
+      return `read ${r.body.site} after https refused the connection`;
+    });
+
+    await check('A scheme somebody typed is left alone', async () => {
+      // Downgrading an address written as https would be a different thing
+      // from filling in a missing scheme, and nobody asked for it.
+      const secure = (await api('POST', '/rep-leads', {
+        as: USERS.admin, body: { company_name: 'Https Only Co', website: `https://127.0.0.1:${PORTS.site}` },
+      })).body;
+      const r = await api('POST', `/rep-leads/${secure.id}/brand-guess?from=website`, { as: USERS.admin });
+      eq(r.status, 200, 'status');
+      eq(r.body.ok, false, 'it quietly read the site over http instead');
+      assert(/Could not read/.test(r.body.reason), `reason: ${r.body.reason}`);
+      return `https kept and allowed to fail: "${r.body.reason}"`;
+    });
+
     await check('A site that hangs does not hang the platform', async () => {
       const slow = (await api('POST', '/rep-leads', { as: USERS.admin, body: { company_name: 'Slow Co', website: `${SITE}/slow` } })).body;
       const started = Date.now();
@@ -349,7 +392,7 @@ async function main() {
     await check('What the rep typed is stored on the lead, trimmed, and nothing else is', async () => {
       const r = await api('GET', '/rep-leads', { as: ALICE });
       const mine = r.body.leads.find((x) => x.id === lead.id);
-      eq(mine.copy.friendAction, 'hire us for your roof', 'the rep\'s words');
+      eq(mine.copy.friendPitch, 'hire us for your roof', 'the rep\'s words');
       eq(mine.copy.inquiryNoun, 'roofing inquiry', 'and the second one');
       eq(Object.keys(mine.copy).length, 2, 'only the two boxes that were filled');
       return 'two lines in their own words, seven left to the generic wording';
@@ -358,7 +401,7 @@ async function main() {
     await check('Blank boxes are dropped rather than stored empty, and junk keys are refused', async () => {
       const blanks = (await api('POST', '/rep-leads', {
         as: USERS.admin,
-        body: { company_name: 'All Blanks Co', copy: { friendAction: '   ', eligibility: '' } },
+        body: { company_name: 'All Blanks Co', copy: { friendPitch: '   ', eligibility: '' } },
       })).body;
       eq(blanks.copy, null, 'nine empty boxes store nothing');
       const junk = await api('POST', '/rep-leads', {
@@ -371,7 +414,7 @@ async function main() {
     await check('A rep can come back and fill the wording in later, and empty it again', async () => {
       const later = (await api('PATCH', `/rep-leads/${lead.id}`, {
         as: ALICE,
-        body: { copy: { friendAction: 'hire us for your roof', inquiryNoun: 'roofing inquiry', offerHow: 'Have us do your roof and you both get {reward}.' } },
+        body: { copy: { friendPitch: 'hire us for your roof', inquiryNoun: 'roofing inquiry', offerHow: 'Have us do your roof and you both get {reward}.' } },
       })).body;
       eq(later.copy.offerHow, 'Have us do your roof and you both get {reward}.', 'the line added on the second call');
       eq(Object.keys(later.copy).length, 3, 'now three');
@@ -381,7 +424,7 @@ async function main() {
 
       // Put it back the way the rest of this file expects to find it.
       await api('PATCH', `/rep-leads/${lead.id}`, {
-        as: ALICE, body: { copy: { friendAction: 'hire us for your roof', inquiryNoun: 'roofing inquiry' } },
+        as: ALICE, body: { copy: { friendPitch: 'hire us for your roof', inquiryNoun: 'roofing inquiry' } },
       });
       return 'added later, cleared, restored';
     });
@@ -728,7 +771,7 @@ async function main() {
       const [t] = await sql('select branding from tenants where id = $1', [built.tenant_id]);
       const c = t.branding.copy;
       assert(c, 'the dealer has wording at all');
-      eq(c.friendAction, 'hire us for your roof', 'the rep\'s words, intact');
+      eq(c.friendPitch, 'hire us for your roof', 'the rep\'s words, intact');
       eq(c.inquiryNoun, 'roofing inquiry', 'and the second one');
       eq(c.offerHow.includes('make a purchase with us'), true, 'a blank line got the generic wording');
       // Counted from the field list, not a literal: adding a tenth field
@@ -752,16 +795,16 @@ async function main() {
 
     await check('Joseph can overrule the rep\'s wording on the build screen', async () => {
       const late = (await api('POST', '/rep-leads', {
-        as: USERS.admin, body: { company_name: 'Late Edit Co', email: 'late@edit.test', copy: { friendAction: 'typo here' } },
+        as: USERS.admin, body: { company_name: 'Late Edit Co', email: 'late@edit.test', copy: { friendPitch: 'typo here' } },
       })).body;
       // Joseph winning it on a rep's behalf has to name the rep, same as always.
       await api('POST', `/rep-leads/${late.id}/win`, { as: USERS.admin, body: { closed_by_rep_id: repRow.id } });
       const r = await api('POST', `/rep-leads/${late.id}/build`, {
-        as: USERS.admin, body: { copy: { friendAction: 'book your install' } },
+        as: USERS.admin, body: { copy: { friendPitch: 'book your install' } },
       });
       eq(r.status, 201, `build: ${JSON.stringify(r.body)}`);
       const [t] = await sql('select branding from tenants where id = $1', [r.body.tenant_id]);
-      eq(t.branding.copy.friendAction, 'book your install', 'what Joseph typed wins over what the rep typed');
+      eq(t.branding.copy.friendPitch, 'book your install', 'what Joseph typed wins over what the rep typed');
       return 'the build screen is the last word';
     });
 

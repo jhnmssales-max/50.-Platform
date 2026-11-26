@@ -1139,11 +1139,17 @@ router.get('/rep-dealers/:tenantId/pricing', requireAuth, wrap(async (req, res) 
 
 router.patch('/rep-dealers/:tenantId/pricing', requireAuth, wrap(async (req, res) => {
   const tenantId = parseOr400(uuid, req.params.tenantId);
-  const body = parseOr400(pricingBody, req.body || {});
 
+  // Who is asking comes BEFORE what they sent. A rep probing this endpoint
+  // should be told 403 whatever is in the body -- when the body was checked
+  // first, a rep sending a field this route no longer accepts got back
+  // "Nothing to change", which is a 400 about their request rather than an
+  // answer about their permission, and reads like the door was open.
   await withUserTransaction(req.userId, async (client) => {
     await requirePlatform(client, req.userId, { admin: true });
   });
+
+  const body = parseOr400(pricingBody, req.body || {});
 
   const out = await withServiceRole(async (client) => {
     // An in-house company pays nothing by design. Letting a price be set on

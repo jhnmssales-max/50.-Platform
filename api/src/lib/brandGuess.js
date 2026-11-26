@@ -233,21 +233,51 @@ function findColors(html) {
 // What the whole website path produces. Never throws for an ordinary failure
 // — a site being down, slow or hostile is a normal outcome and comes back as
 // a reason the approval screen can show.
+// A bare domain is normalised to https, which is right for nearly everything
+// and wrong for exactly the sites this has to read: plenty of small builders
+// still run an http-only page, and forcing https turned those into "could not
+// read that site" with nothing anybody could do about it. So a bare domain
+// tries https and then falls back to http. An address typed WITH a scheme is
+// left alone -- somebody who wrote https is not asking to be downgraded.
 async function fromWebsite(website) {
   const url = normalizeUrl(website);
   if (!url) return { ok: false, reason: 'That does not look like a website address.', brand: null };
-  try {
-    const html = await fetchText(url.toString());
-    const { logoUrl, how } = findLogo(html, url.toString());
+
+  const typed = String(website || '').trim();
+  const tries = [url];
+  if (!/^https?:\/\//i.test(typed) && url.protocol === 'https:') {
+    // normalizeUrl runs its own host checks again, so the fallback cannot
+    // reach anywhere the first attempt was not already allowed to go.
+    const plain = normalizeUrl(`http://${typed}`);
+    if (plain) tries.push(plain);
+  }
+
+  let lastErr = null;
+  let lastUrl = url;
+
+  for (const attempt of tries) {
+    lastUrl = attempt;
+    let html;
+    try {
+      html = await fetchText(attempt.toString());
+    } catch (err) {
+      lastErr = err;
+      continue;
+    }
+
+    // Past here the page was read. Whatever it does or does not contain is
+    // the answer -- retrying the same page over http would find the same
+    // nothing, so this returns rather than falling through to the next try.
+    const { logoUrl, how } = findLogo(html, attempt.toString());
     const { primary, accent, declared, ranked } = findColors(html);
     const titleMatch = /<title[^>]*>([^<]{1,120})</i.exec(html);
     if (!primary && !logoUrl) {
-      return { ok: false, reason: 'Nothing on that page looked like a logo or a brand colour.', brand: null, site: url.toString() };
+      return { ok: false, reason: 'Nothing on that page looked like a logo or a brand colour.', brand: null, site: attempt.toString() };
     }
     return {
       ok: true,
       source: 'website',
-      site: url.toString(),
+      site: attempt.toString(),
       brand: { ...paletteFrom(primary, accent), ...(logoUrl ? { logoUrl } : {}) },
       found: {
         logo: how,
@@ -256,12 +286,12 @@ async function fromWebsite(website) {
         title: titleMatch ? titleMatch[1].trim() : null,
       },
     };
-  } catch (err) {
-    const reason = err.name === 'AbortError'
-      ? 'That site took too long to answer.'
-      : `Could not read that site: ${err.message}`;
-    return { ok: false, reason, brand: null, site: url.toString() };
   }
+
+  const reason = lastErr && lastErr.name === 'AbortError'
+    ? 'That site took too long to answer.'
+    : `Could not read that site: ${lastErr ? lastErr.message : 'no answer'}`;
+  return { ok: false, reason, brand: null, site: lastUrl.toString() };
 }
 
 // ---------------------------------------------------------------------------
