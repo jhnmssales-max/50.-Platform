@@ -126,6 +126,34 @@ async function main() {
     <div style="background-color:#1E6F3C">Our work</div>
     <div style="background-color:#1E6F3C">More</div>
     </body></html>`));
+  // A site shaped like a real one: nothing inline, everything in a
+  // stylesheet, and the brand living in named roles rather than in whichever
+  // colour happens to appear most. The greys are deliberate -- they are what
+  // the old frequency count used to come back with.
+  site.get('/roles', (req, res) => res.type('html').send(`<!doctype html><html><head>
+    <title>Hill Country Barns</title>
+    <link rel="stylesheet" href="/roles.css">
+    </head><body>
+    <header class="site-header">Hill Country Barns</header>
+    <div class="card">Our barns</div><div class="card">Our sheds</div>
+    <div class="card">Our garages</div><div class="sidebar">Contact</div>
+    <a href="/quote">Get a quote</a>
+    <button class="btn">Book a visit</button>
+    </body></html>`));
+  site.get('/roles.css', (req, res) => res.type('css').send(`
+    body { background: #FFFDF5; color: #222222; }
+    .card { background: #EEEEEE; border-color: #DDDDDD; }
+    .sidebar { background: #EEEEEE; }
+    .site-header { background: #7A4B9E; }
+    a { color: #0B6E4F; }
+    .btn, button { background-color: #C2410C; color: #FFFFFF; }
+  `));
+  // Same colours, served only over a stylesheet on ANOTHER host, which is
+  // not fetched: somebody else's CDN is not this company's brand.
+  site.get('/offsite', (req, res) => res.type('html').send(`<!doctype html><html><head>
+    <title>Offsite CSS Co</title>
+    <link rel="stylesheet" href="http://example.invalid/brand.css">
+    </head><body><div style="background-color:#1E6F3C">Our work</div></body></html>`));
   site.get('/slow', (req, res) => setTimeout(() => res.send('too late'), 20000));
   site.get('/bare', (req, res) => res.type('html').send('<html><body>Call us on 717-555-0000</body></html>'));
   const siteServer = site.listen(PORTS.site, '127.0.0.1');
@@ -334,6 +362,54 @@ async function main() {
       eq(r2.body.ok, false, 'no website');
       assert(/No website on this lead/.test(r2.body.reason), `reason: ${r2.body.reason}`);
       return `bare site: "${r1.body.reason}"; no website: "${r2.body.reason}"`;
+    });
+
+    await check('The guess reads their buttons, their links and their page, not the most common grey', async () => {
+      // What Joseph actually said: "it's just pulling 6 different random
+      // colours that don't seem like they go with the website". They were
+      // not random -- they were the most-used colours on the page, which on
+      // any site built from a framework is the card and divider greys. What
+      // a person means by "their colours" is a set of roles.
+      const roles = (await api('POST', '/rep-leads', {
+        as: USERS.admin, body: { company_name: 'Hill Country Barns', website: `${SITE}/roles` },
+      })).body;
+      const r = await api('POST', `/rep-leads/${roles.id}/brand-guess?from=website`, { as: USERS.admin });
+      eq(r.status, 200, 'status');
+      eq(r.body.ok, true, r.body.reason);
+
+      eq(r.body.brand.primaryColor, '#C2410C', 'the button colour, not the grey used on three cards');
+      eq(r.body.brand.accentColor, '#0B6E4F', 'the link colour');
+      eq(r.body.brand.bg, '#FFFDF5', 'their own page background, not 50.\'s cream');
+
+      // And it says so, rather than handing over six numbers with no account
+      // of themselves.
+      assert(/button/.test(r.body.found.colorFrom), `colorFrom: ${r.body.found.colorFrom}`);
+      assert(/link/.test(r.body.found.accentFrom), `accentFrom: ${r.body.found.accentFrom}`);
+      eq(r.body.found.roles.header, '#7A4B9E', 'the header colour is reported even when unused');
+      eq(r.body.found.roles.text, '#222222', 'and their text colour');
+
+      const greys = ['#EEEEEE', '#DDDDDD'];
+      const chosen = [r.body.brand.primaryColor, r.body.brand.accentColor];
+      assert(!chosen.some((c) => greys.includes(c.toUpperCase())), `a grey got through: ${chosen}`);
+      return `${r.body.brand.primaryColor} from their buttons, ${r.body.brand.accentColor} from their links, page ${r.body.brand.bg}`;
+    });
+
+    await check('A stylesheet on somebody else\'s host is not fetched', async () => {
+      // The brand lookup reaches out to a prospect's site because Joseph
+      // asked it to. That is not a licence to walk its <link> tags to other
+      // hosts, and a CDN's reset stylesheet says nothing about a brand.
+      const off = (await api('POST', '/rep-leads', {
+        as: USERS.admin, body: { company_name: 'Offsite CSS Co', website: `${SITE}/offsite` },
+      })).body;
+      const started = Date.now();
+      const r = await api('POST', `/rep-leads/${off.id}/brand-guess?from=website`, { as: USERS.admin });
+      const took = Date.now() - started;
+      eq(r.status, 200, 'status');
+      // It still answers from the page itself, and it answers promptly --
+      // a fetch to an unresolvable host would have cost the whole timeout.
+      eq(r.body.brand.primaryColor, '#1E6F3C', 'read from the page it was given');
+      assert(took < 4000, `took ${took}ms, which means it went off-host`);
+      return `answered in ${took}ms from the page alone`;
     });
 
     await check('A bare domain on an http-only site is still read', async () => {

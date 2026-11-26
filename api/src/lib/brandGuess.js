@@ -78,9 +78,9 @@ function shade({ r, g, b }, amount) {
 // A brand usually gives us one strong colour. The rest of the palette is
 // derived from it so the dealer's pages look deliberate rather than like one
 // colour dropped into a 50.-coloured template.
-function paletteFrom(primary, accent) {
+function paletteFrom(primary, accent, bg) {
   const p = parseHex(primary);
-  if (!p) return { ...DEFAULTS };
+  if (!p) return { ...DEFAULTS, ...(bg ? { bg } : {}) };
   const a = parseHex(accent) || null;
   return {
     primaryColor: hex(p.r, p.g, p.b),
@@ -88,7 +88,10 @@ function paletteFrom(primary, accent) {
     secondary: shade(p, 0.42),
     accentColor: a ? hex(a.r, a.g, a.b) : DEFAULTS.accentColor,
     accentDark: a ? shade(a, -0.3) : DEFAULTS.accentDark,
-    bg: '#F7F4EE',
+    // Their own page colour when they have a light one, 50.'s cream when they
+    // do not. This was hardcoded cream for everybody, which is a good part of
+    // why the result never looked like the site it came from.
+    bg: bg || DEFAULTS.bg,
   };
 }
 
@@ -197,37 +200,203 @@ function findLogo(html, pageUrl) {
 
 // Colours in the order they carry meaning: a declared theme colour, then
 // whatever the page's own CSS uses most.
-function findColors(html) {
+// ---------------------------------------------------------------------------
+// Reading a brand out of a page, by ROLE rather than by frequency.
+//
+// The first version counted every hex code in the HTML and took the two most
+// common. That is how a roofer with a red logo ended up with a dashboard in
+// two greys and a border colour: the most-used colour on a page built with a
+// CSS framework is whatever that framework paints its cards and dividers
+// with, and none of it is the brand.
+//
+// What a person means by "their colours" is a small set of ROLES -- the
+// colour of their buttons, the colour of their header, their link colour,
+// the colour of the page itself. Those live in named declarations, so this
+// goes and reads those declarations instead of counting.
+//
+// Two consequences worth stating:
+//
+//   - Stylesheets are fetched now, not only the inline <style> blocks. Almost
+//     nobody writes button colours inline, so without this the role lookup
+//     would find nothing on the sites that matter most. Same host only, three
+//     at most, each bounded: a CDN's reset stylesheet says nothing about a
+//     brand and somebody else's host is not our business to fetch.
+//   - Later rules win, so the rule list is read backwards. A site that
+//     overrides its own button colour further down the file means the
+//     override, which is the colour a visitor actually sees.
+// ---------------------------------------------------------------------------
+const MAX_CSS_BYTES = 400_000;
+const MAX_STYLESHEETS = 3;
+
+// Enough named colours to cover what people actually write by hand. A site
+// using "rebeccapurple" can go through the hex path like everyone else.
+const NAMED = {
+  white: '#FFFFFF', black: '#000000', red: '#FF0000', green: '#008000', blue: '#0000FF',
+  navy: '#000080', teal: '#008080', maroon: '#800000', olive: '#808000', purple: '#800080',
+  gray: '#808080', grey: '#808080', silver: '#C0C0C0', orange: '#FFA500', gold: '#FFD700',
+  crimson: '#DC143C', forestgreen: '#228B22', darkblue: '#00008B', steelblue: '#4682B4',
+  firebrick: '#B22222', darkgreen: '#006400', midnightblue: '#191970', royalblue: '#4169E1',
+};
+
+async function collectCss(html, baseUrl) {
+  let css = '';
+  for (const m of html.matchAll(/<style[^>]*>([\s\S]{0,200000}?)<\/style>/gi)) css += '\n' + m[1];
+
+  let base;
+  try { base = new URL(baseUrl); } catch (err) { return css.slice(0, MAX_CSS_BYTES); }
+
+  const hrefs = [];
+  for (const m of html.matchAll(/<link\b[^>]{0,500}>/gi)) {
+    const tag = m[0];
+    if (!/rel\s*=\s*["']?stylesheet/i.test(tag)) continue;
+    const href = /href\s*=\s*["']([^"']{1,500})["']/i.exec(tag);
+    if (!href) continue;
+    let abs;
+    try { abs = new URL(href[1], base); } catch (err) { continue; }
+    // Same host as the page, which has already been through normalizeUrl's
+    // host checks -- so this cannot reach anywhere the page fetch could not.
+    if (abs.host !== base.host) continue;
+    if (!/^https?:$/.test(abs.protocol)) continue;
+    hrefs.push(abs.toString());
+    if (hrefs.length >= MAX_STYLESHEETS) break;
+  }
+
+  for (const href of hrefs) {
+    // A stylesheet that 404s, hangs or is enormous is an ordinary thing for
+    // somebody else's site to do, and it is not a reason to fail the guess.
+    try { css += '\n' + await fetchText(href); } catch (err) { /* keep what we have */ }
+    if (css.length > MAX_CSS_BYTES) break;
+  }
+  return css.slice(0, MAX_CSS_BYTES);
+}
+
+// Deliberately not a CSS parser. Blocks are matched shallowly, which answers
+// "what colour are their buttons" and cannot hang on a minified bundle: both
+// halves are length-bounded, so there is no nested quantifier to blow up on.
+function cssRules(css) {
+  const out = [];
+  for (const m of String(css || '').matchAll(/([^{}]{1,300})\{([^{}]{0,3000})\}/g)) {
+    out.push({ selector: m[1].trim().toLowerCase().replace(/\s+/g, ' '), body: m[2] });
+  }
+  return out;
+}
+
+function declValue(body, prop) {
+  const m = new RegExp('(?:^|;|\\{)\\s*' + prop + '\\s*:\\s*([^;}]{1,200})', 'i').exec(body);
+  return m ? m[1].trim() : null;
+}
+
+function colorIn(value) {
+  if (!value) return null;
+  if (/\b(transparent|inherit|currentcolor|none)\b/i.test(value) && !/#|rgb/i.test(value)) return null;
+  const hexM = /#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b/.exec(value);
+  if (hexM) return parseHex(hexM[0]);
+  const rgbM = /rgba?\([^)]{1,80}\)/.exec(value);
+  if (rgbM) return parseRgbFunction(rgbM[0]);
+  const named = NAMED[value.trim().toLowerCase()];
+  return named ? parseHex(named) : null;
+}
+
+// Later rules win in CSS, so this reads the list backwards: a site that
+// overrides its own button colour further down means the override.
+function roleColor(rules, matches, props) {
+  for (let i = rules.length - 1; i >= 0; i -= 1) {
+    if (!matches(rules[i].selector)) continue;
+    for (const p of props) {
+      const c = colorIn(declValue(rules[i].body, p));
+      if (c) return c;
+    }
+  }
+  return null;
+}
+
+const IS_PAGE = (s) => /^(html|body)( ?, ?(html|body))*$/.test(s);
+const IS_BUTTON = (s) => /(^|[\s,.#>])(btn|button|cta)|\[type ?= ?["']?(submit|button)/.test(s);
+const IS_LINK = (s) => /^a( ?, ?a)*(:(link|visited))?$/.test(s);
+const IS_HEADER = (s) => /(^|[\s,.#>])(header|navbar|nav-bar|masthead|topbar|site-nav|site-header)/.test(s);
+
+function findColors(html, css) {
+  const rules = cssRules(css);
   const theme = /<meta[^>]+name=["']theme-color["'][^>]+content=["']([^"']+)["']/i.exec(html);
   const declared = theme && (parseHex(theme[1]) || parseRgbFunction(theme[1]));
 
+  const roles = {
+    pageBg: roleColor(rules, IS_PAGE, ['background-color', 'background']),
+    text: roleColor(rules, IS_PAGE, ['color']),
+    button: roleColor(rules, IS_BUTTON, ['background-color', 'background']),
+    buttonText: roleColor(rules, IS_BUTTON, ['color']),
+    link: roleColor(rules, IS_LINK, ['color']),
+    header: roleColor(rules, IS_HEADER, ['background-color', 'background']),
+  };
+
+  // The old frequency count stays as the last resort, for a page that
+  // declares nothing recognisable. A guess Joseph can correct on the screen
+  // in front of him beats handing every such dealer 50.'s own navy.
   const counts = new Map();
   const bump = (c, weight) => {
     if (!isUseful(c)) return;
     const key = hex(c.r, c.g, c.b);
     counts.set(key, (counts.get(key) || 0) + weight);
   };
-
-  // Weighted by where it appears: a colour used on a button or a header says
-  // more about a brand than one buried in a gradient stop.
-  for (const m of html.matchAll(/#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b/g)) bump(parseHex(m[0]), 1);
-  for (const m of html.matchAll(/rgba?\([^)]+\)/g)) bump(parseRgbFunction(m[0]), 1);
-  for (const m of html.matchAll(/(?:background(?:-color)?|border-color)\s*:\s*([^;}"']+)/gi)) {
-    bump(parseHex(m[1]) || parseRgbFunction(m[1]), 3);
+  for (const m2 of html.matchAll(/#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b/g)) bump(parseHex(m2[0]), 1);
+  for (const m2 of html.matchAll(/rgba?\([^)]{1,80}\)/g)) bump(parseRgbFunction(m2[0]), 1);
+  for (const m2 of String(css || '').matchAll(/(?:background(?:-color)?|border-color)\s*:\s*([^;}"']{1,120})/gi)) {
+    bump(colorIn(m2[1]), 3);
   }
-
   const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k);
-  const primary = declared ? hex(declared.r, declared.g, declared.b) : ranked[0] || null;
+
+  // In the order a person would point at them: what the site tells browsers
+  // it is, then the thing they click, then the band across the top.
+  const chosen = [
+    [declared, 'the colour the site declares for browser chrome'],
+    [roles.button, 'the colour of their buttons'],
+    [roles.header, 'the colour of their header'],
+    [roles.link, 'their link colour'],
+    [ranked[0] ? parseHex(ranked[0]) : null, 'the colours used most on the page'],
+  ].find(([c]) => c && isUseful(c));
+  const primary = chosen ? hex(chosen[0].r, chosen[0].g, chosen[0].b) : null;
+  const colorFrom = chosen ? chosen[1] : null;
+
   // An accent worth having is a different hue from the primary, not a shade
   // of it, so anything too close is passed over.
-  const accent = ranked.find((c) => {
-    if (!primary || c === primary) return false;
-    const a = parseHex(c);
-    const p = parseHex(primary);
-    return Math.abs(luminance(a) - luminance(p)) > 0.15 || Math.abs(a.r - p.r) + Math.abs(a.g - p.g) + Math.abs(a.b - p.b) > 150;
-  }) || null;
+  const farFromPrimary = (c) => {
+    if (!c || !primary) return false;
+    const pc = parseHex(primary);
+    return Math.abs(luminance(c) - luminance(pc)) > 0.15
+      || Math.abs(c.r - pc.r) + Math.abs(c.g - pc.g) + Math.abs(c.b - pc.b) > 150;
+  };
+  const accentPick = [
+    [roles.link, 'their link colour'],
+    [roles.button, 'the colour of their buttons'],
+    [roles.header, 'the colour of their header'],
+  ].find(([c]) => c && isUseful(c) && farFromPrimary(c));
+  const accent = accentPick
+    ? hex(accentPick[0].r, accentPick[0].g, accentPick[0].b)
+    : (ranked.find((c) => c !== primary && farFromPrimary(parseHex(c))) || null);
+  const accentFrom = accentPick ? accentPick[1] : (accent ? 'the colours used most on the page' : null);
 
-  return { primary, accent, declared: Boolean(declared), ranked: ranked.slice(0, 6) };
+  // The page background is the one role where near-white is the right answer,
+  // so isUseful -- which exists to throw greys away -- must not be consulted
+  // for it. It does have to stay light: this becomes the card their own
+  // referral page prints charcoal text on, and a dark one makes that
+  // unreadable. A dark site keeps 50.'s cream and Joseph can override it.
+  const bg = roles.pageBg && luminance(roles.pageBg) > 0.8
+    ? hex(roles.pageBg.r, roles.pageBg.g, roles.pageBg.b)
+    : null;
+
+  return {
+    primary,
+    accent,
+    bg,
+    colorFrom,
+    accentFrom,
+    declared: Boolean(declared),
+    ranked: ranked.slice(0, 6),
+    // What each role actually resolved to, so the build screen can say where
+    // a colour came from instead of presenting six numbers with no account
+    // of themselves.
+    roles: Object.fromEntries(Object.entries(roles).map(([k, c]) => [k, c ? hex(c.r, c.g, c.b) : null])),
+  };
 }
 
 // What the whole website path produces. Never throws for an ordinary failure
@@ -269,7 +438,11 @@ async function fromWebsite(website) {
     // the answer -- retrying the same page over http would find the same
     // nothing, so this returns rather than falling through to the next try.
     const { logoUrl, how } = findLogo(html, attempt.toString());
-    const { primary, accent, declared, ranked } = findColors(html);
+    // Their stylesheets, not only the inline <style> blocks: almost nobody
+    // writes a button colour inline, so without this the role lookup finds
+    // nothing on exactly the sites worth reading.
+    const css = await collectCss(html, attempt.toString());
+    const { primary, accent, bg, colorFrom, accentFrom, declared, ranked, roles } = findColors(html, css);
     const titleMatch = /<title[^>]*>([^<]{1,120})</i.exec(html);
     if (!primary && !logoUrl) {
       return { ok: false, reason: 'Nothing on that page looked like a logo or a brand colour.', brand: null, site: attempt.toString() };
@@ -278,10 +451,16 @@ async function fromWebsite(website) {
       ok: true,
       source: 'website',
       site: attempt.toString(),
-      brand: { ...paletteFrom(primary, accent), ...(logoUrl ? { logoUrl } : {}) },
+      brand: { ...paletteFrom(primary, accent, bg), ...(logoUrl ? { logoUrl } : {}) },
       found: {
         logo: how,
-        colorFrom: declared ? 'the colour the site declares for browser chrome' : primary ? 'the colours used most on the page' : null,
+        // Where each colour actually came from, in words, rather than the
+        // old blanket "the colours used most on the page" -- which was true
+        // of everything and so told nobody anything.
+        colorFrom,
+        accentFrom,
+        bgFrom: bg ? 'their page background' : null,
+        roles,
         otherColors: ranked,
         title: titleMatch ? titleMatch[1].trim() : null,
       },
