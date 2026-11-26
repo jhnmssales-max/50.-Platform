@@ -3387,6 +3387,17 @@ async function renderBuilds(){
   $('tab-builds').querySelectorAll('[data-build]').forEach((x) => x.addEventListener('click', () => buildDialog(x.dataset.build)));
 }
 
+// Where the colours below came from, in one line. Shared by the first look at
+// a lead and by every re-read after it, so the notice cannot go on saying
+// "guessed from their website" about an address that has since been corrected.
+function buildGuessNote(guess){
+  if(guess.ok){
+    return 'Guessed from ' + (guess.source === 'logo' ? 'the logo they sent' : 'their website')
+      + (guess.found && guess.found.colorFrom ? ' \u2014 ' + esc(guess.found.colorFrom) : '') + '. Check it.';
+  }
+  return esc(guess.reason || 'Nothing could be read, so these are 50.\u2019s own colours.');
+}
+
 function swatch(key, label, value){
   return '<div style="flex:1 1 130px;min-width:0"><label style="margin-top:0">' + esc(label) + '</label>' +
     '<div class="inline" style="gap:6px;flex-wrap:nowrap">' +
@@ -3419,13 +3430,11 @@ async function buildDialog(leadId){
 
   const b = Object.assign({ primaryColor:'#1C2B33', primaryDark:'#33475A', secondary:'#7C9FBB', accentColor:'#C9974B', accentDark:'#8B6B2E', bg:'#F7F4EE' }, lead.brand || {}, guess.brand || {});
   const cardCents = lead.reward_amount_cents || 5000;
-  const whereFrom = guess.ok
-    ? 'Guessed from ' + (guess.source === 'logo' ? 'the logo they sent' : 'their website') + (guess.found && guess.found.colorFrom ? ' — ' + esc(guess.found.colorFrom) : '') + '. Check it.'
-    : esc(guess.reason || 'Nothing could be read, so these are 50.\u2019s own colours.');
+  const whereFrom = buildGuessNote(guess);
 
   openDialog(
     '<h3>Build ' + esc(lead.company_name) + '\u2019s dashboard</h3>' +
-    '<div class="notice">' + whereFrom + '</div>' +
+    '<div class="notice" id="buildGuessNote">' + whereFrom + '</div>' +
     '<form id="buildForm">' +
       '<div class="row"><div><label>Their name, as customers see it</label><input name="name" required maxlength="200" value="' + esc(lead.company_name) + '"></div>' +
       '<div><label>Who gets the account</label><input name="admin_email" type="email" required maxlength="200" value="' + esc(lead.email || '') + '"></div></div>' +
@@ -3451,6 +3460,18 @@ async function buildDialog(leadId){
           // The build screen already has its own gift-card box further up, so
           // this one is suppressed and the fee preview reads from that one.
           pricingFieldsHtml(null).replace(/<div><label>Gift card each side gets[\s\S]*?<\/div>/, '')) +
+
+      // The address sits here, above the logo and colours, because it is what
+      // they are read from. A lead with the wrong address -- or none -- got
+      // 50.'s own palette and there was no way to correct it: the guess runs
+      // off the lead's own column, so the only repair was closing this, going
+      // to the lead, fixing it there and starting the build again.
+      '<h3 style="font-size:15px;margin:14px 0 2px">Their website</h3>' +
+      '<div class="inline" style="gap:8px;flex-wrap:nowrap">' +
+        '<input name="website" maxlength="300" placeholder="theircompany.com" style="min-width:0" value="' + esc(lead.website || '') + '">' +
+        '<button type="button" class="btn secondary" id="rereadSite" style="flex:0 0 auto">Read their site</button>' +
+      '</div>' +
+      '<p class="muted" style="margin:6px 0 0">Saved on the lead either way. <b>Read their site</b> pulls the logo and colours from it again and replaces what is below — nothing else on this screen is touched.</p>' +
 
       '<h3 style="font-size:15px;margin:14px 0 2px">Their logo</h3>' +
       (b.logoUrl
@@ -3504,6 +3525,49 @@ async function buildDialog(leadId){
   });
   drawPreview();
 
+  // Repaint from a fresh guess without losing anything already typed above
+  // it. Only the colours, the logo and the notice change: a re-read is not a
+  // reason to throw away a price or a line of wording somebody has already
+  // fixed by hand.
+  function applyGuess(g){
+    const brand = g.brand || {};
+    ['primaryColor','primaryDark','secondary','accentColor','accentDark','bg'].forEach((k) => {
+      if(!/^#[0-9a-fA-F]{6}$/.test(brand[k] || '')) return;
+      const hex = $('dlg').querySelector('[data-hex="' + k + '"]');
+      const col = $('dlg').querySelector('[data-color="' + k + '"]');
+      if(hex) hex.value = brand[k].toUpperCase();
+      if(col) col.value = brand[k];
+    });
+    const li = $('dlg').querySelector('[name=logoUrl]');
+    if(li && brand.logoUrl){
+      li.value = brand.logoUrl;
+      const img = $('previewLogo');
+      if(img) img.src = brand.logoUrl;
+    }
+    if($('buildGuessNote')) $('buildGuessNote').innerHTML = buildGuessNote(g);
+    drawPreview();
+  }
+
+  const siteInput = $('dlg').querySelector('[name=website]');
+  const rereadBtn = $('rereadSite');
+  if(rereadBtn) rereadBtn.addEventListener('click', async () => {
+    const site = (siteInput.value || '').trim();
+    if(!site) return dialogError('Put their address in the box first, then read it.');
+    const was = rereadBtn.textContent;
+    rereadBtn.disabled = true; rereadBtn.textContent = 'Reading\u2026';
+    try{
+      // Saved before it is read. The guess runs server-side off the lead's
+      // own column, so sending it only to the API would read the old address
+      // back and hand over the same wrong colours without saying so.
+      await patch('/rep-leads/' + leadId, { website: site });
+      lead.website = site;
+      const g = await post('/rep-leads/' + leadId + '/brand-guess?from=website', {});
+      applyGuess(g);
+      if(!g.ok) dialogError(g.reason || 'Nothing could be read from that address.');
+    }catch(err){ dialogError(err.message); }
+    finally{ rereadBtn.disabled = false; rereadBtn.textContent = was; }
+  });
+
   // The fee this company will pay, shown live as the gift card is changed.
   // Everyone sees it now, not only an agency rep: the fee is generated from
   // the card for every company, so there is nothing to type on any screen.
@@ -3529,6 +3593,12 @@ async function buildDialog(leadId){
     $('dlg').querySelectorAll('[data-hex]').forEach((inp) => { if(/^#[0-9a-fA-F]{6}$/.test(inp.value)) brand[inp.dataset.hex] = inp.value; });
     if(d.logoUrl) brand.logoUrl = d.logoUrl;
     try{
+      // A corrected address is worth keeping whether or not it was ever read:
+      // it is how anyone finds this company again after the lead is built.
+      if((d.website || '') !== (lead.website || '')){
+        await patch('/rep-leads/' + leadId, { website: d.website || '' });
+        lead.website = d.website || '';
+      }
       // Always sent, even when every box is empty: that is what tells the API
       // to write the generic wording onto this dealer rather than leave them
       // falling through to the shed wording the older tenants still use.
