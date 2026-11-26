@@ -2328,7 +2328,14 @@ async function renderLeads(opts){
   // all, has to survive this redraw: the list reloads whenever a lead changes,
   // and losing a lead someone was in the middle of writing down is the kind of
   // thing that makes people stop using a tool.
-  const keep = (() => {
+  //
+  // Read as LATE as possible, right before the redraw replaces the form --
+  // never at the top of this function. There is a network round trip in
+  // between, and a rep who opens the panel or starts typing during it would
+  // have had their work overwritten by a snapshot taken before they touched
+  // anything. The reload is invisible, so from their side the panel simply
+  // refused to open, or swallowed a line they had already typed.
+  const snapshot = () => {
     const details = $('tab-leads').querySelector('details');
     if(!details) return null;
     const values = {};
@@ -2337,7 +2344,7 @@ async function renderLeads(opts){
     });
     const wording = $('tab-leads').querySelector('details.wording');
     return { open: details.open, wordingOpen: wording ? wording.open : false, values, focused: (document.activeElement || {}).name || null };
-  })();
+  };
 
   // Whatever is in the search box right now, taken before the fetch rather
   // than after: the query is part of the request now, not a filter applied to
@@ -2393,6 +2400,7 @@ async function renderLeads(opts){
   // say, so it goes too -- that is the column that did not fit.
   const showWonBy = !state.isRep && showWon;
   captureSearch('tab-leads', 'leads');
+  const keep = snapshot();
   $('tab-leads').innerHTML =
     '<div class="head"><h2>Leads</h2><span class="muted">' +
       (q ? state.leadTotal + ' match' + (state.leadTotal === 1 ? 'es' : '') + ' \u201c' + esc(q) + '\u201d'
