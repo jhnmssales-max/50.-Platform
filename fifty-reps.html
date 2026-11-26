@@ -6,7 +6,7 @@
 <meta name="robots" content="noindex, nofollow">
 <title>50. Reps</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet">
 <style>
   /* 50. brand, read off referwith50.com's own :root. The names are the ones
      this page already used, so every rule below keeps working: only the
@@ -3419,19 +3419,75 @@ function swatch(key, label, value){
       '<input type="text" data-hex="' + key + '" value="' + esc(value) + '" maxlength="7" style="min-width:0;font-variant-numeric:tabular-nums"></div></div>';
 }
 
-// What the dealer's own page header will look like, drawn from whatever is in
-// the boxes right now. Cheaper than imagining it, and it catches a logo that
-// disappears on a dark bar before the dealer sees it.
+// The dealer's own page, drawn from whatever is in the boxes right now.
+// Cheaper than imagining it, and it catches the things that only show up
+// once the colours are together: a navy logo disappearing into a navy card,
+// an accent nobody can read on cream, a button the same colour as the page
+// behind it.
+//
+// Every id here mirrors a real element in fifty-template-customer.html, and
+// the colours land in the same places that file puts them -- the page itself
+// is --primary, the card is --bg, the wordmark is --primary on that card,
+// the tagline is --accent, and the button is --primary with --bg text.
+function setPreviewLogo(url){
+  const img = $('previewLogo');
+  const none = $('previewNoLogo');
+  const shot = $('logoShot');
+  const note = $('logoNote');
+  const clean = (url || '').trim();
+
+  if(img){
+    // onerror before src, or an address that 404s leaves the last good logo
+    // on screen and Joseph approves a dealer whose pages show nothing.
+    img.onerror = () => { img.style.display = 'none'; if(none){ none.textContent = 'that address did not load'; none.style.display = ''; } };
+    img.onload = () => { img.style.display = ''; if(none) none.style.display = 'none'; };
+    if(clean){ img.src = clean; } else { img.removeAttribute('src'); img.style.display = 'none'; }
+  }
+  if(none && !clean){ none.textContent = 'their logo goes here'; none.style.display = ''; }
+
+  if(shot){
+    shot.onerror = () => { shot.style.display = 'none'; };
+    shot.onload = () => { shot.style.display = ''; };
+    if(clean){ shot.src = clean; } else { shot.removeAttribute('src'); shot.style.display = 'none'; }
+  }
+  if(note){
+    note.textContent = clean
+      ? (note.dataset.where || 'from their website')
+      : 'None yet. Their pages show no logo at all until one is here \u2014 paste an address, or close this and drop a file on the lead.';
+    note.style.color = clean ? '' : '#A33';
+  }
+}
+
+// Where each colour came from, named. Six hex codes with no account of
+// themselves is what made the old guess feel random even when it was right.
+function colourSources(g){
+  const f = (g && g.found) || {};
+  const bits = [];
+  if(f.colorFrom) bits.push('Main: ' + f.colorFrom);
+  if(f.accentFrom) bits.push('accent: ' + f.accentFrom);
+  if(f.bgFrom) bits.push('background: ' + f.bgFrom);
+  return bits.length ? bits.join(' \u00b7 ') + '. Change any of them above.' : '';
+}
+
 function drawPreview(){
   const get = (k) => ($('dlg').querySelector('[data-hex="' + k + '"]') || {}).value || '#000000';
-  const p = $('previewBar');
-  if(!p) return;
-  p.style.background = get('primaryColor');
-  p.style.color = '#fff';
-  const chip = $('previewAccent');
-  if(chip){ chip.style.background = get('accentColor'); }
   const body = $('previewBody');
-  if(body){ body.style.background = get('bg'); }
+  if(!body) return;
+  const primary = get('primaryColor');
+  const bg = get('bg');
+  const accent = get('accentColor');
+
+  // The customer page paints the whole page --primary and floats a --bg card
+  // on it. Anything else here would be a flattering lie.
+  body.style.background = primary;
+  const card = $('previewCard');
+  if(card){ card.style.background = bg; card.style.color = '#1B1B1B'; }
+  const name = $('previewName'); if(name) name.style.color = primary;
+  const tag = $('previewTag'); if(tag) tag.style.color = accent;
+  const greeting = $('previewGreeting'); if(greeting) greeting.style.color = '#6B6A63';
+  const fine = $('previewFine'); if(fine) fine.style.color = '#6B6A63';
+  const btn = $('previewBtn');
+  if(btn){ btn.style.background = primary; btn.style.color = bg; }
 }
 
 async function buildDialog(leadId){
@@ -3487,25 +3543,41 @@ async function buildDialog(leadId){
       '</div>' +
       '<p class="muted" style="margin:6px 0 0">Saved on the lead either way. <b>Read their site</b> pulls the logo and colours from it again and replaces what is below — nothing else on this screen is touched.</p>' +
 
+      // One shape whether or not a logo has been found yet. It used to render
+      // two different blocks, and the no-logo one had no <img> in it at all
+      // -- so a logo found by Read their site had nowhere to appear and the
+      // screen went on saying "None" next to a filled-in address.
       '<h3 style="font-size:15px;margin:14px 0 2px">Their logo</h3>' +
-      (b.logoUrl
-        ? '<div class="inline"><img src="' + esc(b.logoUrl) + '" alt="" style="height:52px;width:auto;max-width:180px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px"><span class="muted">' + (guess.found && guess.found.logo ? esc(guess.found.logo) : 'uploaded by the rep') + '</span></div>' +
-          '<label>Logo address</label><input name="logoUrl" maxlength="600" value="' + esc(b.logoUrl) + '">'
-        : '<p class="muted" style="color:#A33">None. Their pages will show no logo at all until you add one \u2014 paste an address here, or close this and drop a file on the lead. You can also fix it later under Brand on the Companies tab.</p><label>Logo address</label><input name="logoUrl" maxlength="600" value="">') +
+      '<div class="inline" style="align-items:center;gap:10px">' +
+        '<img id="logoShot" alt="" style="height:52px;width:auto;max-width:180px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px;display:none">' +
+        '<span class="muted" id="logoNote"></span>' +
+      '</div>' +
+      '<label>Logo address</label><input name="logoUrl" maxlength="600" value="' + esc(b.logoUrl || '') + '">' +
 
       '<h3 style="font-size:15px;margin:16px 0 2px">Their colours</h3>' +
       '<div class="row">' + swatch('primaryColor','Main', b.primaryColor) + swatch('primaryDark','Main, darker', b.primaryDark) + swatch('secondary','Lighter', b.secondary) + '</div>' +
       '<div class="row">' + swatch('accentColor','Accent', b.accentColor) + swatch('accentDark','Accent, darker', b.accentDark) + swatch('bg','Page background', b.bg) + '</div>' +
 
+      // The real page, in miniature -- same structure, same fonts, same
+      // places the colours land as fifty-template-customer.html. A coloured
+      // strip told Joseph nothing about whether a navy logo would vanish
+      // into a navy card, which is the mistake this is here to catch.
       '<h3 style="font-size:15px;margin:16px 0 6px">What they will see</h3>' +
-      '<div id="previewBody" style="border:1px solid var(--line);border-radius:10px;overflow:hidden">' +
-        '<div id="previewBar" style="padding:12px 14px;display:flex;align-items:center;gap:10px">' +
-          (b.logoUrl ? '<img id="previewLogo" src="' + esc(b.logoUrl) + '" alt="" style="height:26px;width:auto;max-width:110px;object-fit:contain">' : '') +
-          '<b style="font-weight:800">' + esc(lead.company_name) + '</b>' +
-          '<span id="previewAccent" style="margin-left:auto;border-radius:99px;padding:3px 12px;font-size:12px;font-weight:700;color:#fff">Refer a friend</span>' +
+      '<div id="previewBody" style="border:1px solid var(--line);border-radius:10px;padding:22px 16px;display:flex;justify-content:center">' +
+        '<div id="previewCard" style="max-width:300px;width:100%;border-radius:16px;padding:22px 18px 18px;text-align:center;box-shadow:0 14px 38px rgba(0,0,0,.3)">' +
+          '<div style="display:flex;justify-content:center;align-items:center;min-height:36px;margin-bottom:10px">' +
+            '<img id="previewLogo" alt="" style="max-height:36px;width:auto;max-width:130px;object-fit:contain;display:none">' +
+            '<span id="previewNoLogo" style="font-size:10px;opacity:.55">their logo goes here</span>' +
+          '</div>' +
+          '<div id="previewName" style="font-family:\'Fraunces\',Georgia,serif;font-weight:600;font-size:17px;line-height:1.2">' + esc(lead.company_name) + '</div>' +
+          '<div id="previewTag" style="font-size:9px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;margin-top:3px">Referral Program</div>' +
+          '<div id="previewGreeting" style="font-size:11px;margin:14px 0 0">Hi Dana \u2014 thanks for choosing us.</div>' +
+          '<hr id="previewRule" style="border:none;border-top:1px solid rgba(0,0,0,.12);margin:13px 0 16px">' +
+          '<div id="previewBtn" style="border-radius:12px;padding:11px 10px;font-size:12px;font-weight:700">Share My Referral Link</div>' +
+          '<p id="previewFine" style="font-size:9.5px;line-height:1.55;margin:12px 0 0">When you recommend us to a friend, you\u2019re trusting us to look after someone you know.</p>' +
         '</div>' +
-        '<div style="padding:14px"><span class="muted">Their customers see this, in their colours.</span></div>' +
       '</div>' +
+      '<p class="hint" id="previewWhere"></p>' +
 
       '<h3 style="font-size:15px;margin:16px 0 2px">What their customers will read</h3>' +
       '<p class="muted" style="margin:2px 0 0">' + esc(wordingSummary(lead.copy)) + '. This is the last point it can be changed before their first invite goes out.</p>' +
@@ -3533,10 +3605,11 @@ async function buildDialog(leadId){
     }
   }));
   const logoInput = $('dlg').querySelector('[name=logoUrl]');
-  if(logoInput) logoInput.addEventListener('input', () => {
-    const img = $('previewLogo');
-    if(img) img.src = logoInput.value;
-  });
+  if($('logoNote')) $('logoNote').dataset.where =
+    (guess.found && guess.found.logo) ? guess.found.logo : 'uploaded by the rep';
+  if(logoInput) logoInput.addEventListener('input', () => setPreviewLogo(logoInput.value));
+  setPreviewLogo(b.logoUrl);
+  if($('previewWhere')) $('previewWhere').textContent = colourSources(guess);
   drawPreview();
 
   // Repaint from a fresh guess without losing anything already typed above
@@ -3553,12 +3626,15 @@ async function buildDialog(leadId){
       if(col) col.value = brand[k];
     });
     const li = $('dlg').querySelector('[name=logoUrl]');
-    if(li && brand.logoUrl){
-      li.value = brand.logoUrl;
-      const img = $('previewLogo');
-      if(img) img.src = brand.logoUrl;
-    }
+    if(li && brand.logoUrl) li.value = brand.logoUrl;
+    // Always, not only when a logo came back: a re-read that finds none has
+    // to clear the one on screen, or Joseph approves a dealer against a
+    // picture that is no longer coming from anywhere.
+    if($('logoNote')) $('logoNote').dataset.where =
+      (g.found && g.found.logo) ? g.found.logo : 'from their website';
+    setPreviewLogo(li ? li.value : brand.logoUrl);
     if($('buildGuessNote')) $('buildGuessNote').innerHTML = buildGuessNote(g);
+    if($('previewWhere')) $('previewWhere').textContent = colourSources(g);
     drawPreview();
   }
 

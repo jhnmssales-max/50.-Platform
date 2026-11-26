@@ -1934,9 +1934,29 @@ async function main() {
       eq(accent.toUpperCase(), '#C47A2B', 'accent, from the logo');
       const notice = await adminPage.textContent('#dlg .notice');
       assert(/Guessed from/.test(notice), `notice: ${notice}`);
-      // The preview bar is actually painted in that colour.
-      const bar = await adminPage.evaluate(() => getComputedStyle(document.getElementById('previewBar')).backgroundColor);
-      eq(bar, 'rgb(46, 94, 58)', 'the preview bar is their colour');
+      // The preview is actually painted in that colour, in the places the
+      // real customer page puts it: the page itself is --primary and the
+      // card floating on it is --bg.
+      const paint = await adminPage.evaluate(() => ({
+        page: getComputedStyle(document.getElementById('previewBody')).backgroundColor,
+        card: getComputedStyle(document.getElementById('previewCard')).backgroundColor,
+        name: getComputedStyle(document.getElementById('previewName')).color,
+        button: getComputedStyle(document.getElementById('previewBtn')).backgroundColor,
+      }));
+      eq(paint.page, 'rgb(46, 94, 58)', 'the preview page is their colour');
+      eq(paint.name, 'rgb(46, 94, 58)', 'and so is their name on the card');
+      eq(paint.button, 'rgb(46, 94, 58)', 'and the button they will press');
+      assert(paint.card !== paint.page, `the card has to stand off the page: both ${paint.card}`);
+
+      // The logo the rep uploaded is ON the preview, not merely in the box.
+      // It used to be drawn only when the lead already had one, so a logo
+      // that arrived from a re-read had nowhere to appear at all.
+      const logo = await adminPage.evaluate(() => {
+        const img = document.getElementById('previewLogo');
+        return { shown: img && getComputedStyle(img).display !== 'none', src: img ? img.getAttribute('src') : null };
+      });
+      assert(logo.shown, 'the logo is not on the preview');
+      assert(logo.src && logo.src.includes('/storage/'), `preview logo src: ${logo.src}`);
       const card = await adminPage.inputValue('#buildForm [name=reward]');
       eq(card, '50', 'the card defaults to $50');
       return `${primary} / ${accent}, preview painted, "${notice.slice(0, 60)}…"`;
@@ -1945,8 +1965,37 @@ async function main() {
     await check('Correcting a colour repaints the preview before anything is built', async () => {
       await adminPage.fill('[data-hex="primaryColor"]', '#123456');
       await adminPage.dispatchEvent('[data-hex="primaryColor"]', 'input');
-      await adminPage.waitForFunction(() => getComputedStyle(document.getElementById('previewBar')).backgroundColor === 'rgb(18, 52, 86)');
-      return 'typed a hex, the preview followed it';
+      await adminPage.waitForFunction(() => getComputedStyle(document.getElementById('previewBody')).backgroundColor === 'rgb(18, 52, 86)');
+
+      // The page background is its own control and lands on the card, so a
+      // dealer can be given a cream card on a navy page the way 50.'s own
+      // pages look -- and Joseph can see that before he builds it.
+      await adminPage.fill('[data-hex="bg"]', '#FFF8E7');
+      await adminPage.dispatchEvent('[data-hex="bg"]', 'input');
+      await adminPage.waitForFunction(() => getComputedStyle(document.getElementById('previewCard')).backgroundColor === 'rgb(255, 248, 231)');
+      return 'typed a hex for the page and one for the card, the preview followed both';
+    });
+
+    await check('Clearing the logo address takes the picture off the preview', async () => {
+      // The other half of the same bug: a logo that stops being valid has to
+      // stop being shown, or Joseph approves a dealer against a picture that
+      // is no longer coming from anywhere.
+      const before = await adminPage.inputValue('#buildForm [name=logoUrl]');
+      assert(before, 'no logo to clear');
+      await adminPage.fill('#buildForm [name=logoUrl]', '');
+      await adminPage.waitForFunction(() => {
+        const img = document.getElementById('previewLogo');
+        const none = document.getElementById('previewNoLogo');
+        return img && getComputedStyle(img).display === 'none' && none && getComputedStyle(none).display !== 'none';
+      }, { timeout: 5000 });
+
+      // And putting it back brings it back, so the build below is unchanged.
+      await adminPage.fill('#buildForm [name=logoUrl]', before);
+      await adminPage.waitForFunction(() => {
+        const img = document.getElementById('previewLogo');
+        return img && getComputedStyle(img).display !== 'none';
+      }, { timeout: 5000 });
+      return 'cleared it and the picture went; put it back and it returned';
     });
 
     await check('Building creates the dealer with the corrected colour and a $25 card, and emails both people', async () => {
